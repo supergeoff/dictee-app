@@ -6,6 +6,15 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// Le trousseau de la variante release vient de l'environnement. Sans ces variables, la
+// variante release se construit sans signature.
+fun env(name: String): String? = System.getenv(name)?.takeIf { it.isNotBlank() }
+
+val releaseKeystore = env("DICTEE_KEYSTORE")
+val releaseStorePassword = env("DICTEE_KEYSTORE_PASSWORD")
+val releaseKeyAlias = env("DICTEE_KEY_ALIAS")
+val releaseKeyPassword = env("DICTEE_KEY_PASSWORD") ?: releaseStorePassword
+
 android {
     namespace = "top.supergeoff.dictee"
     compileSdk = 35
@@ -14,8 +23,28 @@ android {
         applicationId = "top.supergeoff.dictee"
         minSdk = 31
         targetSdk = 35
-        versionCode = 9
-        versionName = "0.2.2"
+        versionCode = 10
+        versionName = "0.2.3"
+    }
+
+    signingConfigs {
+        if (releaseKeystore != null && releaseStorePassword != null && releaseKeyAlias != null) {
+            create("release") {
+                storeFile = file(releaseKeystore)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        } else if (releaseKeystore != null) {
+            logger.warn("DICTEE_KEYSTORE est défini sans DICTEE_KEYSTORE_PASSWORD ou DICTEE_KEY_ALIAS : la variante release n'est pas signée.")
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            signingConfigs.findByName("release")?.let { signingConfig = it }
+        }
     }
 
     buildFeatures {
