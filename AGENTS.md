@@ -7,6 +7,8 @@ Dictée est une application Android en Kotlin et Jetpack Compose, avec un seul m
 - `mise install` installe le JDK 17 déclaré dans `mise.toml`. Le SDK Android 35 doit être installé, et `ANDROID_HOME` ou `local.properties` doit le désigner.
 - `./gradlew testDebugUnitTest` lance les tests unitaires.
 - `./gradlew assembleDebug` compile l'APK de la variante debug.
+- `./gradlew assembleRelease` compile l'APK de la variante release dans `app/build/outputs/apk/release/`. Il est signé quand `DICTEE_KEYSTORE`, `DICTEE_KEYSTORE_PASSWORD` et `DICTEE_KEY_ALIAS` sont définis, et il reste non signé (`app-release-unsigned.apk`) sinon.
+- `scripts/release.sh --dry-run` construit et contrôle l'APK signé sans rien publier. Sans option, le script crée le tag `v<version>` et la release GitHub. La section « Publier une version » du `README.md` décrit les variables et les étapes.
 - `./gradlew lint` lance le lint Android, qui échoue sur une erreur.
 
 ## Conventions
@@ -14,5 +16,6 @@ Dictée est une application Android en Kotlin et Jetpack Compose, avec un seul m
 - Le code est en Kotlin, les textes affichés par l'application sont en français.
 - Le code sans dépendance Android (`Frame.kt`, `V05Session.kt`, `RecordName.kt`, `RecordingState.kt`, `SendJob.kt`, `RecoveryJob.kt`) s'écrit test d'abord : le test échoue, puis le code le fait passer.
 - Les versions de l'application (`versionCode`, `versionName`), des dépendances et du SDK sont dans `app/build.gradle.kts`. Les versions de Gradle et des plugins sont dans `build.gradle.kts` et `gradle/wrapper/`.
+- Le dépôt est public. Aucun trousseau, mot de passe, chemin local ni information personnelle n'y entre : le trousseau de signature vient de l'environnement (variables `DICTEE_*`).
 - Les fixtures de `app/src/test/resources` sont synthétiques. Elles ne contiennent ni capture d'un vrai boîtier ni identifiant réel.
 - Le protocole du boîtier est décrit dans `docs/protocole-v05.md` et le produit dans `docs/specification.md`. Une modification du comportement met à jour le document concerné.
