@@ -6,10 +6,11 @@
 # Le script lit la version dans app/build.gradle.kts, construit l'APK de release
 # signé avec le trousseau désigné par l'environnement, contrôle sa signature, puis
 # crée le tag v<version> et la release GitHub. Avec --dry-run, il s'arrête après
-# la construction et le contrôle, avant toute création de tag.
+# la construction et le contrôle, avant toute création de tag. Gradle est lancé sans
+# daemon et reçoit seul les mots de passe, que le script efface dès qu'il a fini.
 #
 # Variables d'environnement :
-#   DICTEE_KEYSTORE           chemin du trousseau de signature (obligatoire)
+#   DICTEE_KEYSTORE           chemin du trousseau, absolu ou relatif au dossier d'appel (obligatoire)
 #   DICTEE_KEYSTORE_PASSWORD  mot de passe du trousseau (obligatoire)
 #   DICTEE_KEY_ALIAS          alias de la clé dans le trousseau (obligatoire)
 #   DICTEE_KEY_PASSWORD       mot de passe de la clé (celui du trousseau si absent)
@@ -24,6 +25,10 @@ fail() {
 
 info() {
   echo "==> $*"
+}
+
+warn() {
+  echo "Attention : $*" >&2
 }
 
 # Affiche une empreinte hexadécimale en majuscules, séparée par des deux-points.
@@ -58,9 +63,31 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
+# Les mots de passe restent dans des variables du script, hors de l'environnement des
+# commandes : seul Gradle les reçoit, par l'appel de la construction.
+export -n DICTEE_KEYSTORE_PASSWORD DICTEE_KEY_PASSWORD
+
+# Un chemin de trousseau relatif se lit depuis le dossier d'où le script est lancé :
+# Gradle reçoit toujours un chemin absolu.
+if [ -n "${DICTEE_KEYSTORE:-}" ]; then
+  case "$DICTEE_KEYSTORE" in
+    /*) ;;
+    *) DICTEE_KEYSTORE="$PWD/$DICTEE_KEYSTORE" ;;
+  esac
+  export DICTEE_KEYSTORE
+fi
+
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-# Retrouve apksigner dans la plus récente version des build-tools du SDK Android.
+# La version se lit et se contrôle avant tout autre contrôle.
+version="$(sed -n 's/^[[:space:]]*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -n 1)"
+[ -n "$version" ] || fail "versionName est introuvable dans app/build.gradle.kts."
+version_format='^[0-9]+\.[0-9]+\.[0-9]+$'
+[[ "$version" =~ $version_format ]] || fail "versionName « $version » n'a pas la forme X.Y.Z."
+tag="v$version"
+info "Version $version, tag $tag"
+
+# Retrouve apksigner dans la plus récente version stable des build-tools du SDK Android.
 find_apksigner() {
   local sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
   if [ -z "$sdk" ] && [ -f local.properties ]; then
@@ -74,19 +101,14 @@ find_apksigner() {
       echo "$sdk/build-tools/$build_tools/apksigner"
       return 0
     fi
-  done < <(ls -1 "$sdk/build-tools" | sort -rV)
-  fail "apksigner est introuvable dans $sdk/build-tools."
+  done < <(ls -1 "$sdk/build-tools" | { grep -v -- '-' || true; } | sort -rV)
+  fail "apksigner est introuvable dans $sdk/build-tools (les préversions sont ignorées)."
 }
 
 command -v git > /dev/null || fail "git est introuvable."
 if [ "$dry_run" -eq 0 ]; then
   command -v gh > /dev/null || fail "gh (GitHub CLI) est introuvable."
 fi
-
-version="$(sed -n 's/^[[:space:]]*versionName = "\(.*\)"/\1/p' app/build.gradle.kts | head -n 1)"
-[ -n "$version" ] || fail "versionName est introuvable dans app/build.gradle.kts."
-tag="v$version"
-info "Version $version, tag $tag"
 
 # Contrôles avant toute construction.
 if [ -n "$(git status --porcelain)" ]; then
@@ -98,8 +120,6 @@ fi
 [ -f "$DICTEE_KEYSTORE" ] || fail "Le trousseau $DICTEE_KEYSTORE n'existe pas."
 [ -n "${DICTEE_KEYSTORE_PASSWORD:-}" ] || fail "DICTEE_KEYSTORE_PASSWORD n'est pas défini."
 [ -n "${DICTEE_KEY_ALIAS:-}" ] || fail "DICTEE_KEY_ALIAS n'est pas défini."
-DICTEE_KEYSTORE="$(cd "$(dirname "$DICTEE_KEYSTORE")" && pwd)/$(basename "$DICTEE_KEYSTORE")"
-export DICTEE_KEYSTORE
 
 expected_sha1=""
 if [ -n "${DICTEE_EXPECTED_SHA1:-}" ]; then
@@ -108,6 +128,8 @@ if [ -n "${DICTEE_EXPECTED_SHA1:-}" ]; then
     *[!0-9a-f]* | "") fail "DICTEE_EXPECTED_SHA1 n'est pas une empreinte SHA-1 valide." ;;
   esac
   [ "${#expected_sha1}" -eq 40 ] || fail "DICTEE_EXPECTED_SHA1 doit compter 40 chiffres hexadécimaux."
+else
+  warn "DICTEE_EXPECTED_SHA1 n'est pas défini : la clé de signature n'est pas contrôlée. Une mauvaise clé empêche la mise à jour des installations existantes et l'accès à Drive, car l'identifiant OAuth de Google Cloud est lié à l'empreinte SHA-1 de la clé."
 fi
 
 if git rev-parse -q --verify "refs/tags/$tag" > /dev/null; then
@@ -132,8 +154,13 @@ apksigner="$(find_apksigner)"
 
 # Construction.
 info "Tests et construction de l'APK de release"
-./gradlew testDebugUnitTest assembleRelease ${gradle_args[@]+"${gradle_args[@]}"} \
+DICTEE_KEYSTORE_PASSWORD="${DICTEE_KEYSTORE_PASSWORD:-}" DICTEE_KEY_PASSWORD="${DICTEE_KEY_PASSWORD:-}" \
+  ./gradlew --no-daemon -Pkotlin.compiler.execution.strategy=in-process \
+  testDebugUnitTest assembleRelease ${gradle_args[@]+"${gradle_args[@]}"} \
   || fail "La construction a échoué. Rien n'a été publié."
+
+# Les mots de passe ne servent plus : le script les efface avant apksigner, git et gh.
+unset DICTEE_KEYSTORE_PASSWORD DICTEE_KEY_PASSWORD
 
 apk="app/build/outputs/apk/release/app-release.apk"
 [ -f "$apk" ] || fail "L'APK signé $apk est introuvable. Vérifiez les variables DICTEE_*."
@@ -168,8 +195,11 @@ if ! git push origin "refs/tags/$tag"; then
   fail "L'envoi du tag $tag a échoué. Le tag local a été retiré."
 fi
 
-notes="Dictée $version. Téléchargez dictee-$version.apk, puis autorisez l'installation depuis votre navigateur ou votre gestionnaire de fichiers. Empreinte SHA-1 du certificat de signature : $sha1_display."
+notes_file="build/release/notes-$version.md"
+printf '%s\n' "Dictée $version. Téléchargez dictee-$version.apk, puis autorisez l'installation depuis votre navigateur ou votre gestionnaire de fichiers. Empreinte SHA-1 du certificat de signature : $sha1_display." > "$notes_file"
 info "Création de la release GitHub"
-gh release create "$tag" "$asset" --verify-tag --title "Dictée $version" --notes "$notes" \
-  || fail "Le tag $tag est envoyé, mais la release n'a pas été créée. Relancez gh release create $tag $asset."
+gh release create "$tag" "$asset" --verify-tag --title "Dictée $version" --notes-file "$notes_file" || {
+  retry="gh release create $tag $(printf '%q' "$PWD/$asset") --verify-tag --title \"Dictée $version\" --notes-file $(printf '%q' "$PWD/$notes_file")"
+  fail "Le tag $tag est envoyé, mais la release n'a pas été créée."$'\n'"Vérifiez d'abord si elle existe à moitié : gh release view $tag"$'\n'"Sinon, reprenez avec :"$'\n'"  $retry"
+}
 info "Release $tag publiée"
