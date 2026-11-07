@@ -39,6 +39,7 @@ class DicteeColors(palette: Palette) {
     val primaryPressed = Color(palette.primaryPressed)
     val secondary = Color(palette.secondary)
     val secondaryPressed = Color(palette.secondaryPressed)
+    val switchOff = Color(palette.switchOff)
     val field = Color(palette.field)
     val fieldPressed = Color(palette.fieldPressed)
     val fieldFocused = Color(palette.fieldFocused)
@@ -55,13 +56,13 @@ class DicteeColors(palette: Palette) {
 
 /**
  * Les styles de texte de Stack UI, sans couleur : l'appelant la prend dans [Dictee.colors]. Ceux de [TypeScale] y sont tous.
- * [bodySmall] et [rowTitle] sont propres à l'app : le design system n'a ni texte de 14 sp en graisse 400 (encarts), ni titre de ligne en 500.
  */
 @Immutable
 class DicteeType(
     val titlePage: TextStyle, val titleModal: TextStyle, val titleSection: TextStyle, val titleItem: TextStyle, val titleGroup: TextStyle,
-    val body: TextStyle, val bodySmall: TextStyle, val rowTitle: TextStyle, val control: TextStyle, val label: TextStyle,
-    val caption: TextStyle, val captionStrong: TextStyle, val overline: TextStyle, val wordmark: TextStyle, val mono: TextStyle,
+    val body: TextStyle, val bodySm: TextStyle, val rowTitle: TextStyle, val control: TextStyle, val controlSm: TextStyle,
+    val label: TextStyle, val caption: TextStyle, val captionStrong: TextStyle, val micro: TextStyle, val overline: TextStyle,
+    val wordmark: TextStyle, val mono: TextStyle,
 )
 
 /**
@@ -94,12 +95,14 @@ private val DefaultType = DicteeType(
     titleItem = TypeScale.titleItem.style(Figtree),
     titleGroup = TypeScale.titleGroup.style(Figtree),
     body = TypeScale.body.style(Figtree),
-    bodySmall = TypeScale.body.style(Figtree).copy(fontSize = 14.sp, lineHeight = 21.sp),
-    rowTitle = TypeScale.body.style(Figtree).copy(fontWeight = FontWeight.Medium),
+    bodySm = TypeScale.bodySm.style(Figtree),
+    rowTitle = TypeScale.rowTitle.style(Figtree),
     control = TypeScale.control.style(Figtree),
+    controlSm = TypeScale.controlSm.style(Figtree),
     label = TypeScale.label.style(Figtree),
     caption = TypeScale.caption.style(Figtree),
     captionStrong = TypeScale.captionStrong.style(Figtree),
+    micro = TypeScale.micro.style(Figtree),
     overline = TypeScale.overline.style(Figtree),
     wordmark = TypeScale.wordmark.style(Figtree),
     mono = TypeScale.mono.style(JetBrainsMono),

@@ -182,7 +182,7 @@ private fun Actions(onNew: () -> Unit, onOther: () -> Unit) {
 private fun DashedTile(icon: Int) {
     val color = Dictee.colors.textSecondary.copy(alpha = 0.6f)
     Box(
-        modifier = Modifier.size(36.dp).drawBehind {
+        modifier = Modifier.size(Tokens.ICON_TILE_DP.dp).drawBehind {
             val stroke = Stroke(width = 1.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx())))
             inset(0.5.dp.toPx()) { drawRoundRect(color, cornerRadius = CornerRadius(Tokens.RADIUS_DP.dp.toPx()), style = stroke) }
         },

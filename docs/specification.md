@@ -285,6 +285,7 @@ L'app suit le design system commun de la stack, Stack UI. Ses valeurs viennent d
 | Discret (tuile, pastille neutre, encart) | `#F3F3F3` | `#1C1C1C` |
 | Bouton principal | `#0B0B0B`, texte `#FFFFFF` | `#F3F3F3`, texte `#0B0B0B` |
 | Bouton secondaire et champ | `#ECECEC` | `#242424` |
+| Interrupteur éteint | `#8A8A8A` | `#8A8A8A` |
 | Réussite | `#05713A` sur `#DCF3E5` | `#4CC38A` sur vert à 16 % |
 | À relire (avertissement) | `#7C4A00` sur `#FFF1CC` | `#F5B83D` sur ambre à 16 % |
 | Erreur | `#B3130B` sur `#FDE4E1` | `#FF7B72` sur rouge à 16 % |
@@ -292,7 +293,7 @@ L'app suit le design system commun de la stack, Stack UI. Ses valeurs viennent d
 
 Les aplats gris remplacent les contours : un champ ou un bouton secondaire n'a pas de bordure, et seule une carte garde un trait, avec une ombre douce en clair. Un bouton pressé prend la teinte du survol du design system, puisqu'un survol n'existe pas sur mobile.
 
-La police d'interface est Figtree (graisses 400, 500, 600 et 700, en police variable) et la police à chasse fixe JetBrains Mono, embarquées dans l'app. Les titres sont en 700, le texte courant est à 15 sp. Le rayon est de 10 dp pour les boutons et les champs, de 12 dp pour les lignes et les encarts, de 16 dp pour les cartes et les dialogues, et les pastilles sont en pilule. Les boutons font 44 dp de haut, 36 dp pour le bouton compact. L'icône de l'app est un rond noir avec un micro blanc. Dans l'en-tête en thème sombre, elle s'inverse.
+La police d'interface est Figtree (graisses 400, 500, 600 et 700, en police variable) et la police à chasse fixe JetBrains Mono, embarquées dans l'app. Les titres sont en 700, le texte courant est à 15 sp. Le rayon est de 10 dp pour les boutons et les champs, de 12 dp pour les lignes et les encarts, de 16 dp pour les cartes et les dialogues, et les pastilles sont en pilule. Les boutons font 44 dp de haut, 36 dp pour le bouton compact (texte de 13 sp, zone tactile de 48 dp). L'icône de l'app est un rond noir avec un micro blanc. Dans l'en-tête en thème sombre, elle s'inverse.
 
 ## Lots
 

@@ -11,7 +11,7 @@ data class Palette(
     val background: Long, val surface: Long, val text: Long, val textSecondary: Long,
     val border: Long, val input: Long, val muted: Long, val accent: Long,
     val primary: Long, val onPrimary: Long, val primaryPressed: Long,
-    val secondary: Long, val secondaryPressed: Long,
+    val secondary: Long, val secondaryPressed: Long, val switchOff: Long,
     val field: Long, val fieldPressed: Long, val fieldFocused: Long,
     val success: Long, val successSurface: Long,
     /** Réservé à l'état « À relire » du lot 4 : aucun écran ne l'affiche encore. */
@@ -35,6 +35,10 @@ object TypeScale {
     val label = TypeSpec(14, 1.4, 600)
     val caption = TypeSpec(13, 1.45, 500)
     val captionStrong = TypeSpec(12, 1.2, 600)
+    val bodySm = TypeSpec(14, 1.45, 400)
+    val controlSm = TypeSpec(13, 1.1, 600)
+    val rowTitle = TypeSpec(15, 1.3, 500)
+    val micro = TypeSpec(11, 1.2, 700, 0.06)
     val overline = TypeSpec(12, 1.2, 700, 0.06)
     val wordmark = TypeSpec(16, 1.25, 700, 0.08)
     val mono = TypeSpec(13, 1.55, 400)
@@ -43,7 +47,8 @@ object TypeScale {
     val all: Map<String, TypeSpec> = mapOf(
         "title-page" to titlePage, "title-modal" to titleModal, "title-section" to titleSection, "title-item" to titleItem,
         "title-group" to titleGroup, "body" to body, "control" to control, "label" to label, "caption" to caption,
-        "caption-strong" to captionStrong, "overline" to overline, "wordmark" to wordmark, "mono" to mono,
+        "caption-strong" to captionStrong, "body-sm" to bodySm, "control-sm" to controlSm, "row-title" to rowTitle, "micro" to micro,
+        "overline" to overline, "wordmark" to wordmark, "mono" to mono,
     )
 }
 
@@ -53,7 +58,7 @@ object Tokens {
         background = 0xFFFFFFFF, surface = 0xFFFFFFFF, text = 0xFF0B0B0B, textSecondary = 0xFF5C5C5C,
         border = 0xFFE2E2E2, input = 0xFFE2E2E2, muted = 0xFFF3F3F3, accent = 0xFFECECEC,
         primary = 0xFF0B0B0B, onPrimary = 0xFFFFFFFF, primaryPressed = 0xFF2F2F2F,
-        secondary = 0xFFECECEC, secondaryPressed = 0xFFE2E2E2,
+        secondary = 0xFFECECEC, secondaryPressed = 0xFFE2E2E2, switchOff = 0xFF8A8A8A,
         field = 0xFFECECEC, fieldPressed = 0xFFE2E2E2, fieldFocused = 0xFFFFFFFF,
         success = 0xFF05713A, successSurface = 0xFFDCF3E5,
         warning = 0xFF7C4A00, warningSurface = 0xFFFFF1CC,
@@ -66,7 +71,7 @@ object Tokens {
         background = 0xFF0B0B0B, surface = 0xFF151515, text = 0xFFECECEC, textSecondary = 0xFFA3A3A3,
         border = 0x1FFFFFFF, input = 0x26FFFFFF, muted = 0xFF1C1C1C, accent = 0xFF2F2F2F,
         primary = 0xFFF3F3F3, onPrimary = 0xFF0B0B0B, primaryPressed = 0xFFFFFFFF,
-        secondary = 0xFF242424, secondaryPressed = 0xFF2F2F2F,
+        secondary = 0xFF242424, secondaryPressed = 0xFF2F2F2F, switchOff = 0xFF8A8A8A,
         field = 0xFF242424, fieldPressed = 0xFF2F2F2F, fieldFocused = 0xFF151515,
         success = 0xFF4CC38A, successSurface = 0x294CC38A,
         warning = 0xFFF5B83D, warningSurface = 0x29F5B83D,
@@ -100,6 +105,19 @@ object Tokens {
 
     /** `badge-height` : hauteur minimale d'une pastille. */
     const val BADGE_HEIGHT_DP = 26
+
+    /** `touch-target` : zone tactile minimale ; un contrôle plus petit la garde sans grossir (voir `minimumInteractiveComponentSize`). */
+    const val TOUCH_TARGET_DP = 48
+
+    /** `icon-tile-size` : côté d'une tuile d'icône. */
+    const val ICON_TILE_DP = 36
+
+    /** `progress-height` : épaisseur d'une ligne de progression. */
+    const val PROGRESS_HEIGHT_DP = 2
+
+    /** `switch-width` et `switch-height` : l'interrupteur. */
+    const val SWITCH_WIDTH_DP = 44
+    const val SWITCH_HEIGHT_DP = 24
 
     /** `opacity-disabled` : un bouton désactivé garde son aspect à cette opacité. */
     const val DISABLED_ALPHA = 0.4f

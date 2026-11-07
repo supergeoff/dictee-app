@@ -130,7 +130,7 @@ internal fun IconAction(icon: Int, description: String, onClick: () -> Unit) {
 @Composable
 internal fun IconTile(icon: Int) {
     Box(
-        modifier = Modifier.size(36.dp).clip(ControlShape).background(Dictee.colors.muted),
+        modifier = Modifier.size(Tokens.ICON_TILE_DP.dp).clip(ControlShape).background(Dictee.colors.muted),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
@@ -238,8 +238,8 @@ internal fun CompactButton(text: String, primary: Boolean = false, enabled: Bool
     ButtonBox(text, if (primary) ButtonTone.Primary else ButtonTone.Secondary, enabled, Modifier, icon = null, compact = true, onClick)
 
 /**
- * Un aplat sans bordure de 44 dp (36 en [compact]). Un bouton pressé prend la teinte du survol du design system et se réduit à 98 % ;
- * désactivé, il garde son aspect à `opacity-disabled`. Un bouton compact garde une zone tactile de 48 dp autour de ses 36 dp.
+ * Un aplat sans bordure de 44 dp (36 en [compact], en `control-sm`). Un bouton pressé prend la teinte du survol du design system et se réduit
+ * à 98 % ; désactivé, il garde son aspect à `opacity-disabled`. Un bouton compact garde une zone tactile de `touch-target` (48 dp).
  */
 @Composable
 private fun ButtonBox(
@@ -280,7 +280,7 @@ private fun ButtonBox(
             if (icon != null) {
                 Icon(painter = painterResource(icon), contentDescription = null, modifier = Modifier.size(18.dp), tint = content)
             }
-            Text(text = text, style = if (compact) Dictee.type.captionStrong else Dictee.type.control, color = content, maxLines = 1)
+            Text(text = text, style = if (compact) Dictee.type.controlSm else Dictee.type.control, color = content, maxLines = 1)
         }
     }
 }
@@ -306,7 +306,7 @@ private fun ProgressLine(progress: Progress) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(2.dp)
+                .height(Tokens.PROGRESS_HEIGHT_DP.dp)
                 .clip(RoundedCornerShape(1.dp))
                 .background(colors.border),
         ) {
@@ -383,7 +383,7 @@ internal fun Notice(text: String, tone: NoticeTone = NoticeTone.Neutral, action:
             modifier = Modifier.padding(top = if (action == null) 2.dp else 0.dp).size(18.dp),
             tint = tint,
         )
-        Text(text = text, style = Dictee.type.bodySmall, color = colors.text, modifier = Modifier.weight(1f))
+        Text(text = text, style = Dictee.type.bodySm, color = colors.text, modifier = Modifier.weight(1f))
         action?.invoke()
     }
 }

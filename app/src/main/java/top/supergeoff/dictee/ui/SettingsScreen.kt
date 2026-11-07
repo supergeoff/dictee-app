@@ -142,19 +142,28 @@ private fun DriveSection(local: LocalState, model: AppModel, onFolders: () -> Un
 private fun chosenFolderName(local: LocalState): String =
     local.knownFolders.firstOrNull { it.id == local.chosenFolderId }?.name ?: DriveClient.DEFAULT_FOLDER
 
-/** Interrupteur de 44 sur 24 dp, sans réponse propre : c'est la rangée qui bascule. Allumé, il prend `primary` ; éteint, l'aplat gris du bouton secondaire. */
+/**
+ * `switch` : 44 sur 24 dp, sans réponse propre, c'est la rangée qui bascule (et qui donne la zone tactile). La piste est `primary` allumée et
+ * `switch-bg-off` éteinte ; la pastille de 18 dp est toujours sur `card`, avec `shadow-pressed`.
+ */
 @Composable
 private fun Toggle(checked: Boolean) {
     val colors = Dictee.colors
     Box(
         modifier = Modifier
-            .size(width = 44.dp, height = 24.dp)
+            .size(width = Tokens.SWITCH_WIDTH_DP.dp, height = Tokens.SWITCH_HEIGHT_DP.dp)
             .clip(CircleShape)
-            .background(if (checked) colors.primary else colors.secondary)
+            .background(if (checked) colors.primary else colors.switchOff)
             .padding(3.dp),
         contentAlignment = if (checked) Alignment.CenterEnd else Alignment.CenterStart,
     ) {
-        Box(modifier = Modifier.size(18.dp).clip(CircleShape).background(if (checked) colors.onPrimary else colors.textSecondary))
+        Box(
+            modifier = Modifier
+                .size(18.dp)
+                .softShadow(CircleShape, elevation = 2.dp, lightOnly = false)
+                .clip(CircleShape)
+                .background(colors.surface),
+        )
     }
 }
 
@@ -170,7 +179,7 @@ private fun TextAction(text: String, onClick: () -> Unit) {
             .padding(horizontal = 14.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text = text, style = Dictee.type.captionStrong, color = Dictee.colors.textSecondary, maxLines = 1)
+        Text(text = text, style = Dictee.type.controlSm, color = Dictee.colors.textSecondary, maxLines = 1)
     }
 }
 
