@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -52,17 +53,20 @@ private val CompactShape = RoundedCornerShape(8.dp)
 internal fun sized(size: Int, line: Int, weight: FontWeight = FontWeight.Normal): TextStyle =
     Dictee.type.body.copy(fontSize = size.sp, lineHeight = line.sp, fontWeight = weight)
 
-/** Rond de la couleur du texte, micro de la couleur du fond : l'icône s'inverse en thème sombre. */
+/** Carré incliné de la couleur du texte, D de la couleur du fond : l'icône s'inverse en thème sombre. */
 @Composable
 fun AppIcon(size: Dp = 32.dp) {
-    Box(
-        modifier = Modifier.size(size).clip(CircleShape).background(Dictee.colors.text),
-        contentAlignment = Alignment.Center,
-    ) {
+    Box(modifier = Modifier.size(size)) {
         Icon(
-            painter = painterResource(R.drawable.ic_mic),
+            painter = painterResource(R.drawable.ic_brand_square),
             contentDescription = null,
-            modifier = Modifier.size(size * 0.5625f),
+            modifier = Modifier.fillMaxSize(),
+            tint = Dictee.colors.text,
+        )
+        Icon(
+            painter = painterResource(R.drawable.ic_brand_d),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
             tint = Dictee.colors.background,
         )
     }

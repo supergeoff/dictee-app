@@ -284,7 +284,7 @@ L'app garde une seule activité. Le passage d'un écran à l'autre suit une pile
 | À relire | `#FEF3C7`, texte `#92400E` | ambre à 50 %, texte `#FBBF24` |
 | Erreur | `#FEE2E2`, texte `#991B1B` | rouge à 50 %, texte `#FCA5A5` |
 
-La police d'interface est Inter et la police à chasse fixe JetBrains Mono, embarquées dans l'app. Le rayon est de 10 px, et de 12 px pour les cartes. Les boutons font 48 px de haut. L'icône de l'app est un rond noir avec un micro blanc. Dans l'en-tête en thème sombre, elle s'inverse.
+La police d'interface est Inter et la police à chasse fixe JetBrains Mono, embarquées dans l'app. Le rayon est de 10 px, et de 12 px pour les cartes. Les boutons font 48 px de haut. L'icône de l'app est un D blanc sur fond noir, dessiné pour le lanceur dans la zone sûre des icônes adaptatives, avec la même forme en couche monochrome pour les icônes thématiques. Dans l'en-tête, l'icône est un carré noir incliné de 10° portant ce D, et elle s'inverse en thème sombre.
 
 ## Lots
 
