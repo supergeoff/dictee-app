@@ -23,8 +23,8 @@ android {
         applicationId = "top.supergeoff.dictee"
         minSdk = 31
         targetSdk = 35
-        versionCode = 10
-        versionName = "0.2.3"
+        versionCode = 11
+        versionName = "0.2.4"
     }
 
     signingConfigs {
