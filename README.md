@@ -94,4 +94,4 @@ Dictée est un projet indépendant. Il n'a aucun lien avec MECHEN ni avec l'édi
 
 ## Licence
 
-Le code est publié sous licence Apache-2.0 (fichier [LICENSE](LICENSE)). Les polices Inter et JetBrains Mono sont sous licence SIL Open Font License, et les icônes viennent de Material Symbols sous licence Apache-2.0. Les textes de ces licences se trouvent dans le dossier [licenses/](licenses/).
+Le code est publié sous licence Apache-2.0 (fichier [LICENSE](LICENSE)). Les polices Figtree et JetBrains Mono sont sous licence SIL Open Font License, et les icônes viennent de Material Symbols sous licence Apache-2.0. Les textes de ces licences se trouvent dans le dossier [licenses/](licenses/).
