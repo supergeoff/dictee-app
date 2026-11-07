@@ -49,7 +49,7 @@ class TokensTest {
             background = c("background"), surface = c("card"), text = c("foreground"), textSecondary = c("muted-foreground"),
             border = c("border"), input = c("input"), muted = c("muted"), accent = c("accent"),
             primary = c("primary"), onPrimary = c("primary-foreground"), primaryPressed = c("button-primary-bg-hover"),
-            secondary = c("button-secondary-bg"), secondaryPressed = c("button-secondary-bg-hover"),
+            secondary = c("button-secondary-bg"), secondaryPressed = c("button-secondary-bg-hover"), switchOff = c("switch-bg-off"),
             field = c("field-bg"), fieldPressed = c("field-bg-hover"), fieldFocused = c("field-bg-focus"),
             success = c("success"), successSurface = c("success-surface"),
             warning = c("warning"), warningSurface = c("warning-surface"),
@@ -86,7 +86,7 @@ class TokensTest {
     fun `les jetons semantiques et de composant sont tous repris ou ignores`() {
         val known = setOf(
             "background", "card", "foreground", "muted-foreground", "border", "input", "muted", "accent", "primary", "primary-foreground",
-            "button-primary-bg-hover", "button-secondary-bg", "button-secondary-bg-hover", "field-bg", "field-bg-hover", "field-bg-focus",
+            "button-primary-bg-hover", "button-secondary-bg", "button-secondary-bg-hover", "switch-bg-off", "field-bg", "field-bg-hover", "field-bg-focus",
             "success", "success-surface", "warning", "warning-surface", "destructive", "destructive-surface", "button-danger-bg-hover",
             "focus", "overlay",
         )
@@ -121,6 +121,11 @@ class TokensTest {
         assertEquals(px(layout.getValue("control-height")), Tokens.BUTTON_HEIGHT_DP)
         assertEquals(px(layout.getValue("control-height-sm")), Tokens.BUTTON_HEIGHT_COMPACT_DP)
         assertEquals(px(layout.getValue("badge-height")), Tokens.BADGE_HEIGHT_DP)
+        assertEquals(px(layout.getValue("touch-target")), Tokens.TOUCH_TARGET_DP)
+        assertEquals(px(layout.getValue("icon-tile-size")), Tokens.ICON_TILE_DP)
+        assertEquals(px(layout.getValue("progress-height")), Tokens.PROGRESS_HEIGHT_DP)
+        assertEquals(px(layout.getValue("switch-width")), Tokens.SWITCH_WIDTH_DP)
+        assertEquals(px(layout.getValue("switch-height")), Tokens.SWITCH_HEIGHT_DP)
         val opacity = tokens("opacity").associate { it.getString("name") to it.getString("value").toFloat() }
         assertEquals(opacity.getValue("opacity-disabled"), Tokens.DISABLED_ALPHA, 0f)
         assertEquals(opacity.getValue("opacity-inactive"), Tokens.INACTIVE_ALPHA, 0f)
@@ -181,6 +186,9 @@ class TokensTest {
             }
             assertTrue("texte d'erreur sur le bouton danger pressé ($theme)", contrast(p.destructive, over(p.destructivePressed, p.surface)) >= 4.5)
             assertTrue("anneau de focus sur le fond ($theme)", contrast(p.focus, p.background) >= 3.0)
+            assertTrue("piste d'interrupteur éteint sur le fond ($theme)", contrast(p.switchOff, p.background) >= 3.0)
+            assertTrue("pastille d'interrupteur sur la piste éteinte ($theme)", contrast(p.surface, p.switchOff) >= 3.0)
+            assertTrue("pastille d'interrupteur sur la piste allumée ($theme)", contrast(p.surface, p.primary) >= 3.0)
         }
     }
 }
