@@ -1,9 +1,7 @@
 package top.supergeoff.dictee.ui
 
 import android.content.Context
-import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,7 +14,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -34,13 +31,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -124,7 +117,8 @@ fun AssociateSheet(beforeSearch: suspend () -> Unit, onAssociate: (name: String,
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+        shape = RoundedCornerShape(topStart = Tokens.CARD_RADIUS_DP.dp, topEnd = Tokens.CARD_RADIUS_DP.dp),
+        scrimColor = Dictee.colors.overlay,
         dragHandle = { BottomSheetDefaults.DragHandle(width = 36.dp, height = 4.dp) },
     ) {
         SheetContent(
@@ -158,17 +152,17 @@ private fun SearchTitle(phase: Phase, secondsLeft: Int, onRetry: () -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
             text = "Recherche du boîtier",
-            style = sized(18, 24, FontWeight.SemiBold),
+            style = Dictee.type.titleModal,
             color = Dictee.colors.text,
         )
         when (phase) {
             Phase.RUNNING -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 CircularProgressIndicator(modifier = Modifier.size(14.dp), color = secondary, strokeWidth = 2.dp)
-                Text(text = "Recherche en cours · $secondsLeft s", style = sized(13, 18), color = secondary)
+                Text(text = "Recherche en cours · $secondsLeft s", style = Dictee.type.caption, color = secondary)
             }
             Phase.DONE -> RetryLink(onRetry)
             Phase.UNAVAILABLE -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(text = UNAVAILABLE_TEXT, style = sized(13, 18), color = secondary)
+                Text(text = UNAVAILABLE_TEXT, style = Dictee.type.caption, color = secondary)
                 RetryLink(onRetry)
             }
         }
@@ -179,11 +173,11 @@ private fun SearchTitle(phase: Phase, secondsLeft: Int, onRetry: () -> Unit) {
 private fun RetryLink(onClick: () -> Unit) {
     Text(
         text = "Relancer",
-        style = sized(13, 18, FontWeight.SemiBold).copy(textDecoration = TextDecoration.Underline),
+        style = Dictee.type.label.copy(textDecoration = TextDecoration.Underline),
         color = Dictee.colors.text,
         modifier = Modifier
             .clip(RoundedCornerShape(4.dp))
-            .clickable(role = Role.Button, onClick = onClick)
+            .pressable(radius = 4.dp, onClick = onClick)
             .padding(vertical = 4.dp),
     )
 }
@@ -194,7 +188,8 @@ private fun BoxRow(name: String, address: String, onAssociate: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, Dictee.colors.border, CardShape)
+            .clip(ElementShape)
+            .border(1.dp, Dictee.colors.border, ElementShape)
             .padding(start = 14.dp, top = 12.dp, end = 12.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -203,14 +198,14 @@ private fun BoxRow(name: String, address: String, onAssociate: () -> Unit) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = name,
-                style = sized(15, 20, FontWeight.Medium),
+                style = Dictee.type.rowTitle,
                 color = Dictee.colors.text,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
                 text = address,
-                style = Dictee.type.mono.copy(fontSize = 12.sp, lineHeight = 18.sp),
+                style = Dictee.type.mono,
                 color = Dictee.colors.textSecondary,
             )
         }
@@ -218,23 +213,8 @@ private fun BoxRow(name: String, address: String, onAssociate: () -> Unit) {
     }
 }
 
-/** Aide affichée pendant et après la recherche ; elle devient le message du boîtier déjà connecté quand il y en a un. */
+/** Aide affichée pendant et après la recherche, en encart neutre ; elle devient le message du boîtier déjà connecté quand il y en a un. */
 @Composable
 private fun HelpNote(text: String) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(ControlShape)
-            .background(Dictee.colors.background)
-            .padding(12.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Icon(
-            painter = painterResource(R.drawable.ic_info),
-            contentDescription = null,
-            modifier = Modifier.padding(top = 1.dp).size(18.dp),
-            tint = Dictee.colors.textSecondary,
-        )
-        Text(text = text, style = sized(13, 19), color = Dictee.colors.textSecondary)
-    }
+    Notice(text = text)
 }

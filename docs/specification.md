@@ -273,18 +273,27 @@ L'app garde une seule activité. Le passage d'un écran à l'autre suit une pile
 
 ### Design system
 
+L'app suit le design system commun de la stack, Stack UI. Ses valeurs viennent de son fichier `tokens.json`, dont une copie fidèle se trouve dans `app/src/test/resources/stack-ui/tokens.json` : `TokensTest` compare les deux palettes, les rayons, les hauteurs, les opacités et l'échelle typographique à cette copie, et échoue dès qu'une valeur dérive ou qu'un jeton de couleur n'est ni repris ni ignoré volontairement. Les valeurs ci-dessous sont celles de `Tokens.kt`.
+
 | Token | Clair | Sombre |
 |---|---|---|
-| Fond | `#F5F5F5` | `#0D0D0D` |
-| Surface | `#FFFFFF` | `#171717` |
-| Texte | `#0A0A0A` | `#FAFAFA` |
-| Texte secondaire | `#6B6B6B` | `#B3B3B3` |
-| Bordure | `#D7D7D7` | blanc à 10 % |
-| Bouton principal | `#171717`, texte `#FAFAFA` | `#E5E5E5`, texte `#171717` |
-| À relire | `#FEF3C7`, texte `#92400E` | ambre à 50 %, texte `#FBBF24` |
-| Erreur | `#FEE2E2`, texte `#991B1B` | rouge à 50 %, texte `#FCA5A5` |
+| Fond | `#FFFFFF` | `#0B0B0B` |
+| Surface (carte) | `#FFFFFF` | `#151515` |
+| Texte | `#0B0B0B` | `#ECECEC` |
+| Texte secondaire | `#5C5C5C` | `#A3A3A3` |
+| Bordure | `#E2E2E2` | blanc à 12 % |
+| Discret (tuile, pastille neutre, encart) | `#F3F3F3` | `#1C1C1C` |
+| Bouton principal | `#0B0B0B`, texte `#FFFFFF` | `#F3F3F3`, texte `#0B0B0B` |
+| Bouton secondaire et champ | `#ECECEC` | `#242424` |
+| Interrupteur éteint | `#8A8A8A` | `#8A8A8A` |
+| Réussite | `#05713A` sur `#DCF3E5` | `#4CC38A` sur vert à 16 % |
+| À relire (avertissement) | `#7C4A00` sur `#FFF1CC` | `#F5B83D` sur ambre à 16 % |
+| Erreur | `#B3130B` sur `#FDE4E1` | `#FF7B72` sur rouge à 16 % |
+| Focus clavier | `#1F5FE0` | `#6C9BFF` |
 
-La police d'interface est Inter et la police à chasse fixe JetBrains Mono, embarquées dans l'app. Le rayon est de 10 px, et de 12 px pour les cartes. Les boutons font 48 px de haut. L'icône de l'app est un D blanc sur fond noir, dessiné pour le lanceur dans la zone sûre des icônes adaptatives, avec la même forme en couche monochrome pour les icônes thématiques. Dans l'en-tête, l'icône est un carré noir incliné de 10° portant ce D, et elle s'inverse en thème sombre.
+Les aplats gris remplacent les contours : un champ ou un bouton secondaire n'a pas de bordure, et seule une carte garde un trait, avec une ombre douce en clair. Un bouton pressé prend la teinte du survol du design system, puisqu'un survol n'existe pas sur mobile.
+
+La police d'interface est Figtree (graisses 400, 500, 600 et 700, en police variable) et la police à chasse fixe JetBrains Mono, embarquées dans l'app. Les titres sont en 700, le texte courant est à 15 sp. Le rayon est de 10 dp pour les boutons et les champs, de 12 dp pour les lignes et les encarts, de 16 dp pour les cartes et les dialogues, et les pastilles sont en pilule. Les boutons font 44 dp de haut, 36 dp pour le bouton compact (texte de 13 sp, zone tactile de 48 dp). L'icône de l'app est un D blanc sur fond noir, dessiné pour le lanceur dans la zone sûre des icônes adaptatives, avec la même forme en couche monochrome pour les icônes thématiques. Dans l'en-tête, l'icône est un carré noir incliné de 10° portant ce D, et elle s'inverse en thème sombre : le carré devient clair et le D sombre, ce qui tient lieu du liseré que le design system demande pour un carré presque noir sur fond sombre.
 
 ## Lots
 

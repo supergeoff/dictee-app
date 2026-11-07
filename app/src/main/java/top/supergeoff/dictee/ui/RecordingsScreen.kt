@@ -1,11 +1,8 @@
 package top.supergeoff.dictee.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,7 +12,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -23,7 +19,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -42,8 +37,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -162,7 +155,7 @@ private fun EmptyList(text: String) {
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         item {
             Box(modifier = Modifier.fillParentMaxSize().padding(horizontal = 32.dp), contentAlignment = Alignment.Center) {
-                Text(text = text, style = sized(14, 20), color = Dictee.colors.textSecondary, textAlign = TextAlign.Center)
+                Text(text = text, style = Dictee.type.body, color = Dictee.colors.textSecondary, textAlign = TextAlign.Center)
             }
         }
     }
@@ -182,7 +175,7 @@ private fun SelectionBar(count: Int, onClose: () -> Unit, onAll: () -> Unit) {
         IconAction(R.drawable.ic_close, "Quitter la sélection", onClose)
         Text(
             text = if (count > 1) "$count sélectionnés" else "$count sélectionné",
-            style = sized(16, 20, FontWeight.SemiBold),
+            style = Dictee.type.titleItem,
             color = Dictee.colors.text,
         )
         Spacer(Modifier.weight(1f))
@@ -200,36 +193,8 @@ private fun Filters(recordings: List<Recording>, selected: Filter, onSelect: (Fi
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Filter.entries.forEach { filter ->
-            FilterPill(filter.label, recordings.count { filter.matches(it) }, filter == selected) { onSelect(filter) }
+            FilterPill(filter.label, filter == selected, count = recordings.count { filter.matches(it) }) { onSelect(filter) }
         }
-    }
-}
-
-@Composable
-private fun FilterPill(label: String, count: Int, selected: Boolean, onClick: () -> Unit) {
-    val colors = Dictee.colors
-    Row(
-        modifier = Modifier
-            .height(32.dp)
-            .clip(CircleShape)
-            .background(if (selected) colors.primary else colors.surface)
-            .then(if (selected) Modifier else Modifier.border(1.dp, colors.border, CircleShape))
-            .clickable(role = Role.Button, onClick = onClick)
-            .padding(horizontal = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Text(
-            text = label,
-            style = sized(13, 18, FontWeight.Medium),
-            color = if (selected) colors.onPrimary else colors.text,
-            maxLines = 1,
-        )
-        Text(
-            text = "$count",
-            style = sized(13, 18, FontWeight.Medium),
-            color = if (selected) colors.onPrimary.copy(alpha = 0.7f) else colors.textSecondary,
-        )
     }
 }
 
@@ -252,7 +217,7 @@ private fun RecordingList(
     }
 }
 
-/** Un jour : son titre en capitales, puis ses lignes dans une carte. */
+/** Un jour : son titre en `overline`, puis ses lignes dans une carte. */
 @Composable
 private fun DayGroup(
     day: String,
@@ -264,15 +229,9 @@ private fun DayGroup(
     val colors = Dictee.colors
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SectionTitle(day)
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(CardShape)
-                .background(colors.surface)
-                .border(1.dp, colors.border, CardShape),
-        ) {
+        Column(modifier = Modifier.fillMaxWidth().card()) {
             recordings.forEachIndexed { index, recording ->
-                if (index > 0) HorizontalDivider(color = colors.border.copy(alpha = colors.border.alpha * 0.6f))
+                if (index > 0) HorizontalDivider(color = colors.border)
                 RecordingRow(
                     recording = recording,
                     checked = checked?.let { recording.name in it },
@@ -285,15 +244,14 @@ private fun DayGroup(
 }
 
 /** Ligne d'enregistrement. [checked] est `null` hors sélection : le pictogramme du type laisse alors la place à la case. */
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun RecordingRow(recording: Recording, checked: Boolean?, onClick: () -> Unit, onLongClick: () -> Unit) {
     val colors = Dictee.colors
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(if (checked == true) colors.background else colors.surface)
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .background(if (checked == true) colors.accent else colors.surface)
+            .pressable(radius = 0.dp, role = null, onLongClick = onLongClick, onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -306,12 +264,12 @@ private fun RecordingRow(recording: Recording, checked: Boolean?, onClick: () ->
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = RecordName.rowTitle(recording.type, recording.name),
-                style = sized(15, 20, FontWeight.Medium),
+                style = Dictee.type.rowTitle,
                 color = colors.text,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(text = details(recording), style = sized(13, 18), color = colors.textSecondary, maxLines = 1)
+            Text(text = details(recording), style = Dictee.type.caption, color = colors.textSecondary, maxLines = 1)
         }
         StateBadge(recording.state)
     }
@@ -324,7 +282,7 @@ private fun details(recording: Recording): String =
 @Composable
 private fun SelectionMark(checked: Boolean) {
     val colors = Dictee.colors
-    val shape = RoundedCornerShape(6.dp)
+    val shape = RoundedCornerShape(Tokens.RADIUS_SM_DP.dp)
     Box(
         modifier = Modifier
             .size(22.dp)

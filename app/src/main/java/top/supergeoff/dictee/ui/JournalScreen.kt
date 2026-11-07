@@ -6,8 +6,6 @@ import android.content.Context
 import android.content.Intent
 import android.widget.Toast
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,14 +15,12 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -40,11 +36,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
@@ -105,6 +98,7 @@ fun JournalScreen(model: AppModel, onBack: () -> Unit) {
         DicteeDialog(
             title = "Vider le journal ?",
             confirm = "Vider",
+            destructive = true,
             onConfirm = {
                 confirmClear = false
                 scope.launch(Dispatchers.IO) { journal.clear() }
@@ -163,29 +157,7 @@ private fun JournalFilters(selected: JournalFilter, onSelect: (JournalFilter) ->
             .padding(start = 16.dp, end = 16.dp, bottom = 14.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        JournalFilter.entries.forEach { JournalFilterPill(it.label, it == selected) { onSelect(it) } }
-    }
-}
-
-@Composable
-private fun JournalFilterPill(label: String, selected: Boolean, onClick: () -> Unit) {
-    val colors = Dictee.colors
-    Box(
-        modifier = Modifier
-            .height(32.dp)
-            .clip(CircleShape)
-            .background(if (selected) colors.primary else colors.surface)
-            .then(if (selected) Modifier else Modifier.border(1.dp, colors.border, CircleShape))
-            .clickable(role = Role.Button, onClick = onClick)
-            .padding(horizontal = 12.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = label,
-            style = sized(13, 18, FontWeight.Medium),
-            color = if (selected) colors.onPrimary else colors.text,
-            maxLines = 1,
-        )
+        JournalFilter.entries.forEach { FilterPill(it.label, it == selected) { onSelect(it) } }
     }
 }
 
@@ -203,9 +175,7 @@ private fun ColumnScope.LogCard(lines: List<JournalLine>?, unreadable: Boolean) 
             .fillMaxWidth()
             .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
             .navigationBarsPadding()
-            .clip(CardShape)
-            .background(Dictee.colors.surface)
-            .border(1.dp, Dictee.colors.border, CardShape),
+            .card(),
     ) {
         val notice = when {
             lines != null && lines.isEmpty() -> "Aucune ligne."
@@ -215,7 +185,7 @@ private fun ColumnScope.LogCard(lines: List<JournalLine>?, unreadable: Boolean) 
         if (notice != null) {
             Text(
                 text = notice,
-                style = sized(13, 18),
+                style = Dictee.type.caption,
                 color = Dictee.colors.textSecondary,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.align(Alignment.Center),
@@ -241,29 +211,29 @@ private fun dayTitle(date: LocalDate, today: LocalDate): String {
 private fun DayHeader(title: String, first: Boolean) {
     Text(
         text = title,
-        style = sized(11, 16, FontWeight.SemiBold).copy(letterSpacing = 0.06.em),
+        style = Dictee.type.overline,
         color = Dictee.colors.textSecondary,
         modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = if (first) 2.dp else 12.dp, bottom = 8.dp),
     )
 }
 
-/** Une ligne : l'heure, la source, le message, en JetBrains Mono. Une erreur prend toute la rangée dans les couleurs d'erreur. */
+/** Une ligne : l'heure, la source, le message, en JetBrains Mono. Une erreur prend toute la rangée dans les couleurs `destructive`. */
 @Composable
 private fun LogLine(line: JournalLine) {
     val colors = Dictee.colors
     val style = Dictee.type.mono.copy(fontSize = 11.5.sp, lineHeight = 17.sp)
-    val secondary = if (line.isError) colors.errorText else colors.textSecondary
+    val secondary = if (line.isError) colors.destructive else colors.textSecondary
     // Colonnes en sp : elles suivent la taille de police choisie dans les réglages du système.
     val timeWidth = with(LocalDensity.current) { 58.sp.toDp() }
     val sourceWidth = with(LocalDensity.current) { 44.sp.toDp() }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (line.isError) Modifier.background(colors.errorBackground) else Modifier)
+            .then(if (line.isError) Modifier.background(colors.destructiveSurface) else Modifier)
             .padding(horizontal = 12.dp, vertical = 3.dp),
     ) {
         Text(text = line.time, style = style, color = secondary, maxLines = 1, softWrap = false, modifier = Modifier.width(timeWidth))
         Text(text = line.source.name, style = style, color = secondary, maxLines = 1, softWrap = false, modifier = Modifier.width(sourceWidth))
-        Text(text = line.message, style = style, color = if (line.isError) colors.errorText else colors.text, modifier = Modifier.weight(1f))
+        Text(text = line.message, style = style, color = if (line.isError) colors.destructive else colors.text, modifier = Modifier.weight(1f))
     }
 }

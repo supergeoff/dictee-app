@@ -1,8 +1,8 @@
 package top.supergeoff.dictee.ui
 
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,7 +22,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -38,7 +40,7 @@ import top.supergeoff.dictee.R
 import top.supergeoff.dictee.ThemeChoice
 import top.supergeoff.dictee.UiState
 
-private val SegmentShape = RoundedCornerShape(7.dp)
+private val SegmentShape = RoundedCornerShape(Tokens.RADIUS_INNER_DP.dp)
 
 /** Les trois choix du thème, dans l'ordre des boutons segmentés. */
 private val Themes = listOf(ThemeChoice.LIGHT to "Clair", ThemeChoice.DARK to "Sombre", ThemeChoice.SYSTEM to "Système")
@@ -140,41 +142,48 @@ private fun DriveSection(local: LocalState, model: AppModel, onFolders: () -> Un
 private fun chosenFolderName(local: LocalState): String =
     local.knownFolders.firstOrNull { it.id == local.chosenFolderId }?.name ?: DriveClient.DEFAULT_FOLDER
 
-/** Interrupteur de 44 sur 24 dp, sans réponse propre : c'est la rangée qui bascule. Allumé, il prend la couleur primaire. */
+/**
+ * `switch` : 44 sur 24 dp, sans réponse propre, c'est la rangée qui bascule (et qui donne la zone tactile). La piste est `primary` allumée et
+ * `switch-bg-off` éteinte ; la pastille de 18 dp est toujours sur `card`, avec `shadow-pressed`.
+ */
 @Composable
 private fun Toggle(checked: Boolean) {
     val colors = Dictee.colors
-    val shape = RoundedCornerShape(12.dp)
     Box(
         modifier = Modifier
-            .size(width = 44.dp, height = 24.dp)
-            .clip(shape)
-            .background(if (checked) colors.primary else colors.background)
-            .border(1.dp, if (checked) colors.primary else colors.border, shape)
-            .padding(2.dp),
+            .size(width = Tokens.SWITCH_WIDTH_DP.dp, height = Tokens.SWITCH_HEIGHT_DP.dp)
+            .clip(CircleShape)
+            .background(if (checked) colors.primary else colors.switchOff)
+            .padding(3.dp),
         contentAlignment = if (checked) Alignment.CenterEnd else Alignment.CenterStart,
     ) {
-        Box(modifier = Modifier.size(18.dp).clip(CircleShape).background(if (checked) colors.onPrimary else colors.textSecondary))
+        Box(
+            modifier = Modifier
+                .size(18.dp)
+                .softShadow(CircleShape, elevation = 2.dp, lightOnly = false)
+                .clip(CircleShape)
+                .background(colors.surface),
+        )
     }
 }
 
-/** Action sans contour au bout d'une rangée, comme « Déconnecter ». */
+/** Action discrète au bout d'une rangée, comme « Déconnecter » : le bouton fantôme, sans fond, en `muted-foreground`. */
 @Composable
 private fun TextAction(text: String, onClick: () -> Unit) {
-    val shape = RoundedCornerShape(8.dp)
     Box(
         modifier = Modifier
-            .height(36.dp)
-            .clip(shape)
-            .clickable(role = Role.Button, onClick = onClick)
-            .padding(horizontal = 10.dp),
+            .minimumInteractiveComponentSize()
+            .height(Tokens.BUTTON_HEIGHT_COMPACT_DP.dp)
+            .clip(ControlShape)
+            .pressable(onClick = onClick)
+            .padding(horizontal = 14.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text = text, style = sized(14, 20, FontWeight.Medium), color = Dictee.colors.textSecondary, maxLines = 1)
+        Text(text = text, style = Dictee.type.controlSm, color = Dictee.colors.textSecondary, maxLines = 1)
     }
 }
 
-/** Le thème se choisit parmi trois boutons segmentés ; « Système » suit le réglage d'Android. */
+/** Le thème se choisit parmi trois boutons segmentés (`theme-toggle`) ; « Système » suit le réglage d'Android. */
 @Composable
 private fun AppearanceSection(selected: ThemeChoice, onSelect: (ThemeChoice) -> Unit) {
     val colors = Dictee.colors
@@ -182,12 +191,11 @@ private fun AppearanceSection(selected: ThemeChoice, onSelect: (ThemeChoice) -> 
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(ControlShape)
-                .background(colors.background)
-                .border(1.dp, colors.border, ControlShape)
-                .padding(3.dp)
+                .clip(ElementShape)
+                .background(colors.muted)
+                .padding(4.dp)
                 .selectableGroup(),
-            horizontalArrangement = Arrangement.spacedBy(3.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Themes.forEach { (choice, label) -> ThemeButton(label, choice == selected) { onSelect(choice) } }
         }
@@ -197,18 +205,27 @@ private fun AppearanceSection(selected: ThemeChoice, onSelect: (ThemeChoice) -> 
 @Composable
 private fun RowScope.ThemeButton(label: String, selected: Boolean, onClick: () -> Unit) {
     val colors = Dictee.colors
+    val source = remember { MutableInteractionSource() }
     Box(
         modifier = Modifier
             .weight(1f)
-            .height(36.dp)
+            .height(Tokens.BUTTON_HEIGHT_COMPACT_DP.dp)
+            .then(if (selected) Modifier.softShadow(SegmentShape, elevation = 2.dp, lightOnly = false) else Modifier)
             .clip(SegmentShape)
             .background(if (selected) colors.surface else Color.Transparent)
-            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick),
+            .focusRing(source, Tokens.RADIUS_INNER_DP.dp)
+            .selectable(
+                selected = selected,
+                interactionSource = source,
+                indication = LocalIndication.current,
+                role = Role.RadioButton,
+                onClick = onClick,
+            ),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = label,
-            style = sized(14, 20, if (selected) FontWeight.SemiBold else FontWeight.Medium),
+            style = Dictee.type.label,
             color = if (selected) colors.text else colors.textSecondary,
             maxLines = 1,
         )
