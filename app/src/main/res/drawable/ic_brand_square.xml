@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Le carré incliné de l'icône de dictee (512 unités, coins de 110, rotation de -10° autour de son centre) dans une boîte
+    de 608 unités : 48 de marge de chaque côté, assez pour que le carré incliné n'en sorte pas. Il se teinte à l'usage.
+    Le D qui s'y pose est ic_brand_d, dans la même boîte.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="32dp"
+    android:height="32dp"
+    android:viewportWidth="608"
+    android:viewportHeight="608">
+    <group
+        android:pivotX="256"
+        android:pivotY="256"
+        android:rotation="-10"
+        android:translateX="48"
+        android:translateY="48">
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M110,0 H402 A110,110 0 0 1 512,110 V402 A110,110 0 0 1 402,512 H110 A110,110 0 0 1 0,402 V110 A110,110 0 0 1 110,0 Z" />
+    </group>
+</vector>

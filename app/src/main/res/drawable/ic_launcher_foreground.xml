@@ -1,16 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    Le D de l'icône de dictee, au dessin d'origine : un carré de 512 unités dont le centre est (256, 256).
+    Le groupe le ramène à 0,15 dp par unité et pose ce centre au milieu des 108 dp : le point le plus éloigné
+    du D est à 32,3 dp du centre, dans la zone sûre de 33 dp (cercle de 66 dp) que les lanceurs ne rognent pas.
+    Le fond est la couleur ic_launcher_background. La couche monochrome reprend ce même dessin.
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
-    android:viewportWidth="24"
-    android:viewportHeight="24">
+    android:viewportWidth="108"
+    android:viewportHeight="108">
     <group
-        android:scaleX="0.5"
-        android:scaleY="0.5"
-        android:translateX="6"
-        android:translateY="6">
+        android:scaleX="0.15"
+        android:scaleY="0.15"
+        android:translateX="15.6"
+        android:translateY="15.6">
         <path
             android:fillColor="#FFFFFF"
-            android:pathData="M12,14c1.66,0 2.99,-1.34 2.99,-3L15,5c0,-1.66 -1.34,-3 -3,-3S9,3.34 9,5v6c0,1.66 1.34,3 3,3zM17.3,11c0,3 -2.54,5.1 -5.3,5.1S6.7,14 6.7,11L5,11c0,3.41 2.72,6.23 6,6.72L11,21h2v-3.28c3.28,-0.48 6,-3.3 6,-6.72h-1.7z" />
+            android:fillType="evenOdd"
+            android:pathData="M112,96 h128 a160,160 0 0 1 0,320 H112 z M176,176 h56 a80,80 0 0 1 0,160 h-56 z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M176,218 h74 v26 h-74 z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M176,268 h100 v26 h-100 z" />
     </group>
 </vector>

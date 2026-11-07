@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Le D de l'icône de dictee, droit et centré sur le carré (son encombrement va de 112 à 400 en x et de 96 à 416 en y),
+    dans la même boîte de 608 unités que ic_brand_square. Il se teinte à l'usage.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="32dp"
+    android:height="32dp"
+    android:viewportWidth="608"
+    android:viewportHeight="608">
+    <group
+        android:translateX="48"
+        android:translateY="48">
+        <path
+            android:fillColor="#FFFFFF"
+            android:fillType="evenOdd"
+            android:pathData="M112,96 h128 a160,160 0 0 1 0,320 H112 z M176,176 h56 a80,80 0 0 1 0,160 h-56 z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M176,218 h74 v26 h-74 z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M176,268 h100 v26 h-100 z" />
+    </group>
+</vector>
