@@ -1,8 +1,8 @@
 package top.supergeoff.dictee.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -35,16 +35,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -109,13 +108,13 @@ private fun RecordingBar(recording: Recording, canRecover: Boolean, onBack: () -
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
                 text = RecordName.detailTitle(recording.type, recording.name),
-                style = sized(16, 20, FontWeight.SemiBold),
+                style = Dictee.type.titleItem,
                 color = colors.text,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(text = duration(recording), style = sized(13, 18), color = colors.textSecondary, maxLines = 1)
+                Text(text = duration(recording), style = Dictee.type.caption, color = colors.textSecondary, maxLines = 1)
                 StateBadge(recording.state)
             }
         }
@@ -133,9 +132,15 @@ private fun RecordingMenu(canRecover: Boolean, onRecover: () -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
         IconAction(R.drawable.ic_more, "Plus d'actions") { open = true }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+        DropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+            shape = ElementShape,
+            containerColor = Dictee.colors.surface,
+            border = BorderStroke(1.dp, Dictee.colors.border),
+        ) {
             DropdownMenuItem(
-                text = { Text(text = "Récupérer à nouveau", style = sized(15, 20, FontWeight.Medium)) },
+                text = { Text(text = "Récupérer à nouveau", style = Dictee.type.rowTitle) },
                 enabled = canRecover,
                 onClick = {
                     open = false
@@ -146,55 +151,17 @@ private fun RecordingMenu(canRecover: Boolean, onRecover: () -> Unit) {
     }
 }
 
-/** Bandeau d'erreur sous l'en-tête : la raison en clair et « Réessayer ». */
+/** Encart d'erreur sous l'en-tête : la raison en clair et « Réessayer », un bouton compact gris, lisible sur la teinte. */
 @Composable
 private fun ErrorBanner(message: String, onRetry: () -> Unit) {
-    val colors = Dictee.colors
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(ControlShape)
-            .background(colors.errorBackground)
-            .border(1.dp, colors.errorText.copy(alpha = 0.25f), ControlShape)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Icon(painter = painterResource(R.drawable.ic_info), contentDescription = null, modifier = Modifier.size(16.dp), tint = colors.errorText)
-        Text(text = message, style = sized(12, 17), color = colors.errorText, modifier = Modifier.weight(1f))
-        RetryButton(onRetry)
-    }
-}
-
-@Composable
-private fun RetryButton(onClick: () -> Unit) {
-    val colors = Dictee.colors
-    val shape = RoundedCornerShape(8.dp)
-    Box(
-        modifier = Modifier
-            .height(30.dp)
-            .clip(shape)
-            .border(1.dp, colors.errorText, shape)
-            .clickable(role = Role.Button, onClick = onClick)
-            .padding(horizontal = 10.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(text = "Réessayer", style = sized(12, 16, FontWeight.SemiBold), color = colors.errorText, maxLines = 1)
-    }
+    Notice(text = message, tone = NoticeTone.Destructive) { CompactButton(text = "Réessayer", onClick = onRetry) }
 }
 
 /** Carte à la place du lecteur quand le MP3 n'est pas dans le dossier du téléphone. */
 @Composable
 private fun MissingMp3() {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(CardShape)
-            .background(Dictee.colors.surface)
-            .border(1.dp, Dictee.colors.border, CardShape)
-            .padding(16.dp),
-    ) {
-        Text(text = "Le MP3 n'est pas encore sur le téléphone.", style = sized(14, 21), color = Dictee.colors.textSecondary)
+    Box(modifier = Modifier.fillMaxWidth().card().padding(16.dp)) {
+        Text(text = "Le MP3 n'est pas encore sur le téléphone.", style = Dictee.type.body, color = Dictee.colors.textSecondary)
     }
 }
 
@@ -205,12 +172,7 @@ private fun Player(model: AppModel, mp3: PhoneFile) {
     // Pendant un glissement, la barre et le temps suivent le doigt ; la lecture ne saute qu'à la fin du geste.
     var drag by remember { mutableStateOf<Float?>(null) }
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(CardShape)
-            .background(Dictee.colors.surface)
-            .border(1.dp, Dictee.colors.border, CardShape)
-            .padding(12.dp),
+        modifier = Modifier.fillMaxWidth().card().padding(12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -229,16 +191,17 @@ private fun PlayButton(playback: Playback) {
     Box(
         modifier = Modifier
             .size(40.dp)
+            .alpha(if (enabled) 1f else Tokens.DISABLED_ALPHA)
             .clip(CircleShape)
-            .background(if (enabled) colors.primary else colors.border)
-            .clickable(enabled = enabled, role = Role.Button, onClick = playback::toggle),
+            .background(colors.primary)
+            .pressable(radius = Tokens.RADIUS_PILL_DP.dp, enabled = enabled, onClick = playback::toggle),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
             painter = painterResource(if (playback.playing) R.drawable.ic_pause else R.drawable.ic_play),
             contentDescription = if (playback.playing) "Pause" else "Lecture",
             modifier = Modifier.size(16.dp),
-            tint = if (enabled) colors.onPrimary else colors.textSecondary,
+            tint = colors.onPrimary,
         )
     }
 }
@@ -311,10 +274,10 @@ private fun Modifier.seekGestures(playback: Playback, enabled: Boolean, onDrag: 
 private fun PlayerTimes(playback: Playback, positionMs: Int) {
     val colors = Dictee.colors
     if (playback.status == PlaybackStatus.FAILED) {
-        Text(text = "Lecture impossible.", style = sized(12, 16), color = colors.errorText)
+        Text(text = "Lecture impossible.", style = Dictee.type.caption, color = colors.destructive)
         return
     }
-    val mono = Dictee.type.mono.copy(fontSize = 11.sp, lineHeight = 14.sp)
+    val mono = Dictee.type.mono.copy(fontSize = 12.sp, lineHeight = 16.sp)
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(text = formatClock(positionMs), style = mono, color = colors.textSecondary)
         Text(text = formatClock(playback.durationMs), style = mono, color = colors.textSecondary)
@@ -326,12 +289,7 @@ private fun PlayerTimes(playback: Playback, positionMs: Int) {
 private fun FileLine(fileName: String, folder: String?) {
     val colors = Dictee.colors
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(CardShape)
-            .background(colors.surface)
-            .border(1.dp, colors.border, CardShape)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+        modifier = Modifier.fillMaxWidth().card().padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -345,7 +303,7 @@ private fun FileLine(fileName: String, folder: String?) {
                 overflow = TextOverflow.Ellipsis,
             )
             if (folder != null) {
-                Text(text = folder, style = sized(12, 16), color = colors.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(text = folder, style = Dictee.type.caption, color = colors.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
         RowIcon(R.drawable.ic_check, size = 16.dp)

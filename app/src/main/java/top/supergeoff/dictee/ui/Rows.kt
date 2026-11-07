@@ -1,8 +1,5 @@
 package top.supergeoff.dictee.ui
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -17,19 +14,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import top.supergeoff.dictee.R
-
-/** Opacité d'une rangée qui ne répond plus : le dossier Drive inaccessible. */
-private const val DISABLED_ALPHA = 0.5f
 
 /** Rubrique d'un écran de réglages : son titre en capitales, puis sa carte. */
 @Composable
@@ -40,29 +31,21 @@ internal fun Section(title: String, content: @Composable () -> Unit) {
     }
 }
 
-/** Carte de rangées, sur la surface et avec le contour des cartes de la liste ; [RowDivider] sépare les rangées. */
+/** Carte de rangées (`card`) : surface, contour `border` et ombre douce en clair ; [RowDivider] sépare les rangées. */
 @Composable
 internal fun GroupCard(content: @Composable ColumnScope.() -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(CardShape)
-            .background(Dictee.colors.surface)
-            .border(1.dp, Dictee.colors.border, CardShape),
-        content = content,
-    )
+    Column(modifier = Modifier.fillMaxWidth().card(), content = content)
 }
 
-/** Filet entre deux rangées d'une carte, plus discret que le contour, comme dans la liste. */
+/** Filet entre deux rangées d'une carte : le trait `border`, comme le contour de la carte. */
 @Composable
 internal fun RowDivider() {
-    val border = Dictee.colors.border
-    HorizontalDivider(color = border.copy(alpha = border.alpha * 0.6f))
+    HorizontalDivider(color = Dictee.colors.border)
 }
 
 /**
  * Rangée d'une carte : une [tile] facultative, le titre avec son sous-titre (en JetBrains Mono si [monoSubtitle]), puis [trailing].
- * Avec [onClick], toute la rangée répond au toucher ; [enabled] faux la grise et la rend muette.
+ * Avec [onClick], toute la rangée répond au toucher ; [enabled] faux la passe à `opacity-inactive` et la rend muette.
  */
 @Composable
 internal fun ListRow(
@@ -79,8 +62,8 @@ internal fun ListRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .alpha(if (enabled) 1f else DISABLED_ALPHA)
-            .then(if (onClick != null) Modifier.clickable(enabled = enabled, role = Role.Button, onClick = onClick) else Modifier)
+            .alpha(if (enabled) 1f else Tokens.INACTIVE_ALPHA)
+            .then(if (onClick != null) Modifier.pressable(radius = 0.dp, enabled = enabled, onClick = onClick) else Modifier)
             .padding(horizontal = 14.dp, vertical = if (tile == null && subtitle == null) 14.dp else 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -95,11 +78,11 @@ internal fun ListRow(
 private fun RowTexts(title: String, subtitle: String?, mono: Boolean, weight: FontWeight, modifier: Modifier) {
     val colors = Dictee.colors
     Column(modifier = modifier) {
-        Text(text = title, style = sized(15, 20, weight), color = colors.text)
+        Text(text = title, style = Dictee.type.rowTitle.copy(fontWeight = weight), color = colors.text)
         if (subtitle != null) {
             Text(
                 text = subtitle,
-                style = if (mono) Dictee.type.mono.copy(fontSize = 12.sp, lineHeight = 18.sp) else sized(13, 18),
+                style = if (mono) Dictee.type.mono else Dictee.type.caption,
                 color = colors.textSecondary,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,

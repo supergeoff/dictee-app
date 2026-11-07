@@ -1,7 +1,6 @@
 package top.supergeoff.dictee.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,7 +16,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import top.supergeoff.dictee.R
@@ -51,15 +49,14 @@ fun WelcomeScreen(ui: UiState, onSearch: () -> Unit, onSettings: () -> Unit) {
     }
 }
 
-/** Rond de 72 dp portant le pictogramme du boîtier. */
+/** Rond de 72 dp sur le fond discret `muted`, portant le pictogramme du boîtier. */
 @Composable
 private fun RecorderBadge() {
     Box(
         modifier = Modifier
             .size(72.dp)
             .clip(CircleShape)
-            .background(Dictee.colors.surface)
-            .border(1.dp, Dictee.colors.border, CircleShape),
+            .background(Dictee.colors.muted),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
@@ -76,13 +73,13 @@ private fun WelcomeMessage() {
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
             text = "Associe ton enregistreur",
-            style = sized(20, 26, FontWeight.SemiBold),
+            style = Dictee.type.titleSection,
             color = Dictee.colors.text,
             textAlign = TextAlign.Center,
         )
         Text(
             text = "L'app récupère les enregistrements de ton MECHEN par Bluetooth. Tu n'auras à l'associer qu'une fois.",
-            style = sized(14, 21),
+            style = Dictee.type.body,
             color = Dictee.colors.textSecondary,
             textAlign = TextAlign.Center,
         )

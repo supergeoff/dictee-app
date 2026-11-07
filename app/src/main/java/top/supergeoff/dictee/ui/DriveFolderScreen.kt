@@ -14,7 +14,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -76,7 +75,7 @@ fun DriveFolderScreen(ui: UiState, model: AppModel, onBack: () -> Unit) {
         ) {
             Text(
                 text = "L'app ne voit que les dossiers qu'elle a créés et ceux que tu lui as ouverts une fois.",
-                style = sized(13, 19),
+                style = Dictee.type.caption,
                 color = Dictee.colors.textSecondary,
                 modifier = Modifier.padding(horizontal = 4.dp),
             )
@@ -210,12 +209,10 @@ private fun NewFolderDialog(onCreate: (String) -> Unit, onDismiss: () -> Unit) {
         onDismiss = onDismiss,
         confirmEnabled = name.isNotBlank(),
     ) {
-        OutlinedTextField(
+        DicteeTextField(
             value = name,
             onValueChange = { name = it },
             modifier = Modifier.fillMaxWidth().focusRequester(focus),
-            textStyle = sized(15, 20),
-            singleLine = true,
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = { if (name.isNotBlank()) onCreate(name) }),
         )
