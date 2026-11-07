@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -50,17 +51,24 @@ import top.supergeoff.dictee.Progress
 import top.supergeoff.dictee.R
 import java.util.Locale
 
-/** Rond de la couleur du texte, micro de la couleur du fond : l'icône s'inverse en thème sombre. */
+/**
+ * La marque de dictee (`brand-wordmark`) : un carré incliné de 10° de la couleur du texte, avec le D de la couleur du fond. Les deux
+ * couches s'inversent en thème sombre (carré clair, D sombre), ce qui tient lieu du liseré que le design system demande pour un carré
+ * presque noir sur fond sombre.
+ */
 @Composable
 fun AppIcon(size: Dp = 32.dp) {
-    Box(
-        modifier = Modifier.size(size).clip(CircleShape).background(Dictee.colors.text),
-        contentAlignment = Alignment.Center,
-    ) {
+    Box(modifier = Modifier.size(size)) {
         Icon(
-            painter = painterResource(R.drawable.ic_mic),
+            painter = painterResource(R.drawable.ic_brand_square),
             contentDescription = null,
-            modifier = Modifier.size(size * 0.5625f),
+            modifier = Modifier.fillMaxSize(),
+            tint = Dictee.colors.text,
+        )
+        Icon(
+            painter = painterResource(R.drawable.ic_brand_d),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
             tint = Dictee.colors.background,
         )
     }
