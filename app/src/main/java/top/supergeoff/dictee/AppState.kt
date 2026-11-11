@@ -665,18 +665,9 @@ class AppModel(
      * La liste du boîtier remplace `boxList` ; un échec garde la dernière, et [BoxConnection] l'a déjà noté au journal.
      * Faux si le boîtier n'a pas répondu ; vrai si la liste est lue, ou si rien n'est à lire (aucun boîtier, récupération ou recherche en cours).
      */
-    private suspend fun readBoxList(): Boolean = foregroundBoxGate.withForeground {
-        readBoxListInForeground()
-    } ?: true
-
-    private suspend fun readBoxListInForeground(): Boolean {
-        localRepository.awaitInitialized()
-        val address = localFlow.deviceAddress ?: return true
-        if (liveFlow.value.recovering || searching) return true
-        val list = attempt { box.list(address) }.getOrNull() ?: return false
-        update { if (it.deviceAddress == address) it.copy(boxList = list) else it }.await()
-        return true
-    }
+    private suspend fun readBoxList(): Boolean = readBoxListForForeground(
+        foregroundBoxGate, localRepository, { liveFlow.value.recovering || searching },
+    ) { address -> attempt { box.list(address) } }
 
     /**
      * Sans accord Google, la liste reste nulle et une ligne DRIVE le note. Un échec de lecture garde la dernière liste.

@@ -84,3 +84,22 @@ internal class ForegroundBoxGate {
         if (!isForeground) close()
     }
 }
+
+/** La fermeture attend la lecture Bluetooth, jamais la fin de sa sauvegarde. */
+internal suspend fun readBoxListForForeground(
+    gate: ForegroundBoxGate,
+    repository: LocalStateRepository,
+    shouldSkip: () -> Boolean,
+    list: suspend (String) -> Result<List<ListItem.Entry>>,
+): Boolean {
+    repository.awaitInitialized()
+    val (success, pendingSave) = gate.withForeground {
+        val address = checkNotNull(repository.state.value).deviceAddress ?: return@withForeground null
+        if (shouldSkip()) return@withForeground null
+        val entries = list(address).getOrNull() ?: return@withForeground false to null
+        // La mise en file non bloquante préserve l'ordre des lectures ; l'attente est hors du verrou.
+        true to repository.update { if (it.deviceAddress == address) it.copy(boxList = entries) else it }
+    } ?: return true
+    pendingSave?.await()
+    return success
+}

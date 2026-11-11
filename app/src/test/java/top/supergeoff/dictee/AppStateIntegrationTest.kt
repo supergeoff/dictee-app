@@ -358,4 +358,100 @@ class AppStateIntegrationTest {
         refreshWhenForeground(coordinator, { lifecycle.isForeground }, refresh)
         assertEquals(listOf("téléphone", "Drive", "boîtier"), reads)
     }
+    @Test
+    fun `la fermeture ne depend pas de la sauvegarde apres la lecture bluetooth`() = runBlocking {
+        val address = "AA:BB:CC:DD:EE:FF"
+        val entry = ListItem.Entry(name, 123, 0)
+        LocalStateStore(file()).save(LocalState(deviceAddress = address))
+        val enteredSave = CountDownLatch(1)
+        val releaseSave = CountDownLatch(1)
+        val store = LocalStateStore(file(), rename = { from, to ->
+            enteredSave.countDown()
+            check(releaseSave.await(30, TimeUnit.SECONDS))
+            from.renameTo(to)
+        })
+        val repository = LocalStateRepository(store)
+        repository.awaitInitialized()
+        val gate = ForegroundBoxGate()
+        gate.onForeground()
+        val events = mutableListOf<String>()
+        val list: suspend (String) -> Result<List<ListItem.Entry>> = { actual ->
+            assertEquals(address, actual)
+            events += "lecture bluetooth terminée"
+            Result.success(listOf(entry))
+        }
+        val read = async(start = CoroutineStart.UNDISPATCHED) {
+            readBoxListForForeground(gate, repository, { false }, list)
+        }
+        try {
+            assertTrue(kotlinx.coroutines.withContext(Dispatchers.IO) { enteredSave.await(5, TimeUnit.SECONDS) })
+            assertFalse(read.isCompleted)
+            gate.onBackground()
+            val close = async(start = CoroutineStart.UNDISPATCHED) {
+                gate.closeIfBackground { events += "liaison fermée" }
+            }
+            withTimeout(5000) { close.await() }
+            assertFalse(read.isCompleted)
+            assertEquals(listOf("lecture bluetooth terminée", "liaison fermée"), events)
+
+            assertTrue(withTimeout(5000) { readBoxListForForeground(gate, repository, { false }, list) })
+            assertEquals(listOf("lecture bluetooth terminée", "liaison fermée"), events)
+            releaseSave.countDown()
+            assertTrue(withTimeout(5000) { read.await() })
+            assertEquals(listOf(entry), LocalStateStore(file()).load().boxList)
+
+            gate.onForeground()
+            assertTrue(withTimeout(5000) { readBoxListForForeground(gate, repository, { false }, list) })
+            assertEquals(listOf("lecture bluetooth terminée", "liaison fermée", "lecture bluetooth terminée"), events)
+        } finally { releaseSave.countDown() }
+    }
+
+    @Test
+    fun `deux listes sont enregistrees dans l ordre des lectures sans retarder la fermeture`() = runBlocking {
+        val address = "AA:BB:CC:DD:EE:FF"
+        val firstEntry = ListItem.Entry(name, 123, 0)
+        val secondEntry = ListItem.Entry(name, 456, 0)
+        LocalStateStore(file()).save(LocalState(deviceAddress = address))
+        val enteredSave = CountDownLatch(1)
+        val releaseSave = CountDownLatch(1)
+        val saves = AtomicInteger()
+        val store = LocalStateStore(file(), rename = { from, to ->
+            if (saves.incrementAndGet() == 1) {
+                enteredSave.countDown()
+                check(releaseSave.await(30, TimeUnit.SECONDS))
+            }
+            from.renameTo(to)
+        })
+        val repository = LocalStateRepository(store)
+        repository.awaitInitialized()
+        val gate = ForegroundBoxGate()
+        gate.onForeground()
+        val first = async(start = CoroutineStart.UNDISPATCHED) {
+            readBoxListForForeground(gate, repository, { false }) { Result.success(listOf(firstEntry)) }
+        }
+        try {
+            assertTrue(kotlinx.coroutines.withContext(Dispatchers.IO) { enteredSave.await(5, TimeUnit.SECONDS) })
+            var secondRead = false
+            val second = async(start = CoroutineStart.UNDISPATCHED) {
+                readBoxListForForeground(gate, repository, { false }) {
+                    secondRead = true
+                    Result.success(listOf(secondEntry))
+                }
+            }
+            assertTrue(secondRead)
+            assertFalse(first.isCompleted)
+            assertFalse(second.isCompleted)
+            gate.onBackground()
+            var closed = false
+            withTimeout(5000) { gate.closeIfBackground { closed = true } }
+            assertTrue(closed)
+            assertFalse(first.isCompleted)
+            assertFalse(second.isCompleted)
+            releaseSave.countDown()
+            assertTrue(withTimeout(5000) { first.await() })
+            assertTrue(withTimeout(5000) { second.await() })
+            assertEquals(listOf(secondEntry), store.load().boxList)
+            assertEquals(2, saves.get())
+        } finally { releaseSave.countDown() }
+    }
 }
