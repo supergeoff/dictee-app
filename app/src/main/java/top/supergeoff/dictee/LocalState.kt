@@ -17,6 +17,9 @@ import org.json.JSONObject
 import java.io.File
 import java.io.IOException
 import java.io.FileOutputStream
+import java.io.FileNotFoundException
+import java.nio.file.Files
+import java.nio.file.NoSuchFileException
 
 /** Thème de l'interface, choisi dans les réglages. */
 enum class ThemeChoice { LIGHT, DARK, SYSTEM }
@@ -69,30 +72,22 @@ internal fun MutableStateFlow<LocalState>.updateChanged(change: (LocalState) -> 
 /** Lit et écrit `state.json`. */
 class LocalStateStore(private val file: File, private val rename: (File, File) -> Boolean = { from, to -> from.renameTo(to) }) {
 
-    /**
-     * Lit l'état. Un fichier absent donne un état vide, et un fichier sans clé `version` est un état de la 0.1.5.
-     * Un fichier illisible, par son contenu (JSON invalide) comme par une erreur de lecture, est gardé sous `state.json.bad`,
-     * et l'app repart d'un état vide.
-     */
+    /** Lit l'état sans modifier le fichier en cas d'erreur de lecture ou de contenu. */
     @Synchronized
     fun load(): LocalState {
-        if (!file.exists()) return LocalState()
-        return try {
-            val json = JSONObject(file.readText())
-            if (json.has("version")) read(json) else migrate(json)
-        } catch (e: JSONException) {
-            setAside()
-        } catch (e: IOException) {
-            setAside()
+        val content = try {
+            file.readText()
+        } catch (e: FileNotFoundException) {
+            // exists() retourne aussi false en cas d'accès interdit. Seul ENOENT confirme l'absence.
+            try {
+                Files.readAttributes(file.toPath(), java.nio.file.attribute.BasicFileAttributes::class.java)
+            } catch (_: NoSuchFileException) {
+                return LocalState()
+            }
+            throw e
         }
-    }
-
-    /** Garde le fichier illisible sous `state.json.bad`, en remplaçant le précédent, et rend un état vide. */
-    private fun setAside(): LocalState {
-        val bad = File(file.parentFile, file.name + ".bad")
-        bad.delete()
-        file.renameTo(bad)
-        return LocalState()
+        val json = JSONObject(content)
+        return if (json.has("version")) read(json) else migrate(json)
     }
 
     /** Écrit l'état dans `state.json.tmp`, puis le renomme sur `state.json`. */
@@ -224,6 +219,13 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
     }
 }
 
+/** État de la lecture initiale, qui peut être relancée après un échec. */
+sealed interface LocalStateInitialization {
+    data object Loading : LocalStateInitialization
+    data object Ready : LocalStateInitialization
+    data class Failed(val error: Exception) : LocalStateInitialization
+}
+
 /** Une file unique applique les transformations et écrit hors du thread appelant. */
 class LocalStateRepository(
     private val store: LocalStateStore,
@@ -233,29 +235,26 @@ class LocalStateRepository(
     private data class Change(
         val transform: (LocalState) -> LocalState,
         val forceSave: Boolean,
+        val initialization: CompletableDeferred<LocalState>,
         val result: CompletableDeferred<Result<LocalState>>,
     )
 
     private val mutableState = MutableStateFlow<LocalState?>(null)
     /** Null jusqu'à la fin du chargement, puis uniquement des états enregistrés. */
     val state: StateFlow<LocalState?> = mutableState.asStateFlow()
-    private val initialized = CompletableDeferred<LocalState>()
-
+    private val mutableInitialization = MutableStateFlow<LocalStateInitialization>(LocalStateInitialization.Loading)
+    val initialization: StateFlow<LocalStateInitialization> = mutableInitialization.asStateFlow()
+    private val initializationLock = Any()
+    private var initialized = CompletableDeferred<LocalState>()
     private val queue = Channel<Change>(Channel.UNLIMITED)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     init {
+        launchLoad(initialized)
         scope.launch {
-            try {
-                val loaded = load()
-                mutableState.value = loaded
-                initialized.complete(loaded)
-            } catch (e: Exception) {
-                initialized.completeExceptionally(e)
-            }
             for (change in queue) {
                 val result = try {
-                    initialized.await()
+                    change.initialization.await()
                     val old = checkNotNull(mutableState.value)
                     val next = change.transform(old)
                     if (change.forceSave || next != old) {
@@ -274,9 +273,38 @@ class LocalStateRepository(
         }
     }
 
-    /** Attend le chargement initial sans bloquer le thread appelant. */
+    private fun launchLoad(attempt: CompletableDeferred<LocalState>) {
+        scope.launch {
+            try {
+                val loaded = load()
+                synchronized(initializationLock) {
+                    mutableState.value = loaded
+                    mutableInitialization.value = LocalStateInitialization.Ready
+                    attempt.complete(loaded)
+                }
+            } catch (e: Exception) {
+                synchronized(initializationLock) {
+                    mutableInitialization.value = LocalStateInitialization.Failed(e)
+                    attempt.completeExceptionally(e)
+                }
+            }
+        }
+    }
+
+    /** Relance uniquement une lecture échouée, sans réinitialiser ni écrire les données. */
+    fun retryInitialization(): Boolean = synchronized(initializationLock) {
+        if (mutableInitialization.value !is LocalStateInitialization.Failed) return@synchronized false
+        val attempt = CompletableDeferred<LocalState>()
+        initialized = attempt
+        mutableInitialization.value = LocalStateInitialization.Loading
+        launchLoad(attempt)
+        true
+    }
+
+    /** Attend la tentative en cours, ou propage son erreur sans exécuter l'opération. */
     suspend fun awaitInitialized(): LocalState {
-        initialized.await()
+        val attempt = synchronized(initializationLock) { initialized }
+        attempt.await()
         return checkNotNull(mutableState.value)
     }
 
@@ -289,7 +317,9 @@ class LocalStateRepository(
 
     private fun enqueue(change: (LocalState) -> LocalState, forceSave: Boolean): Deferred<Result<LocalState>> {
         val result = CompletableDeferred<Result<LocalState>>()
-        check(queue.trySend(Change(change, forceSave, result)).isSuccess)
+        synchronized(initializationLock) {
+            check(queue.trySend(Change(change, forceSave, initialized, result)).isSuccess)
+        }
         return result
     }
 }

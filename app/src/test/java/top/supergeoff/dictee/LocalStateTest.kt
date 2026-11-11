@@ -42,18 +42,22 @@ class LocalStateTest {
     }
 
     @Test
-    fun `un etat illisible donne un etat vide et reste de cote`() {
-        file().writeText("""{"version":2,"deviceAdd""")
-        assertEquals(LocalState(), LocalStateStore(file()).load())
-        assertTrue(File(tmp.root, "state.json.bad").exists())
+    fun `un etat illisible reste intact ainsi que le fichier bad`() {
+        val content = "json invalide"
+        file().writeText(content)
+        val bad = File(tmp.root, "state.json.bad").apply { writeText("ancienne sauvegarde") }
+        try { LocalStateStore(file()).load(); org.junit.Assert.fail("le chargement doit échouer") } catch (_: org.json.JSONException) { }
+        assertEquals(content, file().readText())
+        assertEquals("ancienne sauvegarde", bad.readText())
     }
 
     @Test
-    fun `un etat qu'on ne peut pas lire donne un etat vide et reste de cote`() {
-        file().mkdir()   // lire un dossier lève une IOException, pas une JSONException
-        assertEquals(LocalState(), LocalStateStore(file()).load())
-        assertTrue(File(tmp.root, "state.json.bad").isDirectory)
-        assertFalse(file().exists())
+    fun `une erreur de lecture ne deplace ni ne supprime les fichiers`() {
+        file().mkdir()
+        val bad = File(tmp.root, "state.json.bad").apply { writeText("ancienne sauvegarde") }
+        try { LocalStateStore(file()).load(); org.junit.Assert.fail("le chargement doit échouer") } catch (_: java.io.IOException) { }
+        assertTrue(file().isDirectory)
+        assertEquals("ancienne sauvegarde", bad.readText())
     }
 
     @Test

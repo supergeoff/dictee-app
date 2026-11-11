@@ -3,6 +3,7 @@ package top.supergeoff.dictee
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.*
@@ -167,4 +168,98 @@ class AppStateIntegrationTest {
             assertEquals(changed, LocalStateStore(file()).load())
         } finally { release.countDown(); thread.join(5000) }
     }
+    @Test
+    fun `echec visible reprise sans ecrasement et operations bloquees`() = runBlocking {
+        val store = LocalStateStore(file())
+        val original = LocalState(deviceName = "persisté", theme = ThemeChoice.DARK, transcriptionTasks = listOf(sampleTask()))
+        store.save(original)
+        val before = file().readText()
+        val attempts = AtomicInteger()
+        val retryEntered = CountDownLatch(1)
+        val retryRelease = CountDownLatch(1)
+        val repo = LocalStateRepository(store, load = {
+            when (attempts.incrementAndGet()) {
+                1 -> throw SecurityException("accès refusé")
+                2 -> {
+                    retryEntered.countDown()
+                    check(retryRelease.await(10, TimeUnit.SECONDS))
+                    throw SecurityException("encore refusé")
+                }
+                else -> store.load()
+            }
+        })
+        val failed = withTimeout(5000) {
+            repo.initialization.first { it is LocalStateInitialization.Failed }
+        } as LocalStateInitialization.Failed
+        assertTrue(failed.error is SecurityException)
+        val screen = initialUiState(repo.state.value, failed)!!
+        assertFalse(screen.initialized)
+        assertEquals("accès refusé", screen.initializationError)
+        assertNull(repo.state.value)
+        val attempted = AtomicInteger()
+        val denied = repo.update { attempted.incrementAndGet(); it.copy(deviceName = "écrasé") }
+        assertTrue(withTimeout(5000) { denied.await() }.isFailure)
+        try { repo.awaitInitialized(); fail("la lecture dépendante doit échouer") } catch (_: SecurityException) { }
+        try { RecoverySafety(repo).withTransferLock { fail("traitement non autorisé") } } catch (_: SecurityException) { }
+        assertEquals(0, attempted.get())
+        assertEquals(before, file().readText())
+        assertTrue(repo.retryInitialization())
+        try {
+            assertTrue(retryEntered.await(5, TimeUnit.SECONDS))
+            assertFalse(repo.retryInitialization())
+            val waiting = async(start = CoroutineStart.UNDISPATCHED) {
+                runCatching { repo.awaitInitialized() }
+            }
+            assertFalse(waiting.isCompleted)
+            assertNull(repo.state.value)
+            assertEquals(before, file().readText())
+            retryRelease.countDown()
+            assertTrue(withTimeout(5000) { waiting.await() }.exceptionOrNull() is SecurityException)
+            val failure2 = repo.initialization.value as LocalStateInitialization.Failed
+            assertEquals("encore refusé", failure2.error.message)
+            assertEquals("encore refusé", initialUiState(repo.state.value, failure2)!!.initializationError)
+        } finally { retryRelease.countDown() }
+        assertEquals(before, file().readText())
+        assertTrue(repo.retryInitialization())
+        val loaded = withTimeout(5000) { repo.awaitInitialized() }
+        assertEquals(original, loaded)
+        assertEquals(before, file().readText())
+        assertNull(initialUiState(repo.state.value, repo.initialization.value))
+        assertEquals(0, attempted.get())
+        val changed = repo.updateDurably { it.copy(deviceName = "modifié") }
+        assertEquals(original.copy(deviceName = "modifié"), changed)
+        assertEquals(changed, LocalStateStore(file()).load())
+        assertEquals(3, attempts.get())
+    }
+
+    @Test
+    fun `une ecriture anterieure a la reprise ne se rejoue pas apres succes`() = runBlocking {
+        val store = LocalStateStore(file())
+        val original = LocalState(deviceName = "sauvegardé")
+        store.save(original)
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val calls = AtomicInteger()
+        val repo = LocalStateRepository(store, load = {
+            if (calls.incrementAndGet() == 1) {
+                entered.countDown()
+                check(release.await(10, TimeUnit.SECONDS))
+                throw SecurityException("refus")
+            }
+            store.load()
+        })
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            val transformCalls = AtomicInteger()
+            val pending = repo.update { transformCalls.incrementAndGet(); it.copy(deviceName = "périmé") }
+            release.countDown()
+            withTimeout(5000) { repo.initialization.first { it is LocalStateInitialization.Failed } }
+            assertTrue(repo.retryInitialization())
+            assertEquals(original, withTimeout(5000) { repo.awaitInitialized() })
+            assertTrue(withTimeout(5000) { pending.await() }.isFailure)
+            assertEquals(0, transformCalls.get())
+            assertEquals(original, store.load())
+        } finally { release.countDown() }
+    }
+
 }

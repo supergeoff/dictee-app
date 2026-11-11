@@ -39,6 +39,7 @@ import kotlin.coroutines.cancellation.CancellationException
 data class UiState(
     val local: LocalState = LocalState(),
     val initialized: Boolean = true,
+    val initializationError: String? = null,
     val recordings: List<Recording> = emptyList(),
     val link: LinkStatus = LinkStatus.NONE,
     val refreshing: Boolean = false,
@@ -59,6 +60,17 @@ data class UiState(
     val toSend: List<Recording>
         get() = if (local.driveEnabled) Recordings.toSend(recordings, drive, local.errors) else emptyList()
 }
+
+/** État à afficher avant que les écrans puissent lire l'état local. */
+internal fun initialUiState(local: LocalState?, initialization: LocalStateInitialization): UiState? =
+    when (initialization) {
+        LocalStateInitialization.Loading -> UiState(initialized = false)
+        is LocalStateInitialization.Failed -> UiState(
+            initialized = false,
+            initializationError = initialization.error.message ?: initialization.error.javaClass.simpleName,
+        )
+        LocalStateInitialization.Ready -> if (local == null) UiState(initialized = false) else null
+    }
 
 /** Demande faite à l'activité, qui seule parle au système ; la réponse revient par la méthode `on...` de [AppModel]. */
 sealed class UiRequest {
@@ -164,12 +176,30 @@ class AppModel(
     val activeJobs: Int
         get() = jobs.get()
 
+    private data class LocalSnapshot(val state: LocalState?, val initialization: LocalStateInitialization)
+
+    private val localSnapshot = combine(localRepository.state, localRepository.initialization) { state, initialization ->
+        LocalSnapshot(state, initialization)
+    }
+
     val ui: StateFlow<UiState> = combine(
-        localRepository.state, phoneFlow, driveFlow, box.status, liveFlow,
-    ) { local, phone, drive, link, live ->
-        if (local == null) UiState(initialized = false)
-        else buildUi(local, phone, drive, link, live)
+        localSnapshot, phoneFlow, driveFlow, box.status, liveFlow,
+    ) { snapshot, phone, drive, link, live ->
+        initialUiState(snapshot.state, snapshot.initialization)
+            ?: buildUi(checkNotNull(snapshot.state), phone, drive, link, live)
     }.stateIn(scope, SharingStarted.Eagerly, UiState(initialized = false))
+
+    fun retryLocalState() {
+        if (!localRepository.retryInitialization()) return
+        scope.launch {
+            try {
+                localRepository.awaitInitialized()
+                if (foreground) refresh()
+            } catch (_: Exception) {
+                // L'écran d'initialisation affiche l'échec de cette tentative.
+            }
+        }
+    }
 
     // --- Cycle de vie et rafraîchissement
 
