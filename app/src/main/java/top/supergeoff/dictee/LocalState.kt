@@ -223,9 +223,15 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
             error = o.stringOrNull("error"), suspended = o.booleanOr("suspended", false),
             suspensionReason = o.stringOrNull("suspensionReason"),
         )
-        if (isSafeStoredTaskAddress(task)) task else task.copy(
-            serverAddress = "", suspended = true, suspensionReason = INVALID_TASK_ADDRESS_REASON,
-        )
+        when {
+            // Corrige les suspensions terminales enregistrées par la migration précédente.
+            task.phase.isTerminal() && task.serverAddress.isEmpty() &&
+                task.suspended && task.suspensionReason == INVALID_TASK_ADDRESS_REASON ->
+                task.copy(suspended = false, suspensionReason = null)
+            isSafeStoredTaskAddress(task) -> task
+            task.phase.isTerminal() -> task.copy(serverAddress = "")
+            else -> task.copy(serverAddress = "", suspended = true, suspensionReason = INVALID_TASK_ADDRESS_REASON)
+        }
     }
 
     /** Les noms et les étapes inconnus sont ignorés, de même que les erreurs sans message. */

@@ -41,6 +41,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
+import top.supergeoff.dictee.transcriptionTaskSettingsMessages
 import top.supergeoff.dictee.TranscriptionSettingsForm
 import androidx.compose.ui.unit.dp
 import top.supergeoff.dictee.AppModel
@@ -213,11 +214,8 @@ private fun TranscriptionSection(local: LocalState, form: TranscriptionSettingsF
             OutlinedTextField(draft.model, form::setModel, enabled = draft.initialized && !draft.saving, label = { Text("Modèle") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             Button(onClick = { form.submit() }, enabled = draft.initialized && !draft.saving) { Text(if (draft.saving) "Enregistrement…" else "Enregistrer") }
             draft.message?.let { Text(it, color = Dictee.colors.textSecondary) }
-            local.transcriptionTasks.filter { it.suspended && it.suspensionReason?.contains("Clé inaccessible") == true }.forEach { task ->
-                Text("${task.recordingName} : clé inaccessible. La nouvelle clé ne modifie pas cette tâche ; il faudra la relancer avec les nouveaux réglages.", color = Dictee.colors.textSecondary)
-            }
-            local.transcriptionTasks.filter { it.suspended && it.serverAddress.isEmpty() }.forEach { task ->
-                Text("${task.recordingName} : adresse de serveur invalide. Cette tâche ne peut pas changer de serveur ; crée une nouvelle tâche après avoir vérifié les réglages.", color = Dictee.colors.textSecondary)
+            transcriptionTaskSettingsMessages(local.transcriptionTasks).forEach { message ->
+                Text(message, color = Dictee.colors.textSecondary)
             }
             Text("Le test de connexion sera disponible ultérieurement.", color = Dictee.colors.textSecondary)
         }

@@ -317,4 +317,56 @@ class LocalStateTest {
         assertEquals(loaded.copy(theme = ThemeChoice.DARK), store.load())
     }
 
+    @Test fun `migration des adresses conserve les phases et les champs terminaux`() {
+        val store = LocalStateStore(file())
+        val phases = TranscriptionPhase.entries
+        val originals = phases.mapIndexed { index, phase ->
+            sampleTask().copy(localId = "phase-$index", phase = phase, serverId = "server-$index",
+                progress = 0.6, error = "erreur conservée", suspended = phase == TranscriptionPhase.FAILED,
+                suspensionReason = if (phase == TranscriptionPhase.FAILED) "ancien motif" else null)
+        }
+        store.save(LocalState(transcriptionTasks = originals))
+        val old = org.json.JSONObject(file().readText())
+        val secret = "synthetic-address-migration-secret"
+        val tasks = old.getJSONArray("transcriptionTasks")
+        phases.forEachIndexed { i, _ ->
+            tasks.getJSONObject(i).put("serverAddress", if (i % 2 == 0) "https://example.invalid" else "https://user:$secret@example.invalid/v1")
+        }
+        file().writeText(old.toString())
+        val before = file().readText()
+        val loaded = store.load()
+        assertEquals(before, file().readText())
+        val terminal = setOf(TranscriptionPhase.COMPLETED, TranscriptionPhase.FAILED, TranscriptionPhase.CANCELLED)
+        originals.zip(loaded.transcriptionTasks).forEach { (original, migrated) ->
+            val expected = if (original.phase in terminal) original.copy(serverAddress = "")
+                else original.copy(serverAddress = "", suspended = true, suspensionReason = INVALID_TASK_ADDRESS_REASON)
+            assertEquals(original.phase.name, expected, migrated)
+        }
+        assertFalse(loaded.toString().contains(secret))
+        val messages = transcriptionTaskSettingsMessages(loaded.transcriptionTasks)
+        assertEquals(phases.size - terminal.size, messages.size)
+        assertTrue(messages.all { it.contains("crée une nouvelle tâche") })
+        store.save(loaded.copy(theme = ThemeChoice.DARK))
+        assertFalse(file().readText().contains(secret))
+        assertEquals(loaded.copy(theme = ThemeChoice.DARK), store.load())
+    }
+
+    @Test fun `une ancienne suspension erronee de migration terminale est retiree`() {
+        val store = LocalStateStore(file())
+        val phases = listOf(TranscriptionPhase.COMPLETED, TranscriptionPhase.FAILED, TranscriptionPhase.CANCELLED)
+        val tasks = phases.map { sampleTask().copy(localId = it.name, phase = it) }
+        store.save(LocalState(transcriptionTasks = tasks))
+        val old = org.json.JSONObject(file().readText())
+        val array = old.getJSONArray("transcriptionTasks")
+        phases.forEachIndexed { i, _ ->
+            array.getJSONObject(i).put("serverAddress", "").put("suspended", true)
+                .put("suspensionReason", INVALID_TASK_ADDRESS_REASON)
+        }
+        file().writeText(old.toString())
+        val migrated = store.load()
+        assertEquals(tasks.map { it.copy(serverAddress = "") }, migrated.transcriptionTasks)
+        store.save(migrated)
+        assertEquals(migrated, store.load())
+    }
+
 }

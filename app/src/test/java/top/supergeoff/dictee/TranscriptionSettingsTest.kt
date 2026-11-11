@@ -209,4 +209,44 @@ class TranscriptionSettingsTest {
         assertFalse(LocalStateStore(file()).load().transcriptionAddressNeedsReview)
     }
 
+    @Test fun migratedTasksNeverUseCredentialsOrChangeServerWhenSettingsChange() = runBlocking {
+        val store = LocalStateStore(file())
+        val phases = TranscriptionPhase.entries
+        val tasks = phases.map { task("task-ref").copy(localId = it.name, phase = it) }
+        store.save(LocalState(transcriptionTasks = tasks))
+        val old = org.json.JSONObject(file().readText())
+        val secret = "synthetic-old-task-secret"
+        val array = old.getJSONArray("transcriptionTasks")
+        phases.forEachIndexed { i, _ -> array.getJSONObject(i).put("serverAddress", "https://example.invalid/v1?key=$secret") }
+        file().writeText(old.toString())
+        var reads = 0
+        val credentials = object : CredentialStore {
+            override fun save(secret: String) = "new-ref"
+            override fun read(ref: String): String { reads++; return synthetic }
+            override fun remove(ref: String) = Unit
+        }
+        val repo = LocalStateRepository(store)
+        val manager = TranscriptionSettingsManager(repo, credentials)
+        val migrated = repo.awaitInitialized().transcriptionTasks
+        phases.forEach { assertNull(manager.readForTask(it.name)) }
+        assertEquals(0, reads)
+        manager.save(TranscriptionSettings(baseUrl = "https://new.example.invalid/v1"), null)
+        assertEquals(migrated, store.load().transcriptionTasks)
+        assertFalse(file().readText().contains(secret))
+        phases.forEach { assertNull(manager.readForTask(it.name)) }
+        assertEquals(0, reads)
+    }
+
+
+    @Test fun terminalEmptyAddressIsSafeButCannotBeReactivatedWithoutSuspension() {
+        val store = LocalStateStore(file())
+        val terminal = task("kept-ref").copy(phase = TranscriptionPhase.COMPLETED, serverAddress = "")
+        store.save(LocalState(transcriptionTasks = listOf(terminal)))
+        assertEquals(terminal, store.load().transcriptionTasks.single())
+        val reactivated = terminal.copy(phase = TranscriptionPhase.TRACKING)
+        try { store.save(LocalState(transcriptionTasks = listOf(reactivated))); fail() }
+        catch (_: InvalidTranscriptionAddressException) { }
+        assertEquals(terminal, store.load().transcriptionTasks.single())
+    }
+
 }

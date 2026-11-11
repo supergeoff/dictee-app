@@ -5,6 +5,11 @@ enum class TranscriptionPhase {
     PENDING, SUBMITTING, UNKNOWN_SUBMISSION, TRACKING, CANCEL_REQUESTED, SAVING, COMPLETED, FAILED, CANCELLED
 }
 
+internal fun TranscriptionPhase.isTerminal(): Boolean = when (this) {
+    TranscriptionPhase.COMPLETED, TranscriptionPhase.FAILED, TranscriptionPhase.CANCELLED -> true
+    else -> false
+}
+
 /** Contexte figé d'une tâche. [encryptedKeyRef] est une référence, jamais la clé en clair. */
 data class TranscriptionTask(
     val localId: String,

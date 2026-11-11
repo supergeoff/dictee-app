@@ -34,12 +34,13 @@ fun isValidTranscriptionBaseUrl(value: String): Boolean {
     } catch (_: Exception) { false }
 }
 
-/** Une adresse figée non sûre est remplacée par une valeur vide et la tâche reste suspendue. */
+/** Une tâche active dont l’adresse figée est invalide doit rester suspendue. */
 const val INVALID_TASK_ADDRESS_REASON = "Adresse de serveur invalide. Cette tâche ne peut pas changer de serveur ; crée une nouvelle tâche après avoir vérifié les réglages."
 
 internal fun isSafeStoredTaskAddress(task: TranscriptionTask): Boolean =
     (task.serverAddress != "/v1" && isValidTranscriptionBaseUrl(task.serverAddress)) ||
-        (task.serverAddress.isEmpty() && task.suspended && task.suspensionReason == INVALID_TASK_ADDRESS_REASON)
+        (task.serverAddress.isEmpty() && (task.phase.isTerminal() ||
+            (task.suspended && task.suspensionReason == INVALID_TASK_ADDRESS_REASON)))
 
 class InvalidTranscriptionAddressException : Exception(
     "Adresse invalide. Utilise une adresse HTTP(S) terminée par /v1, sans identifiants, requête ni fragment."
@@ -132,7 +133,7 @@ class TranscriptionSettingsManager(private val repository: LocalStateRepository,
                 repository.updateDurably { state ->
                     state.copy(transcriptionTasks = state.transcriptionTasks.map { current ->
                         if (current.localId == localId && current.encryptedKeyRef == task.encryptedKeyRef &&
-                            current.phase !in setOf(TranscriptionPhase.COMPLETED, TranscriptionPhase.FAILED, TranscriptionPhase.CANCELLED))
+                            !current.phase.isTerminal())
                             current.copy(suspended = true, suspensionReason = "Clé inaccessible. Vérifie les réglages de transcription.")
                         else current
                     })

@@ -69,3 +69,14 @@ class TranscriptionSettingsForm(
         true
     }
 }
+
+/** Messages affichés pour les tâches encore susceptibles d'être traitées. */
+internal fun transcriptionTaskSettingsMessages(tasks: List<TranscriptionTask>): List<String> =
+    tasks.filter { it.suspended && !it.phase.isTerminal() }.mapNotNull { task ->
+        when {
+            task.suspensionReason?.contains("Clé inaccessible") == true ->
+                "${task.recordingName} : clé inaccessible. La nouvelle clé ne modifie pas cette tâche ; il faudra la relancer avec les nouveaux réglages."
+            task.serverAddress.isEmpty() -> "${task.recordingName} : adresse de serveur invalide. Cette tâche ne peut pas changer de serveur ; crée une nouvelle tâche après avoir vérifié les réglages."
+            else -> null
+        }
+    }
