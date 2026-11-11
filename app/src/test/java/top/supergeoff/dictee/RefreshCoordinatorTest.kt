@@ -73,4 +73,77 @@ class RefreshCoordinatorTest {
         coordinator.run(waitForCurrent = false) { reads++ }
         assertEquals(1, reads)
     }
+
+    @Test
+    fun `la fermeture attend une lecture engagee et une lecture en attente respecte l arriere plan`() = runBlocking {
+        val lifecycle = ForegroundBoxGate()
+        lifecycle.onForeground()
+        val entered = CompletableDeferred<Unit>()
+        val releaseRead = CompletableDeferred<Unit>()
+        val releaseClose = CompletableDeferred<Unit>()
+        val closeStarted = CompletableDeferred<Unit>()
+        val events = mutableListOf<String>()
+        val read = async(start = CoroutineStart.UNDISPATCHED) {
+            lifecycle.withForeground {
+                events += "lecture commencée"
+                entered.complete(Unit)
+                releaseRead.await()
+                events += "liaison ouverte"
+            }
+        }
+        entered.await()
+        lifecycle.onBackground()
+        val close = async(start = CoroutineStart.UNDISPATCHED) {
+            lifecycle.closeIfBackground {
+                events += "fermeture commencée"
+                closeStarted.complete(Unit)
+                releaseClose.await()
+                events += "liaison fermée"
+            }
+        }
+        assertFalse(close.isCompleted)
+        releaseRead.complete(Unit)
+        withTimeout(5000) { closeStarted.await() }
+        lifecycle.onForeground()
+        val queuedRead = async(start = CoroutineStart.UNDISPATCHED) {
+            lifecycle.withForeground { events += "réouverture" }
+        }
+        lifecycle.onBackground()
+        releaseClose.complete(Unit)
+        withTimeout(5000) { read.await(); close.await(); queuedRead.await() }
+        assertEquals(listOf("lecture commencée", "liaison ouverte", "fermeture commencée", "liaison fermée"), events)
+    }
+
+    @Test
+    fun `une fermeture differee ne ferme pas une liaison apres le retour au premier plan`() = runBlocking {
+        val lifecycle = ForegroundBoxGate()
+        lifecycle.onForeground()
+        val release = CompletableDeferred<Unit>()
+        val read = async(start = CoroutineStart.UNDISPATCHED) { lifecycle.withForeground { release.await() } }
+        lifecycle.onBackground()
+        var closed = false
+        val close = async(start = CoroutineStart.UNDISPATCHED) { lifecycle.closeIfBackground { closed = true } }
+        lifecycle.onForeground()
+        release.complete(Unit)
+        withTimeout(5000) { read.await(); close.await() }
+        assertFalse(closed)
+    }
+
+    @Test
+    fun `le retour au premier plan attend un rafraichissement encore actif`() = runBlocking {
+        val coordinator = RefreshCoordinator {}
+        val lifecycle = ForegroundBoxGate()
+        val release = CompletableDeferred<Unit>()
+        val old = async(start = CoroutineStart.UNDISPATCHED) { coordinator.run(false) { release.await() } }
+        lifecycle.onForeground()
+        var reads = 0
+        val resumed = async(start = CoroutineStart.UNDISPATCHED) {
+            refreshWhenForeground(coordinator, { lifecycle.isForeground }) { reads++ }
+        }
+        assertFalse(resumed.isCompleted)
+        release.complete(Unit)
+        withTimeout(5000) { old.await(); resumed.await() }
+        assertEquals(1, reads)
+    }
+
 }

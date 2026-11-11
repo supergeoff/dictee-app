@@ -164,7 +164,7 @@ class AppModel(
     private val accountFailureNoted = AtomicBoolean(false)
     private val jobs = AtomicInteger(0)
 
-    @Volatile private var foreground = false
+    private val foregroundBoxGate = ForegroundBoxGate()
     @Volatile private var searching = false   // la feuille de recherche du boîtier est ouverte : le modèle ne rouvre pas la liaison
     @Volatile private var afterBluetooth: (() -> Unit)? = null
     @Volatile private var afterPhoneFolder: (() -> Unit)? = null
@@ -196,7 +196,7 @@ class AppModel(
         if (!localRepository.retryInitialization()) return
         scope.launch {
             try {
-                refreshAfterInitializationRetry(localRepository, { foreground }, refreshCoordinator, ::readForRefresh)
+                refreshAfterInitializationRetry(localRepository, { foregroundBoxGate.isForeground }, refreshCoordinator, ::readForRefresh)
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
@@ -208,13 +208,15 @@ class AppModel(
     // --- Cycle de vie et rafraîchissement
 
     fun onForeground() {
-        foreground = true
-        refresh()
+        foregroundBoxGate.onForeground()
+        scope.launch { refreshWhenForeground(refreshCoordinator, { foregroundBoxGate.isForeground }, ::readForRefresh) }
     }
 
     fun onBackground() {
-        foreground = false
-        if (!liveFlow.value.recovering) scope.launch { box.close() }
+        foregroundBoxGate.onBackground()
+        scope.launch {
+            foregroundBoxGate.closeIfBackground { if (!liveFlow.value.recovering) box.close() }
+        }
     }
 
     /** Relit le dossier du téléphone, Drive et le boîtier. Ne demande rien au système. Un seul rafraîchissement à la fois. */
@@ -353,7 +355,7 @@ class AppModel(
             } else if (connected) markRecoveryFailed(e) else say(OUT_OF_RANGE)
         }
         readPhone()
-        if (!foreground) box.close()
+        if (!foregroundBoxGate.isForeground) box.close()
     }
 
     /** Publie l'avancement quand son libellé change : le boîtier notifie tous les 244 octets environ. */
@@ -663,7 +665,11 @@ class AppModel(
      * La liste du boîtier remplace `boxList` ; un échec garde la dernière, et [BoxConnection] l'a déjà noté au journal.
      * Faux si le boîtier n'a pas répondu ; vrai si la liste est lue, ou si rien n'est à lire (aucun boîtier, récupération ou recherche en cours).
      */
-    private suspend fun readBoxList(): Boolean {
+    private suspend fun readBoxList(): Boolean = foregroundBoxGate.withForeground {
+        readBoxListInForeground()
+    } ?: true
+
+    private suspend fun readBoxListInForeground(): Boolean {
         localRepository.awaitInitialized()
         val address = localFlow.deviceAddress ?: return true
         if (liveFlow.value.recovering || searching) return true

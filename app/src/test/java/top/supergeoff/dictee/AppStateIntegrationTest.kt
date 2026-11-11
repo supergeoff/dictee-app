@@ -317,4 +317,45 @@ class AppStateIntegrationTest {
         } finally { failFirst.countDown(); releaseOld.complete(Unit) }
     }
 
+    @Test
+    fun `une reprise differee ne relit pas le boitier apres passage en arriere plan`() = runBlocking {
+        val store = LocalStateStore(file())
+        val original = LocalState(deviceName = "persisté")
+        store.save(original)
+        val loads = AtomicInteger()
+        val repo = LocalStateRepository(store, load = {
+            if (loads.incrementAndGet() == 1) throw SecurityException("refus")
+            store.load()
+        })
+        withTimeout(5000) { repo.initialization.first { it is LocalStateInitialization.Failed } }
+        val coordinator = RefreshCoordinator {}
+        val lifecycle = ForegroundBoxGate()
+        lifecycle.onForeground()
+        val releaseOld = CompletableDeferred<Unit>()
+        val old = async(start = CoroutineStart.UNDISPATCHED) {
+            coordinator.run(false) { releaseOld.await() }
+        }
+        assertTrue(repo.retryInitialization())
+        assertEquals(original, withTimeout(5000) { repo.awaitInitialized() })
+        val reads = mutableListOf<String>()
+        val refresh: suspend () -> Unit = {
+            reads += "téléphone"
+            reads += "Drive"
+            lifecycle.withForeground { reads += "boîtier" }
+        }
+        val retry = async(start = CoroutineStart.UNDISPATCHED) {
+            refreshAfterInitializationRetry(repo, { lifecycle.isForeground }, coordinator, refresh)
+        }
+        assertFalse(retry.isCompleted)
+        lifecycle.onBackground()
+        var closed = false
+        lifecycle.closeIfBackground { closed = true }
+        assertTrue(closed)
+        releaseOld.complete(Unit)
+        withTimeout(5000) { old.await(); retry.await() }
+        assertTrue(reads.isEmpty())
+        lifecycle.onForeground()
+        refreshWhenForeground(coordinator, { lifecycle.isForeground }, refresh)
+        assertEquals(listOf("téléphone", "Drive", "boîtier"), reads)
+    }
 }

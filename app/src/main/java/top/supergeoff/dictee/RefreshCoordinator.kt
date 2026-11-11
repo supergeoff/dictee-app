@@ -1,6 +1,8 @@
 package top.supergeoff.dictee
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** Attend la reprise puis garantit une nouvelle lecture si l'application est au premier plan. */
 internal suspend fun refreshAfterInitializationRetry(
@@ -10,7 +12,18 @@ internal suspend fun refreshAfterInitializationRetry(
     refresh: suspend () -> Unit,
 ) {
     repository.awaitInitialized()
-    if (isForeground()) coordinator.run(waitForCurrent = true, block = refresh)
+    refreshWhenForeground(coordinator, isForeground, refresh)
+}
+
+/** Une demande de premier plan attend le créneau puis contrôle à nouveau le cycle de vie. */
+internal suspend fun refreshWhenForeground(
+    coordinator: RefreshCoordinator,
+    isForeground: () -> Boolean,
+    refresh: suspend () -> Unit,
+) {
+    if (isForeground()) coordinator.run(waitForCurrent = true) {
+        if (isForeground()) refresh()
+    }
 }
 
 /** Coordonne le rafraîchissement et l'association, sans perdre la demande après une reprise. */
@@ -47,5 +60,27 @@ internal class RefreshCoordinator(private val onRefreshing: (Boolean) -> Unit) {
             previous.await()
         }
         try { block() } finally { finish() }
+    }
+}
+
+/**
+ * Le changement de cycle de vie est immédiat. Les lectures du boîtier et la fermeture
+ * se sérialisent : une lecture engagée finit avant la fermeture, une lecture en attente
+ * recontrôle le premier plan une fois le verrou obtenu.
+ */
+internal class ForegroundBoxGate {
+    private val mutex = Mutex()
+    @Volatile var isForeground: Boolean = false
+        private set
+
+    fun onForeground() { isForeground = true }
+    fun onBackground() { isForeground = false }
+
+    suspend fun <T> withForeground(block: suspend () -> T): T? = mutex.withLock {
+        if (isForeground) block() else null
+    }
+
+    suspend fun closeIfBackground(close: suspend () -> Unit) = mutex.withLock {
+        if (!isForeground) close()
     }
 }
