@@ -47,6 +47,7 @@ data class LocalState(
     val errors: Map<String, Map<Step, String>> = emptyMap(),   // nom → étape → dernière erreur
     val theme: ThemeChoice = ThemeChoice.SYSTEM,
     val transcriptionTasks: List<TranscriptionTask> = emptyList(),
+    val transcriptionSettings: TranscriptionSettings = TranscriptionSettings(),
 ) {
     /** Ajoute l'erreur de cette étape, ou remplace celle qu'elle avait déjà pour ce nom. */
     fun withError(name: String, step: Step, message: String): LocalState =
@@ -113,6 +114,11 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
                 }
             })
             .put("theme", state.theme.name)
+            .put("transcriptionSettings", JSONObject()
+                .put("baseUrl", state.transcriptionSettings.baseUrl)
+                .put("language", state.transcriptionSettings.language)
+                .put("model", state.transcriptionSettings.model)
+                .put("credentialRef", state.transcriptionSettings.credentialRef ?: JSONObject.NULL))
             .put("transcriptionTasks", JSONArray().apply {
                 state.transcriptionTasks.forEach { task ->
                     put(JSONObject()
@@ -155,6 +161,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
         errors = json.objectOrNull("errors")?.let { readErrors(it) }.orEmpty(),
         theme = json.stringOrNull("theme").toEnumOr(ThemeChoice.SYSTEM),
         transcriptionTasks = json.arrayOrNull("transcriptionTasks")?.let { readTasks(it) }.orEmpty(),
+        transcriptionSettings = json.objectOrNull("transcriptionSettings")?.let { readSettings(it) } ?: TranscriptionSettings(),
     )
 
     /** Reprise de la 0.1.5 : boîtier et nom gardés, dossier Drive devenu dossier connu, enregistrements abandonnés. */
@@ -180,6 +187,16 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
     private fun readKnownFolders(array: JSONArray): List<KnownFolder> = List(array.length()) { i ->
         val o = array.getJSONObject(i)
         KnownFolder(o.getString("id"), o.getString("name"), o.stringOrNull("origin").toEnumOr(FolderOrigin.CREATED))
+    }
+
+    private fun readSettings(o: JSONObject): TranscriptionSettings {
+        val defaults = TranscriptionSettings()
+        return TranscriptionSettings(
+            baseUrl = o.stringOrNull("baseUrl") ?: defaults.baseUrl,
+            language = o.stringOrNull("language") ?: defaults.language,
+            model = o.stringOrNull("model") ?: defaults.model,
+            credentialRef = o.stringOrNull("credentialRef"),
+        )
     }
 
     private fun readTasks(array: JSONArray): List<TranscriptionTask> = List(array.length()) { i ->

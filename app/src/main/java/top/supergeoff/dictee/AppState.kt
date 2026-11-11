@@ -137,6 +137,7 @@ class AppModel(
         get() = checkNotNull(localRepository.state.value) { "L'état local n'est pas encore chargé" }
     private val appLocalState = AppLocalState(localRepository)
     val recoverySafety = RecoverySafety(localRepository)
+    val transcriptionSettings = TranscriptionSettingsManager(localRepository, AndroidCredentialStore(app))
 
     private val scope = CoroutineScope(
         SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, e -> journal.error(Source.APP, reasonOf(e)) },
@@ -632,6 +633,16 @@ class AppModel(
     // --- Divers
 
     fun setTheme(theme: ThemeChoice) { appLocalState.setTheme(theme) }
+
+    fun saveTranscriptionSettings(settings: TranscriptionSettings, secret: String) {
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) { transcriptionSettings.save(settings, secret) }
+                say("Réglages de transcription enregistrés")
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { say("Impossible d’enregistrer les réglages de transcription") }
+        }
+    }
 
     /** Adresse du fichier dans le dossier du téléphone, null s'il est absent ou inaccessible. Lit le dossier : à appeler hors du fil principal. */
     suspend fun phoneUri(fileName: String): Uri? {

@@ -3,6 +3,7 @@ package top.supergeoff.dictee.ui
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,15 +23,23 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Button
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.KeyboardType
+import top.supergeoff.dictee.TranscriptionSettings
 import androidx.compose.ui.unit.dp
 import top.supergeoff.dictee.AppModel
 import top.supergeoff.dictee.BuildConfig
@@ -72,6 +81,7 @@ fun SettingsScreen(
             BoxSection(ui.local, busy = ui.recovering, onAssociate = onAssociate)
             StorageSection(ui.phoneFolder, busy = ui.recovering || ui.sending, onChange = model::choosePhoneFolder)
             DriveSection(ui.local, model, onDriveFolders)
+            TranscriptionSection(ui.local, model::saveTranscriptionSettings)
             AppearanceSection(ui.local.theme, model::setTheme)
             AboutSection(onJournal)
         }
@@ -180,6 +190,33 @@ private fun TextAction(text: String, onClick: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         Text(text = text, style = Dictee.type.controlSm, color = Dictee.colors.textSecondary, maxLines = 1)
+    }
+}
+
+/** La clé saisie reste locale au formulaire et ne préremplit jamais le champ. */
+@Composable
+private fun TranscriptionSection(local: LocalState, onSave: (TranscriptionSettings, String) -> Unit) {
+    val settings = local.transcriptionSettings
+    var baseUrl by remember(settings) { mutableStateOf(settings.baseUrl) }
+    var language by remember(settings) { mutableStateOf(settings.language) }
+    var model by remember(settings) { mutableStateOf(settings.model) }
+    var secret by remember { mutableStateOf("") }
+    Section("Transcription") {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(baseUrl, { baseUrl = it }, label = { Text("Adresse du serveur (/v1)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(secret, { secret = it }, label = { Text("Nouvelle clé") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+            Text(if (settings.credentialRef == null) "Aucune clé enregistrée" else "Une clé est enregistrée. Laisse ce champ vide pour la conserver.", color = Dictee.colors.textSecondary)
+            OutlinedTextField(language, { language = it }, label = { Text("Langue") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(model, { model = it }, label = { Text("Modèle") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            Button(onClick = {
+                onSave(settings.copy(baseUrl = baseUrl.trim(), language = language.trim(), model = model.trim()), secret)
+                secret = ""
+            }) { Text("Enregistrer") }
+            local.transcriptionTasks.filter { it.suspended && it.suspensionReason?.contains("Clé inaccessible") == true }.forEach { task ->
+                Text("${task.recordingName} : clé inaccessible. La nouvelle clé ne modifie pas cette tâche ; il faudra la relancer avec les nouveaux réglages.", color = Dictee.colors.textSecondary)
+            }
+            Text("Le test de connexion sera disponible ultérieurement.", color = Dictee.colors.textSecondary)
+        }
     }
 }
 
