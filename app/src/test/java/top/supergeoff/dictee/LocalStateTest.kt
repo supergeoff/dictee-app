@@ -136,7 +136,7 @@ class LocalStateTest {
             org.junit.Assert.fail("le renommage doit echouer")
         } catch (_: java.io.IOException) { }
         assertEquals(before, file().readText())
-        assertEquals("ancien", repository.state.value.deviceName)
+        assertEquals("ancien", repository.state.value!!.deviceName)
     }
     @Test
     fun `modifications concurrentes des reglages et de la tache sont conservees`() {
@@ -209,7 +209,7 @@ class LocalStateTest {
         val failed = repo.update { it.copy(deviceName = "perdu") }.await()
         assertTrue(failed.isFailure)
         assertEquals(1, errors.size)
-        assertEquals(null, repo.state.value.deviceName)
+        assertEquals(null, repo.state.value!!.deviceName)
         assertFalse(file().exists())
         val result = repo.update { it.copy(theme = ThemeChoice.DARK) }.await().getOrThrow()
         assertEquals(null, result.deviceName)
@@ -227,7 +227,7 @@ class LocalStateTest {
         }))
         val first = repo.update { it.copy(deviceName = "A") }
         assertTrue(entered.await(3, java.util.concurrent.TimeUnit.SECONDS))
-        assertEquals(null, repo.state.value.deviceName)
+        assertEquals(null, repo.state.value!!.deviceName)
         val second = repo.update { it.copy(deviceName = it.deviceName + "B") }
         val durable = async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
             repo.updateDurably { it.copy(transcriptionTasks = listOf(sampleTask())) }
@@ -257,7 +257,7 @@ class LocalStateTest {
             org.junit.Assert.fail("la sauvegarde doit echouer")
         } catch (_: java.io.IOException) { }
         assertFalse(effect)
-        assertEquals(null, repo.state.value.deviceName)
+        assertEquals(null, repo.state.value!!.deviceName)
         val next = repo.updateDurably { it.copy(theme = ThemeChoice.DARK) }
         assertEquals(next, LocalStateStore(file()).load())
         assertEquals(null, next.deviceName)

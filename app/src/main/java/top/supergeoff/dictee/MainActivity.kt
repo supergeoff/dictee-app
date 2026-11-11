@@ -140,8 +140,8 @@ class MainActivity : ComponentActivity() {
         }
         DicteeTheme(dark) {
             Box(modifier = Modifier.fillMaxSize().background(Dictee.colors.background)) {
-                Navigation(ui, model, stack, onSearch = ::startSearch)
-                if (associating) {
+                if (ui.initialized) Navigation(ui, model, stack, onSearch = ::startSearch)
+                if (ui.initialized && associating) {
                     // Quelle que soit la sortie de la feuille, y compris sa disparition avec l'activité, le modèle peut rouvrir la liaison.
                     DisposableEffect(Unit) { onDispose { model.endSearch() } }
                     AssociateSheet(

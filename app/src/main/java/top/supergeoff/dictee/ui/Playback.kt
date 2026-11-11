@@ -182,7 +182,10 @@ internal fun rememberPlayback(model: AppModel, fileName: String, size: Long): Pl
         // Toute l'étape est NonCancellable : si l'écran se ferme pendant l'ouverture, un withContext annulé abandonnerait le descripteur
         // déjà ouvert. Ici il arrive toujours à open, qui le referme.
         withContext(NonCancellable) {
-            playback.open(withContext(Dispatchers.IO) { openDescriptor(appContext) { model.phoneUri(fileName) } })
+            playback.open(withContext(Dispatchers.IO) {
+                val uri = model.phoneUri(fileName)
+                openDescriptor(appContext) { uri }
+            })
         }
     }
     DisposableEffect(playback) { onDispose { playback.release() } }

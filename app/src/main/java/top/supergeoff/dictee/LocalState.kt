@@ -227,6 +227,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
 /** Une file unique applique les transformations et écrit hors du thread appelant. */
 class LocalStateRepository(
     private val store: LocalStateStore,
+    private val load: () -> LocalState = { store.load() },
     private val onSaveError: (Exception) -> Unit = {},
 ) {
     private data class Change(
@@ -235,16 +236,27 @@ class LocalStateRepository(
         val result: CompletableDeferred<Result<LocalState>>,
     )
 
-    private val mutableState = MutableStateFlow(store.load())
-    val state: StateFlow<LocalState> = mutableState.asStateFlow()
+    private val mutableState = MutableStateFlow<LocalState?>(null)
+    /** Null jusqu'à la fin du chargement, puis uniquement des états enregistrés. */
+    val state: StateFlow<LocalState?> = mutableState.asStateFlow()
+    private val initialized = CompletableDeferred<LocalState>()
+
     private val queue = Channel<Change>(Channel.UNLIMITED)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     init {
         scope.launch {
+            try {
+                val loaded = load()
+                mutableState.value = loaded
+                initialized.complete(loaded)
+            } catch (e: Exception) {
+                initialized.completeExceptionally(e)
+            }
             for (change in queue) {
                 val result = try {
-                    val old = mutableState.value
+                    initialized.await()
+                    val old = checkNotNull(mutableState.value)
                     val next = change.transform(old)
                     if (change.forceSave || next != old) {
                         store.save(next)
@@ -260,6 +272,12 @@ class LocalStateRepository(
                 change.result.complete(result)
             }
         }
+    }
+
+    /** Attend le chargement initial sans bloquer le thread appelant. */
+    suspend fun awaitInitialized(): LocalState {
+        initialized.await()
+        return checkNotNull(mutableState.value)
     }
 
     /** L'enregistrement est mis en file avant le retour, sans attendre le disque. */
@@ -295,3 +313,41 @@ private fun JSONObject.objectOrNull(key: String): JSONObject? =
 /** Énumération lue par son nom, ou [default] quand le nom est absent ou inconnu. */
 private inline fun <reified T : Enum<T>> String?.toEnumOr(default: T): T =
     enumValues<T>().firstOrNull { it.name == this } ?: default
+
+/** Sérialise les transferts et marque durablement un MP3 avant de pouvoir l'écrire.
+ * Les futurs traitements lisant des MP3 doivent aussi utiliser ce verrou et l'état du dépôt. */
+class RecoverySafety(private val repository: LocalStateRepository) {
+    private val transferMutex = kotlinx.coroutines.sync.Mutex()
+
+    suspend fun <T> withTransferLock(block: suspend () -> T): T {
+        repository.awaitInitialized()
+        transferMutex.lock()
+        try { return block() } finally { transferMutex.unlock() }
+    }
+
+    suspend fun begin(name: String) {
+        try {
+            repository.updateDurably { it.withError(name, Step.RECOVER, "Récupération interrompue ou en cours") }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw RecoveryGuardException(e)
+        }
+    }
+
+    suspend fun finish(result: RecoveryResult) {
+        repository.update { state ->
+            when (result) {
+                is RecoveryResult.Ok -> state.withoutError(result.name, Step.RECOVER)
+                is RecoveryResult.Failed -> state.withError(result.name, Step.RECOVER, result.reason)
+            }
+        }.await()
+    }
+}
+
+class RecoveryGuardException(cause: Exception) : IOException("Impossible de sécuriser la récupération : ${cause.message}", cause)
+
+/** Le modèle et les autres composants reçoivent le même dépôt. */
+class AppLocalState(val repository: LocalStateRepository) {
+    fun setTheme(theme: ThemeChoice) = repository.update { it.copy(theme = theme) }
+}

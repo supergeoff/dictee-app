@@ -33,7 +33,8 @@ class RecoveryJob(
     suspend fun run(
         entries: List<ListItem.Entry>,
         onProgress: (name: String, progress: Progress) -> Unit,
-        onResult: (RecoveryResult) -> Unit,
+        onResult: suspend (RecoveryResult) -> Unit,
+        beforeRecovery: suspend (ListItem.Entry) -> Unit = {},
     ): List<RecoveryResult> {
         cacheDir.mkdirs()
         cacheDir.listFiles().orEmpty().forEach { it.deleteRecursively() }
@@ -41,6 +42,7 @@ class RecoveryJob(
         val results = mutableListOf<RecoveryResult>()
         for ((i, entry) in queue.withIndex()) {
             fun progress(percent: Int) = Progress(ProgressKind.RECOVERY, i + 1, queue.size, percent)
+            beforeRecovery(entry)
             onProgress(entry.name, progress(0))
             val result = recover(entry) { received, expected -> onProgress(entry.name, progress(percentOf(received, expected))) }
             results += result
