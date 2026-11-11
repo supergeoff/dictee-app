@@ -1,7 +1,12 @@
 package top.supergeoff.dictee
 
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -193,7 +198,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
             folderUri = o.getString("folderUri"), mp3Sha256 = o.getString("mp3Sha256"),
             serverAddress = o.getString("serverAddress"), encryptedKeyRef = o.getString("encryptedKeyRef"),
             language = o.getString("language"), model = o.getString("model"), phase = phase,
-            serverId = o.stringOrNull("serverId"), progress = if (o.isNull("progress")) null else o.getInt("progress"),
+            serverId = o.stringOrNull("serverId"), progress = if (o.isNull("progress")) null else o.getDouble("progress"),
             error = o.stringOrNull("error"), suspended = o.booleanOr("suspended", false),
             suspensionReason = o.stringOrNull("suspensionReason"),
         )
@@ -219,25 +224,55 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
     }
 }
 
-/** Un seul verrou pour tous les changements, publiés seulement après écriture réussie. */
-class LocalStateRepository(private val store: LocalStateStore) {
-    private val lock = Any()
+/** Une file unique applique les transformations et écrit hors du thread appelant. */
+class LocalStateRepository(
+    private val store: LocalStateStore,
+    private val onSaveError: (Exception) -> Unit = {},
+) {
+    private data class Change(
+        val transform: (LocalState) -> LocalState,
+        val forceSave: Boolean,
+        val result: CompletableDeferred<Result<LocalState>>,
+    )
+
     private val mutableState = MutableStateFlow(store.load())
     val state: StateFlow<LocalState> = mutableState.asStateFlow()
+    private val queue = Channel<Change>(Channel.UNLIMITED)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    fun update(change: (LocalState) -> LocalState): LocalState = apply(change, forceSave = false)
-
-    suspend fun updateDurably(change: (LocalState) -> LocalState): LocalState =
-        withContext(Dispatchers.IO) { apply(change, forceSave = true) }
-
-    private fun apply(change: (LocalState) -> LocalState, forceSave: Boolean): LocalState = synchronized(lock) {
-        val old = mutableState.value
-        val next = change(old)
-        if (forceSave || next != old) {
-            store.save(next)
-            mutableState.value = next
+    init {
+        scope.launch {
+            for (change in queue) {
+                val result = try {
+                    val old = mutableState.value
+                    val next = change.transform(old)
+                    if (change.forceSave || next != old) {
+                        store.save(next)
+                        mutableState.value = next
+                    }
+                    Result.success(next)
+                } catch (e: Exception) {
+                    if (!change.forceSave) {
+                        try { onSaveError(e) } catch (_: Exception) { }
+                    }
+                    Result.failure(e)
+                }
+                change.result.complete(result)
+            }
         }
-        next
+    }
+
+    /** L'enregistrement est mis en file avant le retour, sans attendre le disque. */
+    fun update(change: (LocalState) -> LocalState): Deferred<Result<LocalState>> = enqueue(change, false)
+
+    /** Attend l'écriture et propage son erreur, y compris pour un état inchangé. */
+    suspend fun updateDurably(change: (LocalState) -> LocalState): LocalState =
+        enqueue(change, true).await().getOrThrow()
+
+    private fun enqueue(change: (LocalState) -> LocalState, forceSave: Boolean): Deferred<Result<LocalState>> {
+        val result = CompletableDeferred<Result<LocalState>>()
+        check(queue.trySend(Change(change, forceSave, result)).isSuccess)
+        return result
     }
 }
 

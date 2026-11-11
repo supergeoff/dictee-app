@@ -19,7 +19,8 @@ data class TranscriptionTask(
     val model: String,
     val phase: TranscriptionPhase,
     val serverId: String? = null,
-    val progress: Int? = null,
+    /** Fraction de la progression serveur, de 0 à 1, ou null si inconnue. */
+    val progress: Double? = null,
     val error: String? = null,
     val suspended: Boolean = false,
     val suspensionReason: String? = null,

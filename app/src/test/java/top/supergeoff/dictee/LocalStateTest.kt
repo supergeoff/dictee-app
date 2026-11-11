@@ -1,5 +1,6 @@
 package top.supergeoff.dictee
 
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -113,7 +114,7 @@ class LocalStateTest {
         assertEquals(emptyList<TranscriptionTask>(), old.transcriptionTasks)
         val tasks = TranscriptionPhase.entries.mapIndexed { i, phase ->
             sampleTask().copy(localId = "task-$i", phase = phase, serverId = if (i % 2 == 0) "server-$i" else null,
-                progress = if (i % 2 == 0) i * 10 else null, error = if (i == 7) "erreur serveur" else null,
+                progress = if (i % 2 == 0) i / 10.0 else null, error = if (i == 7) "erreur serveur" else null,
                 suspended = i == 3, suspensionReason = if (i == 3) "connexion absente" else null)
         }
         val state = old.copy(transcriptionTasks = tasks).withError("N", Step.TRANSCRIBE, "erreur")
@@ -167,4 +168,116 @@ class LocalStateTest {
         } catch (_: java.io.IOException) { }
         assertFalse(file().exists())
     }
+    @Test
+    fun `une progression fractionnaire et une progression nulle se relisent sans perte`() {
+        val store = LocalStateStore(file())
+        val state = LocalState(transcriptionTasks = listOf(
+            sampleTask().copy(progress = 0.35), sampleTask().copy(localId = "null"),
+            sampleTask().copy(localId = "zero", progress = 0.0), sampleTask().copy(localId = "one", progress = 1.0),
+        ))
+        store.save(state)
+        assertEquals(0.35, org.json.JSONObject(file().readText()).getJSONArray("transcriptionTasks").getJSONObject(0).getDouble("progress"), 0.0)
+        assertEquals(state, LocalStateStore(file()).load())
+    }
+
+    @Test
+    fun `une sauvegarde ordinaire ne bloque pas le thread appelant`() {
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val returned = java.util.concurrent.CountDownLatch(1)
+        val repo = LocalStateRepository(LocalStateStore(file(), rename = { from, to ->
+            entered.countDown()
+            release.await(5, java.util.concurrent.TimeUnit.SECONDS)
+            from.renameTo(to)
+        }))
+        val thread = Thread { try { repo.update { it.copy(deviceName = "nouveau") } } finally { returned.countDown() } }
+        thread.start()
+        try {
+            assertTrue(entered.await(3, java.util.concurrent.TimeUnit.SECONDS))
+            assertTrue("l'appelant attend le disque", returned.await(1, java.util.concurrent.TimeUnit.SECONDS))
+        } finally { release.countDown(); thread.join(5000) }
+    }
+
+    @Test
+    fun `un echec ordinaire est signale sans publication et la file continue`() = kotlinx.coroutines.runBlocking {
+        val errors = ConcurrentLinkedQueue<Exception>()
+        var attempts = 0
+        val repo = LocalStateRepository(LocalStateStore(file(), rename = { from, to ->
+            attempts++
+            if (attempts == 1) false else from.renameTo(to)
+        }), onSaveError = { errors.add(it) })
+        val failed = repo.update { it.copy(deviceName = "perdu") }.await()
+        assertTrue(failed.isFailure)
+        assertEquals(1, errors.size)
+        assertEquals(null, repo.state.value.deviceName)
+        assertFalse(file().exists())
+        val result = repo.update { it.copy(theme = ThemeChoice.DARK) }.await().getOrThrow()
+        assertEquals(null, result.deviceName)
+        assertEquals(result, LocalStateStore(file()).load())
+    }
+
+    @Test
+    fun `les mises a jour ordinaires et durables restent ordonnees et ne perdent aucune mutation`() = kotlinx.coroutines.runBlocking {
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        var calls = 0
+        val repo = LocalStateRepository(LocalStateStore(file(), rename = { from, to ->
+            if (++calls == 1) { entered.countDown(); release.await(5, java.util.concurrent.TimeUnit.SECONDS) }
+            from.renameTo(to)
+        }))
+        val first = repo.update { it.copy(deviceName = "A") }
+        assertTrue(entered.await(3, java.util.concurrent.TimeUnit.SECONDS))
+        assertEquals(null, repo.state.value.deviceName)
+        val second = repo.update { it.copy(deviceName = it.deviceName + "B") }
+        val durable = async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            repo.updateDurably { it.copy(transcriptionTasks = listOf(sampleTask())) }
+        }
+        val last = repo.update { it.copy(deviceName = it.deviceName + "C") }
+        try { assertFalse(durable.isCompleted) } finally { release.countDown() }
+        first.await().getOrThrow(); second.await().getOrThrow()
+        assertEquals("AB", durable.await().deviceName)
+        val result = last.await().getOrThrow()
+        assertEquals("ABC", result.deviceName)
+        assertEquals(listOf(sampleTask()), result.transcriptionTasks)
+        assertEquals(result, repo.state.value)
+        assertEquals(result, LocalStateStore(file()).load())
+    }
+
+    @Test
+    fun `une erreur durable empeche son effet dependant et laisse passer les changements suivants`() = kotlinx.coroutines.runBlocking {
+        var attempts = 0
+        val repo = LocalStateRepository(LocalStateStore(file(), rename = { from, to ->
+            attempts++
+            if (attempts == 1) false else from.renameTo(to)
+        }))
+        var effect = false
+        try {
+            repo.updateDurably { it.copy(deviceName = "perdu") }
+            effect = true
+            org.junit.Assert.fail("la sauvegarde doit echouer")
+        } catch (_: java.io.IOException) { }
+        assertFalse(effect)
+        assertEquals(null, repo.state.value.deviceName)
+        val next = repo.updateDurably { it.copy(theme = ThemeChoice.DARK) }
+        assertEquals(next, LocalStateStore(file()).load())
+        assertEquals(null, next.deviceName)
+    }
+    @Test
+    fun `les modifications ordinaires concurrentes sont toutes conservees`() = kotlinx.coroutines.runBlocking {
+        val repo = LocalStateRepository(LocalStateStore(file()))
+        val start = java.util.concurrent.CountDownLatch(1)
+        val writes = ConcurrentLinkedQueue<kotlinx.coroutines.Deferred<Result<LocalState>>>()
+        val threads = (0 until 16).map { i ->
+            Thread {
+                start.await()
+                writes.add(repo.update { it.withError("N$i", Step.RECOVER, "erreur") })
+            }
+        }
+        threads.forEach { it.start() }; start.countDown(); threads.forEach { it.join() }
+        writes.forEach { it.await().getOrThrow() }
+        val result = repo.updateDurably { it.copy(transcriptionTasks = listOf(sampleTask())) }
+        assertEquals((0 until 16).map { "N$it" }.toSet(), result.errors.keys)
+        assertEquals(result, LocalStateStore(file()).load())
+    }
+
 }

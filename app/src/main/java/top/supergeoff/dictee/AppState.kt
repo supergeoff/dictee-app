@@ -107,9 +107,14 @@ private fun reasonOf(e: Throwable): String = e.message ?: e.javaClass.simpleName
  * l'action en attente est gardée, puis reprise par la méthode `on...` qui reçoit la réponse, ou abandonnée avec un message.
  */
 class AppModel(private val app: Application) {
-    private val localRepository = LocalStateRepository(LocalStateStore(File(app.filesDir, "state.json")))
-    private val localFlow = localRepository.state
     val journal = Journal(File(app.filesDir, "journal")) { LocalDateTime.now() }
+    private val liveFlow = MutableStateFlow(Live())
+    private val localRepository = LocalStateRepository(LocalStateStore(File(app.filesDir, "state.json"))) { e ->
+        val message = "Impossible d'enregistrer l'état local : ${reasonOf(e)}"
+        say(message)
+        journal.error(Source.FS, message)
+    }
+    private val localFlow = localRepository.state
 
     init {
         journal.purge()
@@ -126,7 +131,6 @@ class AppModel(private val app: Application) {
     private val saver = Dispatchers.IO.limitedParallelism(1)
     private val phoneFlow = MutableStateFlow(PhoneSnapshot())
     private val driveFlow = MutableStateFlow<DriveListing?>(null)
-    private val liveFlow = MutableStateFlow(Live())
     private val requestFlow = MutableSharedFlow<UiRequest>(extraBufferCapacity = 8)
     private val phoneMutex = Mutex()
     private val driveMutex = Mutex()
@@ -219,10 +223,11 @@ class AppModel(private val app: Application) {
     fun associate(name: String, address: String) {
         endSearch()
         val started = !liveFlow.getAndUpdate { it.copy(refreshing = true) }.refreshing
-        update { it.copy(deviceAddress = address, deviceName = name, boxList = emptyList()) }
-        note("Boîtier associé : $name ($address)")
+        val saved = update { it.copy(deviceAddress = address, deviceName = name, boxList = emptyList()) }
         scope.launch {
             try {
+                if (saved.await().isFailure) return@launch
+                note("Boîtier associé : $name ($address)")
                 box.close()
                 if (hasBluetooth()) readBoxList()
             } finally {
@@ -343,7 +348,7 @@ class AppModel(private val app: Application) {
     }
 
     /** Hors du fil principal. Le message d'un envoi arrêté vient de [SendJob], qui l'a déjà noté au journal. */
-    private fun sendRecordings(uri: Uri, recordings: List<Recording>, explicit: Boolean) {
+    private suspend fun sendRecordings(uri: Uri, recordings: List<Recording>, explicit: Boolean) {
         val drive = driveClient()
         val folder = resolveSendFolder(drive) ?: return
         val failed = mutableSetOf<String>()   // un fichier envoyé ensuite ne doit pas effacer l'échec d'un autre du même enregistrement
@@ -352,11 +357,10 @@ class AppModel(private val app: Application) {
         if (outcome is SendOutcome.Stopped) say(outcome.reason)
     }
 
-    private fun resolveSendFolder(drive: DriveClient): DriveFolder? =
+    private suspend fun resolveSendFolder(drive: DriveClient): DriveFolder? =
         try {
             val (folder, resolved) = resolveFolder(localFlow.value, drive)
-            update { it.withFoldersOf(resolved) }
-            folder
+            if (update { it.withFoldersOf(resolved) }.await().isFailure) null else folder
         } catch (e: Exception) {
             val message = folderMessage(e)
             journal.error(Source.DRIVE, message)
@@ -432,7 +436,10 @@ class AppModel(private val app: Application) {
             say(PHONE_FOLDER_LOST)
             return false
         }
-        update { it.copy(phoneTreeUri = uri.toString()) }
+        if (update { it.copy(phoneTreeUri = uri.toString()) }.await().isFailure) {
+            if (previous != uri.toString()) withContext(Dispatchers.IO) { releasePhoneFolder(uri.toString()) }
+            return false
+        }
         journal.add(Source.FS, "Dossier du téléphone : ${PhoneFolder.displayPath(uri)}")
         if (previous != null && previous != uri.toString()) {
             journal.add(Source.APP, "Dossier du téléphone changé : ${displayPathOf(previous)} vers ${PhoneFolder.displayPath(uri)}")
@@ -463,25 +470,27 @@ class AppModel(private val app: Application) {
 
     /** L'envoi n'est utile qu'avec l'accord Google : l'activer le demande tout de suite. */
     fun setDriveEnabled(on: Boolean) {
-        if (localFlow.value.driveEnabled != on) note(if (on) "Envoi vers Drive activé" else "Envoi vers Drive désactivé")
-        // Sans envoi, une erreur d'envoi n'a plus rien à réessayer : elle part avec l'interrupteur.
-        update { if (on) it.copy(driveEnabled = true) else it.copy(driveEnabled = false).withoutErrors(Step.SEND) }
-        if (!on) {
-            driveFlow.value = null
-            return
-        }
+        val saved = update { if (on) it.copy(driveEnabled = true) else it.copy(driveEnabled = false).withoutErrors(Step.SEND) }
         scope.launch {
+            if (saved.await().isFailure) return@launch
+            note(if (on) "Envoi vers Drive activé" else "Envoi vers Drive désactivé")
+            if (!on) {
+                driveFlow.value = null
+                return@launch
+            }
             if (!authorizeOrAsk { setDriveEnabled(true) }) return@launch
-            // Sans dossier choisi, readDrive ne demande rien à Google : l'adresse du compte se lit ici.
             if (localFlow.value.chosenFolderId == null) rememberAccount()
             readDrive()
         }
     }
 
     fun chooseFolder(id: String) {
-        update { it.copy(chosenFolderId = id) }
-        note("Dossier Drive choisi : ${localFlow.value.knownFolders.firstOrNull { it.id == id }?.name ?: id}")
-        folderChanged()
+        val saved = update { it.copy(chosenFolderId = id) }
+        scope.launch {
+            val state = saved.await().getOrNull() ?: return@launch
+            note("Dossier Drive choisi : ${state.knownFolders.firstOrNull { it.id == id }?.name ?: id}")
+            folderChanged()
+        }
     }
 
     fun useDefaultFolder() {
@@ -542,14 +551,15 @@ class AppModel(private val app: Application) {
             } else {
                 attempt { auth.revoke(account) }.onFailure { journal.error(Source.DRIVE, "révocation : ${reasonOf(it)}") }
             }
-            update { it.copy(driveAccount = null, driveEnabled = false).withoutErrors(Step.SEND) }
-            driveFlow.value = null
+            if (update { it.copy(driveAccount = null, driveEnabled = false).withoutErrors(Step.SEND) }.await().isSuccess) {
+                driveFlow.value = null
+            }
         }
     }
 
     // --- Divers
 
-    fun setTheme(theme: ThemeChoice) = update { it.copy(theme = theme) }
+    fun setTheme(theme: ThemeChoice) { update { it.copy(theme = theme) } }
 
     /** Adresse du fichier dans le dossier du téléphone, null s'il est absent ou inaccessible. Lit le dossier : à appeler hors du fil principal. */
     fun phoneUri(fileName: String): Uri? =
@@ -583,9 +593,9 @@ class AppModel(private val app: Application) {
     private suspend fun readBoxList(): Boolean {
         val address = localFlow.value.deviceAddress ?: return true
         if (liveFlow.value.recovering || searching) return true
-        return attempt { box.list(address) }
-            .onSuccess { list -> update { if (it.deviceAddress == address) it.copy(boxList = list) else it } }
-            .isSuccess
+        val list = attempt { box.list(address) }.getOrNull() ?: return false
+        update { if (it.deviceAddress == address) it.copy(boxList = list) else it }.await()
+        return true
     }
 
     /**
@@ -633,9 +643,7 @@ class AppModel(private val app: Application) {
      * Applique et enregistre [change] par le même dépôt que les futures écritures durables.
      * Le dépôt publie l'état seulement après la réussite de l'écriture.
      */
-    private fun update(change: (LocalState) -> LocalState) {
-        localRepository.update(change)
-    }
+    private fun update(change: (LocalState) -> LocalState) = localRepository.update(change)
 
     private fun say(message: String) = liveFlow.update { it.copy(message = message) }
 
@@ -697,7 +705,7 @@ class AppModel(private val app: Application) {
             if (!authorizeOrAsk(resume)) return@launch
             attempt { withContext(Dispatchers.IO) { action(driveClient()) } }
                 .onSuccess { resolved ->
-                    update { it.withFoldersOf(resolved) }
+                    if (update { it.withFoldersOf(resolved) }.await().isFailure) return@launch
                     note("Dossier Drive choisi : ${resolved.knownFolders.firstOrNull { it.id == resolved.chosenFolderId }?.name ?: resolved.chosenFolderId}")
                     folderChanged()
                 }
@@ -725,7 +733,7 @@ class AppModel(private val app: Application) {
      */
     private suspend fun rememberAccount() {
         if (localFlow.value.driveAccount != null) return
-        readAccount()?.let { email -> update { if (it.driveEnabled) it.copy(driveAccount = email) else it } }
+        readAccount()?.let { email -> update { if (it.driveEnabled) it.copy(driveAccount = email) else it }.await() }
     }
 
     /**
