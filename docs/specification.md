@@ -1,109 +1,81 @@
 # Dictée : spécification du produit
 
-Statut : les versions 0.2.x livrent le lot 1, les lots 2 à 4 restent à réaliser. La maquette visuelle qui sert de référence aux écrans n'est pas publiée, et les numéros d'écran de ce document reprennent sa numérotation.
+Statut : ce document décrit ce que fait la version 0.2.4, livrée. Il ne décrit aucune version future : chaque évolution a sa carte et sa propre spec, puis met ce document à jour quand elle est livrée.
 
-Le protocole Bluetooth du MECHEN V05 ne change pas. Il est décrit dans [`protocole-v05.md`](protocole-v05.md).
+Le protocole Bluetooth du MECHEN V05 est décrit dans [`protocole-v05.md`](protocole-v05.md).
 
 ## Objectif
 
-Dictée récupère les enregistrements du MECHEN V05 par Bluetooth et les range dans un dossier du téléphone. Elle les fait transcrire puis résumer par des endpoints au format OpenAI, et peut envoyer le tout dans un dossier Google Drive. La chaîne est automatique, mais elle s'arrête une fois pour une relecture : l'utilisateur valide la synthèse avant que le MD soit enregistré. Les lots 1 à 3 n'ont pas de diarisation. Le lot 4, à activer plus tard, ajoute la diarisation et un second arrêt pour nommer les intervenants avant l'enregistrement du VTT.
-
-## Écart avec la version 0.1.5
-
-| Sujet | Version 0.1.5 | Cible |
-|---|---|---|
-| Écrans | Un écran unique qui contient aussi le journal | Une liste des enregistrements, une fiche par enregistrement, une page Réglages et trois sous-écrans |
-| Boîtier | Recherché depuis l'écran principal | Associé une fois au premier lancement, puis changé depuis Réglages |
-| Fichiers | Copie interne, supprimée après le dépôt dans Drive | Dossier du téléphone choisi par l'utilisateur, où les fichiers restent |
-| Noms | `<nom>.mp3` | `Note-<nom>` ou `Call-<nom>`, avec les extensions `.mp3`, `.vtt` et `.md` |
-| Transcription et synthèse | Absentes | Automatiques, avec une relecture de la synthèse |
-| Drive | Obligatoire, dossier choisi avec le sélecteur Google | Optionnel, dossier choisi dans un écran de l'app |
-| Journal | Dernière synchronisation, sur l'écran principal | Écran dédié, sept jours conservés, export |
-| Interface | Vues Android construites en code, boutons bleu marine | Jetpack Compose, design system noir et blanc |
-
-La version 0.1.6 prévue (renouvellement du jeton Google, nouvel essai sur une erreur 401, préfixes Note- et Call-) n'est pas livrée seule : ses changements entrent dans le lot 1.
+Dictée récupère les enregistrements du MECHEN V05 par Bluetooth et les range dans un dossier du téléphone choisi par l'utilisateur. Elle peut ensuite envoyer dans un dossier Google Drive les fichiers qui n'y sont pas encore. L'app n'écrit jamais sur le boîtier.
 
 ## Décisions
 
 | Sujet | Décision | Raison |
 |---|---|---|
 | Organisation des écrans | Une liste centrale, une fiche par enregistrement et une page Réglages | Un enregistrement n'apparaît qu'à un endroit, avec un seul état lisible d'un coup d'œil. |
-| Chaîne de traitement | Récupération, transcription, synthèse, puis validation du MD. La chaîne part seule après la récupération et un réglage la coupe. | La validation du MD reste un point d'arrêt. |
 | Accès à Drive | Le droit `drive.file` est conservé. L'écran Dossier Drive liste les dossiers connus de l'app, et « Autre dossier… » ouvre le sélecteur Google. | Un accès complet à Drive imposerait l'écran d'application non validée et une autorisation qui expire au bout de sept jours en mode test. |
-| Stockage sur le téléphone | Dossier choisi avec le sélecteur de dossiers d'Android (Storage Access Framework), avec une permission persistante | C'est la seule façon d'écrire des MP3, VTT et MD dans un dossier visible par l'utilisateur et de les relire après une réinstallation de l'app. |
+| Stockage sur le téléphone | Dossier choisi avec le sélecteur de dossiers d'Android (Storage Access Framework), avec une permission persistante | C'est la seule façon d'écrire des fichiers dans un dossier visible par l'utilisateur et de les relire après une réinstallation de l'app. |
 | Noms de fichiers | `<Type>-<nom>.<extension>`, avec le type Note ou Call | Les noms sont identiques sur le téléphone et dans Drive, et ils correspondent aux exports de DOWAY. |
-| Interface | Jetpack Compose, avec un thème construit sur les tokens du design system | La liste groupée, les onglets, la feuille du bas et le thème sombre demanderaient beaucoup plus de code en vues construites à la main. Ce choix remplace la règle « sans framework d'interface » de la version 0.1.x. |
+| Interface | Jetpack Compose, avec un thème construit sur les tokens du design system | La liste groupée, la feuille du bas et le thème sombre demanderaient beaucoup plus de code en vues construites à la main. |
 | Travaux longs | Un service de premier plan, avec une notification qui reprend la barre d'avancement | À 15 Ko/s, un appel de 41 minutes met environ 11 minutes à arriver. L'utilisateur peut quitter l'app pendant ce temps. |
-| Clés d'API | Chiffrées avec une clé du Keystore Android | Elles ne sont jamais stockées en clair ni écrites au journal. |
-| Diarisation | Les lots 1 à 3 n'en ont pas : la transcription passe seule par l'endpoint au format OpenAI. La diarisation et la relecture des intervenants forment le lot 4, à activer plus tard. | La transcription avance avec un endpoint au format OpenAI, et la diarisation vient avec un endpoint dédié, branché plus tard. |
-| Source de vérité | Le dossier du téléphone fait foi pour le MP3, le VTT et le MD. La liste du boîtier fait foi pour ce qui est sur le boîtier, et le dossier Drive pour ce qui est dans Drive. L'état local ne garde que ce qui ne se déduit pas de ces trois sources. | Une seule source de vérité par information. |
-| Design system | Les tokens du design system de l'app, en thème clair, sombre ou système | Un design noir et blanc. |
+| Source de vérité | Le dossier du téléphone fait foi pour les fichiers du téléphone, la liste du boîtier pour ce qui est sur le boîtier, et le dossier Drive pour ce qui est dans Drive. L'état local ne garde que ce qui ne se déduit pas de ces trois sources. | Une seule source de vérité par information. |
 
 ## Parcours
 
 1. Au premier lancement, aucun boîtier n'est associé. L'utilisateur touche « Rechercher le boîtier », accorde la permission Bluetooth, puis associe le boîtier trouvé. L'app lit aussitôt la liste du boîtier.
-2. À chaque ouverture, l'app se connecte au boîtier associé et relit sa liste. La liste affiche les enregistrements du boîtier, du téléphone et de Drive, groupés par jour.
+2. À chaque passage au premier plan, l'app se connecte au boîtier associé et relit sa liste. La liste affiche les enregistrements du boîtier, du téléphone et de Drive, groupés par jour.
 3. « Récupérer (N) » transfère les enregistrements absents du téléphone et de Drive. Au premier besoin, l'app demande le dossier du téléphone.
-4. Chaque enregistrement récupéré part en transcription. Le VTT s'enregistre dès son retour, à côté du MP3, et la synthèse part aussitôt.
-5. Quand la synthèse revient, l'enregistrement passe à « À relire ». L'utilisateur relit le MD dans l'onglet Synthèse, puis le valide ou le relance. L'enregistrement est alors « Prêt ».
-6. Si Drive est activé, « Envoyer (N) » dépose dans le dossier choisi les fichiers qui y manquent.
+4. Si l'envoi vers Drive est activé, « Envoyer (N) » dépose dans le dossier choisi les fichiers du téléphone qui y manquent.
 
 ## Écrans
 
-Cette section ne reprend que les règles que la maquette ne montre pas.
+L'app garde une seule activité. Le passage d'un écran à l'autre suit une pile d'écrans tenue dans l'activité, sans bibliothèque de navigation. Les écrans de la pile sont l'accueil, la fiche, les réglages, le dossier Drive et le journal. La feuille d'association s'affiche par-dessus l'écran en cours. Les messages courts de l'app s'affichent en toast.
 
-### Écran 2, premier lancement, et écran 3, recherche du boîtier
+### Premier lancement et recherche du boîtier
 
-- L'écran 2 s'affiche tant qu'aucun boîtier n'est associé. La pastille indique « Aucun boîtier » et Réglages reste accessible.
-- La recherche dure 15 secondes et reconnaît un boîtier à son nom (`MECHEN…`) ou aux données fabricant de son annonce, comme en 0.1.5.
-- Si un boîtier MECHEN est déjà connecté au téléphone par une autre app, le message d'aide le dit et propose de forcer l'arrêt de DOWAY.
+- L'accueil affiche la liste des enregistrements dès qu'un boîtier est associé. Sans boîtier, il affiche l'écran « Associe ton enregistreur », dont la pastille indique « Aucun boîtier », et Réglages reste accessible.
+- « Rechercher le boîtier » ouvre une feuille du bas. La liaison de l'app est fermée avant la recherche, qui dure 15 secondes. Un boîtier est reconnu à son nom (`MECHEN…`) ou aux identifiants fabricant `0x1116` et `0xA724` de son annonce.
+- Le message d'aide rappelle de vérifier que le boîtier est allumé et que DOWAY est fermée. Si rien n'est trouvé alors qu'un boîtier MECHEN est déjà connecté au téléphone, le message dit qu'une autre app le tient, sans doute DOWAY, et propose d'en forcer l'arrêt dans les réglages Android.
 - « Associer » enregistre l'adresse et le nom du boîtier, ferme la feuille et lance la lecture de la liste. Depuis Réglages, l'association d'un nouveau boîtier remplace l'ancien.
 
-### Écran 4, enregistrements, et écran 5, sélection
+### Liste des enregistrements
 
-- La liste réunit trois sources : la dernière liste lue sur le boîtier, le dossier du téléphone et le dossier Drive (quand Drive est activé). Elle est groupée par jour, du plus récent au plus ancien. Un enregistrement absent du boîtier reste listé tant qu'un de ses fichiers existe sur le téléphone ou dans Drive.
-- La pastille du boîtier montre un point plein quand la liaison est ouverte et un point vide sinon. Un toucher relance la connexion. Tirer la liste vers le bas relit le boîtier, le dossier du téléphone et le dossier Drive.
-- Les filtres sont « Tous », « À relire » et « Sur le boîtier », chacun avec son compteur.
-- « Récupérer (N) » compte les enregistrements du boîtier qui ne sont ni sur le téléphone ni dans Drive. Il se grise si le boîtier est hors de portée ou si une récupération tourne déjà.
-- « Envoyer (N) » n'apparaît que si Drive est activé. Il compte les enregistrements dont au moins un fichier du téléphone manque dans le dossier Drive. Il se grise pendant un envoi.
-- Un appui long passe en sélection. Les deux boutons portent alors sur les lignes cochées. Récupérer une ligne cochée la transfère de nouveau depuis le boîtier, quel que soit son état. « Tout » coche les lignes du filtre en cours.
-- La barre d'avancement affiche « Récupération i/N · p % » ou « Envoi i/N · p % ». Pour un envoi, N compte les fichiers (MP3, VTT et MD), et p est le pourcentage du fichier en cours. Les deux barres peuvent s'afficher l'une sous l'autre.
+- La liste réunit trois sources : la dernière liste lue sur le boîtier, le dossier du téléphone et les MP3 du dossier Drive, quand Drive est activé. Elle est groupée par jour (« Aujourd'hui », « Hier », puis par exemple « Jeudi 29 octobre »), du plus récent au plus ancien. Un enregistrement absent du boîtier reste listé tant qu'un de ses fichiers existe sur le téléphone ou dans Drive.
+- La pastille du boîtier montre un point plein quand la liaison est ouverte et un point vide sinon. Un toucher relance la connexion, et un échec affiche « Boîtier hors de portée. ». Tirer la liste vers le bas relit le dossier du téléphone, le dossier Drive et le boîtier.
+- Les filtres sont « Tous », « À relire » et « Sur le boîtier », chacun avec son compteur. « Sur le boîtier » retient les enregistrements du boîtier qui n'ont aucun fichier sur le téléphone. « À relire » ne retient aucun enregistrement en 0.2.4 et affiche toujours 0.
+- « Récupérer (N) » compte les enregistrements du boîtier qui ne sont ni sur le téléphone ni dans Drive. Il n'est actif que si la liaison est ouverte, qu'aucune récupération ne tourne et que N n'est pas nul. Il affiche « Récupération… » pendant le travail.
+- « Envoyer (N) » n'apparaît que si Drive est activé. Il compte les enregistrements dont au moins un fichier du téléphone manque dans le dossier Drive, sauf ceux dont la récupération est en erreur. Tant que le contenu du dossier Drive n'est pas connu, il compte tous les enregistrements qui ont un fichier sur le téléphone. Il affiche « Envoi… » pendant le travail.
+- Un appui long passe en sélection. La barre affiche le nombre de lignes cochées, une croix pour sortir et « Tout », qui coche les lignes du filtre en cours. Les deux boutons portent alors sur les lignes cochées : récupérer une ligne cochée la transfère de nouveau depuis le boîtier, quel que soit son état. La sélection se vide après l'action.
+- La barre d'avancement affiche « Récupération i/N · p % » ou « Envoi i/N · p % ». Pour un envoi, N compte les fichiers, et p est le pourcentage du fichier en cours. Les deux barres peuvent s'afficher l'une sous l'autre.
 
-### Écrans 6 et 7, fiche d'un enregistrement
+### Fiche d'un enregistrement
 
-- Le titre donne le type, la date et l'heure. Le sous-titre donne la durée et l'état.
-- Le menu propose « Récupérer à nouveau », « Relancer la transcription » et « Relancer la synthèse ». Une action sans objet est grisée, par exemple la synthèse tant qu'aucun VTT n'est enregistré.
-- Le lecteur lit le MP3 du téléphone avec le lecteur média d'Android. Toucher un segment lance la lecture à son début, et le segment lu est surligné.
-- Quand la chaîne automatique est coupée, la fiche propose un bouton « Transcrire » tant qu'aucune transcription n'existe, puis un bouton « Résumer » une fois le VTT enregistré.
-- Onglet Transcription : il affiche les segments du VTT enregistré, avec leur horodatage et leur texte, sans nom d'intervenant (écran 6). Il n'y a rien à valider. Quand la transcription est relancée et qu'un MD existe déjà, l'app propose de relancer aussi la synthèse.
-- Onglet Synthèse : il reste grisé tant qu'aucun VTT n'existe. Il affiche le Markdown mis en forme, le modèle utilisé et le nom du prompt. « Relancer » remplace le brouillon par une nouvelle réponse. « Valider et enregistrer » écrit le MD dans le dossier du téléphone.
-- Bandeau d'erreur : il s'affiche sous les onglets avec la raison en clair et un bouton « Réessayer ».
+- Le titre donne le type, la date et l'heure, par exemple « Call · 30 oct. 16:05 ». Le sous-titre donne la durée et l'état.
+- Le menu propose « Récupérer à nouveau ». L'action n'est active que si l'enregistrement est sur le boîtier, que la liaison est ouverte et qu'aucune récupération ne tourne.
+- Le lecteur lit le MP3 du téléphone avec `MediaPlayer` : lecture, pause, barre de position et temps en minutes et secondes. Sans MP3 sur le téléphone, la fiche affiche « Le MP3 n'est pas encore sur le téléphone. ». La lecture se met en pause quand l'app passe en arrière-plan.
+- La fiche affiche le nom du fichier et son dossier. Elle se ferme d'elle-même si l'enregistrement disparaît de la liste.
+- Bandeau d'erreur : il affiche la raison en clair et un bouton « Réessayer », qui relance la récupération ou l'envoi selon l'étape en erreur.
 
-### Écran 8, réglages
+### Réglages
 
-Les sections sont Boîtier, Stockage sur le téléphone, Automatisation, Transcription, Synthèse, Google Drive, Apparence et À propos, comme dans la maquette. Les règles suivantes s'y ajoutent.
+- Les sections sont Boîtier, Stockage sur le téléphone, Google Drive, Apparence et À propos.
+- Stockage : « Changer » ouvre le sélecteur de dossiers. Le changement est refusé pendant un transfert, avec le message « Attends la fin du transfert pour changer de dossier. ».
+- Google Drive : l'interrupteur « Envoyer vers Drive » demande aussitôt l'accord de Google. Une fois activé, la section affiche le compte et l'entrée « Dossier ». « Déconnecter » révoque l'accès de l'app avec `AuthorizationClient.revokeAccess`, en utilisant l'adresse du compte lue par `about.get`, puis désactive l'envoi. Désactiver l'envoi efface les erreurs d'envoi.
+- Apparence : « Clair », « Sombre » ou « Système ».
+- À propos ouvre le journal et affiche la version installée.
 
-- « Tester » appelle `GET {base}/models` avec la clé et affiche « Joignable · 420 ms » ou l'erreur reçue.
-- Google Drive : « Déconnecter » révoque l'accès de l'app avec `AuthorizationClient.revokeAccess`, puis désactive l'envoi.
-- À propos affiche la version installée et ouvre le journal.
+### Dossier Drive
 
-### Écran 9, prompt et format
-
-- Le prompt et le format vivent dans les réglages de l'app, pas dans son code.
-- Les variables `{{type}}`, `{{date}}` et `{{duree}}` s'insèrent au curseur. La variable `{{intervenants}}` arrive avec le lot 4. Une variable inconnue reste telle quelle.
-- La ligne de la page Réglages affiche « Compte rendu (par défaut) » tant que le texte d'origine est en place, et « Personnalisé » ensuite.
-
-### Écran 10, dossier Drive
-
-- La liste montre les dossiers connus : ceux que l'app a créés et ceux ouverts une fois avec le sélecteur Google. Un dossier devenu inaccessible (supprimé, dans la corbeille ou sans droit d'ajout) s'affiche grisé avec la mention « Inaccessible ».
+- La liste « Dossiers connus » montre les dossiers que l'app a créés et ceux ouverts une fois avec le sélecteur Google. « Dictée » apparaît en tête tant qu'il n'est pas connu, comme dossier par défaut créé au premier envoi. Un dossier devenu inaccessible (supprimé, dans la corbeille ou sans droit d'ajout) s'affiche grisé avec la mention « Inaccessible ».
 - Un toucher choisit le dossier et revient aux réglages. « Nouveau dossier » demande un nom et crée le dossier à la racine du Drive.
-- « Autre dossier… » ouvre le sélecteur Google, réglé pour les dossiers comme en 0.1.5. Le dossier retenu est contrôlé (`capabilities.canAddChildren`, hors corbeille), puis ajouté aux dossiers connus.
+- « Autre dossier… » ouvre le sélecteur Google, réglé pour les dossiers. Le dossier retenu est contrôlé (`capabilities.canAddChildren`, hors corbeille, type dossier), puis ajouté aux dossiers connus.
 
-### Écran 11, journal
+### Journal
 
-- Une ligne par événement : heure, source et message. Les sources sont APP, BLE, FS, STT, LLM et DRIVE.
-- Le journal garde un fichier par jour sur sept jours. Les fichiers plus anciens sont supprimés à l'ouverture de l'app.
-- « Copier » copie les lignes affichées avec le filtre en cours. « Exporter » écrit un fichier `.txt` des sept jours et ouvre le partage d'Android. « Vider » efface le journal après confirmation.
+- Une ligne par événement : heure, source et message. Les sources sont APP, BLE, FS, STT, LLM et DRIVE. Une ligne d'erreur commence par « erreur : » et s'affiche en rouge.
+- Les filtres sont « Tout », « Erreurs », « Bluetooth », « Drive », « Transcription » et « Synthèse ».
+- Le journal garde un fichier par jour sur sept jours. Les fichiers plus anciens sont supprimés au démarrage de l'app.
+- « Copier » copie les lignes affichées avec le filtre en cours. « Exporter » partage un fichier `.txt` des sept jours par le partage d'Android. « Vider » efface le journal après confirmation.
 
 ## Données
 
@@ -111,122 +83,77 @@ Les sections sont Boîtier, Stockage sur le téléphone, Automatisation, Transcr
 
 | Champ | Origine |
 |---|---|
-| Nom | 14 chiffres `AAAAMMJJhhmmss`, lus dans la liste du boîtier ou dans un nom de fichier |
-| Type | Indicateur de la liste : `01` donne Note et `00` donne Call. Une autre valeur donne Note, avec une ligne au journal. Pour un enregistrement connu seulement par ses fichiers, le type vient du préfixe. |
+| Nom | 14 chiffres `AAAAMMJJhhmmss` formant une date valide, lus dans la liste du boîtier ou dans un nom de fichier |
+| Type | Indicateur de la liste : `01` donne Note et `00` donne Call. Une autre valeur, ou une valeur absente, donne Note, avec une ligne au journal. Pour un enregistrement connu seulement par ses fichiers, le type vient du préfixe. |
 | Taille sur le boîtier | Liste du boîtier |
-| Durée | Taille divisée par 4 000 octets par seconde (MP3 à 32 kbit/s constant), affichée en minutes, ou en secondes sous une minute |
-| Fichiers | `<Type>-<nom>.mp3`, `.vtt` et `.md` dans le dossier du téléphone |
+| Durée | Taille divisée par 4 000 octets par seconde (MP3 à 32 kbit/s constant), affichée en minutes arrondies, ou en secondes sous une minute |
+| Fichiers | `<Type>-<nom>.mp3` dans le dossier du téléphone. Des fichiers `.vtt` et `.md` du même nom, déposés par un autre outil, sont aussi reconnus. |
 
 ### État affiché
 
-L'état se calcule à chaque rafraîchissement à partir des trois sources, des travaux en cours, des brouillons et des erreurs. La première règle vraie l'emporte.
+L'état se calcule à chaque rafraîchissement à partir des trois sources, des travaux en cours et des erreurs. La première règle vraie l'emporte.
 
 | Ordre | État | Condition |
 |---|---|---|
-| 1 | Erreur | La dernière tentative d'une étape a échoué et n'a pas été reprise avec succès. |
+| 1 | Erreur | La dernière tentative de récupération ou d'envoi a échoué et n'a pas été reprise avec succès. |
 | 2 | Récupération p % | Le transfert Bluetooth de cet enregistrement est en cours. |
-| 3 | Transcription…, Synthèse… ou Envoi… | L'étape correspondante est en cours. |
-| 4 | À relire | Un brouillon de synthèse attend une validation. |
-| 5 | Sur Drive | Drive est activé, le MP3 est dans le dossier Drive et chaque fichier du téléphone y est aussi. |
-| 6 | Prêt | Le MP3, le VTT et le MD sont sur le téléphone. |
-| 7 | Récupéré | Le MP3 est sur le téléphone, et l'étape suivante attend parce que la chaîne est coupée. |
-| 8 | Sur le boîtier | L'enregistrement n'est que sur le boîtier. |
-
-L'état « Récupéré » ne figure pas dans la maquette. Il s'ajoute aux états de la liste des enregistrements (écran 4).
+| 3 | Envoi… | Un envoi de cet enregistrement vers Drive est en cours. |
+| 4 | Sur Drive | Le MP3 est dans le dossier Drive et chaque fichier du téléphone y est aussi. |
+| 5 | Prêt | Le MP3, le VTT et le MD sont sur le téléphone. |
+| 6 | Récupéré | Au moins un fichier de l'enregistrement est sur le téléphone. |
+| 7 | Sur le boîtier | L'enregistrement n'est que sur le boîtier. |
 
 ### État local
 
 Le fichier `state.json` du stockage interne ne garde que ce qui ne se déduit pas des trois sources :
 
 - l'adresse et le nom du boîtier associé ;
-- la dernière liste lue sur le boîtier, remplacée à chaque lecture et utilisée quand le boîtier est hors de portée ;
+- la dernière liste lue sur le boîtier (nom, taille, indicateur), remplacée à chaque lecture et utilisée quand le boîtier est hors de portée ;
 - l'adresse du dossier du téléphone (URI de l'arborescence choisie) ;
-- les dossiers Drive connus (identifiant, nom, origine) et le dossier choisi ;
-- la dernière erreur par enregistrement et par étape ;
-- les réglages qui ne sont pas secrets.
+- l'activation de Drive, le compte Google autorisé, les dossiers Drive connus (identifiant, nom, origine) et le dossier choisi ;
+- la dernière erreur par enregistrement et par étape (récupération ou envoi), gardée après un redémarrage ;
+- le thème.
 
-Les brouillons de synthèse vivent dans `drafts/<Type>-<nom>.md`. Un brouillon est supprimé dès que le MD validé est écrit dans le dossier du téléphone. Les clés d'API sont dans un fichier à part, chiffré.
+Le fichier est écrit dans un fichier temporaire puis renommé. Un fichier illisible est mis de côté sous `state.json.bad`.
 
-Au premier lancement de la cible, l'app reprend de l'ancien `state.json` l'adresse et le nom du boîtier, ainsi que le dossier Drive choisi, qui devient un dossier connu et reste choisi. Les états d'enregistrement de la version 0.1.5 sont abandonnés, puisqu'ils se déduisent désormais des sources.
+L'app reprend l'état de la version 0.1.5 au premier lancement : elle garde l'adresse et le nom du boîtier, et le dossier Drive choisi devient un dossier connu qui reste choisi. Les MP3 laissés par la 0.1.5 dans le stockage interne sont seulement comptés au journal.
 
 ## Récupération par Bluetooth
 
-- La liaison s'ouvre à l'ouverture de l'app, au toucher sur la pastille et au geste de rafraîchissement. Elle reste ouverte tant que l'app est au premier plan ou qu'une récupération tourne, puis se ferme.
+- La liaison s'ouvre au passage au premier plan, au toucher sur la pastille, au geste de rafraîchissement et après une association. Elle se ferme quand l'app passe en arrière-plan, sauf pendant une récupération, et à la fin d'une récupération faite en arrière-plan.
 - La séquence de connexion et de lecture de la liste est celle de [`protocole-v05.md`](protocole-v05.md) : appairage rejoué, numéro de série, informations, mise à l'heure, `0x18` avec `00`, puis `0x0a`.
-- Le transfert utilise `0x0b` comme en 0.1.5. Le flux est écrit dans `<nom>.mp3.part`, dans le cache de l'app, puis contrôlé (taille annoncée, en-tête MP3). Le fichier valide est copié dans le dossier du téléphone sous `<Type>-<nom>.mp3`, en remplaçant un fichier du même nom en cas de nouvelle récupération, puis le fichier partiel est supprimé.
-- Les récupérations passent l'une après l'autre. Une coupure arrête la file, comme en 0.1.5.
-- Le boîtier n'est jamais modifié : aucune suppression ni écriture d'enregistrement.
-
-## Transcription
-
-### Requête
-
-`POST {base}/audio/transcriptions` en multipart, avec `file`, `model`, `response_format=verbose_json`, `timestamp_granularities[]=segment`, et `language` si une langue est fixée. La clé part dans l'en-tête `Authorization: Bearer`. Le délai de connexion est de 15 secondes et le délai de réponse de 30 minutes.
-
-L'app lit les segments de la réponse (`start`, `end`, `text`), écrit le VTT dans le dossier du téléphone, puis lance la synthèse si la chaîne est active.
-
-### VTT
-
-Le VTT suit le format WebVTT, sans balise de voix :
-
-```text
-WEBVTT
-
-00:11:48.000 --> 00:12:03.900
-On peut reprendre le planning de la semaine prochaine ?
-
-00:12:04.000 --> 00:12:18.700
-Oui. Je propose de livrer la première version vendredi.
-```
-
-Le VTT est la seule source de la transcription. Relancer la transcription le remplace.
-
-### À vérifier au début du lot 2, sur l'endpoint choisi
-
-Le modèle de transcription doit renvoyer des segments horodatés en `verbose_json`. Si ce n'est pas le cas, le lot 2 s'arrête et le choix du modèle ou de l'endpoint est revu avant la suite.
-
-## Synthèse
-
-- `POST {base}/chat/completions` en JSON, avec `model` et deux messages. Le message `system` contient les instructions, suivies de « Format de la synthèse : » et du format. Le message `user` contient le VTT enregistré.
-- Les variables sont remplacées dans les instructions et dans le format :
-
-| Variable | Valeur | Exemple |
-|---|---|---|
-| `{{type}}` | Type de l'enregistrement | Call |
-| `{{date}}` | Date et heure de l'enregistrement | 30 octobre 2026 à 16:05 |
-| `{{duree}}` | Durée arrondie à la minute | 41 min |
-
-- La réponse (`choices[0].message.content`) devient un brouillon de MD et l'enregistrement passe à « À relire ».
-- Le délai de réponse est de 5 minutes.
-- Le prompt par défaut (écran 9) donne des instructions en français, sans invention, et un format avec les sections Résumé, Décisions et Actions.
+- Le transfert utilise `0x0b`. Le flux est écrit dans `<nom>.mp3.part`, dans le cache de l'app, puis contrôlé (taille annoncée et en-tête MP3). Le fichier valide est copié dans le dossier du téléphone sous `<Type>-<nom>.mp3`, en remplaçant un fichier du même nom en cas de nouvelle récupération, puis le fichier du cache est supprimé.
+- Les récupérations passent l'une après l'autre, de la plus ancienne à la plus récente.
+- Le boîtier n'est jamais modifié : l'app n'envoie aucune commande de suppression ni d'écriture d'enregistrement.
 
 ## Stockage sur le téléphone
 
 - Au premier besoin d'écrire (première récupération), l'app ouvre le sélecteur de dossiers d'Android, placé sur Téléchargements. L'utilisateur y crée ou choisit un dossier, par exemple « Dictée ». L'app garde une permission persistante sur ce dossier.
-- Réglages permet de changer de dossier. Les fichiers déjà écrits restent dans l'ancien dossier.
+- Réglages permet de changer de dossier. L'app rend la permission de l'ancien dossier, et les fichiers déjà écrits y restent.
 - L'app lit le dossier à l'ouverture, au rafraîchissement et après chaque écriture. Elle ne retient que les fichiers dont le nom suit `Note-` ou `Call-`, puis 14 chiffres et l'extension `.mp3`, `.vtt` ou `.md`.
-- Si la permission est perdue ou si le dossier a disparu, les récupérations et les enregistrements se bloquent avec un message qui renvoie vers Réglages.
+- Une écriture passe par un fichier `.part`. L'ancien fichier du même nom est mis de côté en `.old`, le nouveau prend le nom définitif, puis les restes sont nettoyés. Le dossier doit accepter le renommage.
+- Si la permission est perdue ou si le dossier a disparu, l'app affiche « Dossier du téléphone inaccessible. Choisis-le de nouveau dans Réglages. ».
 
 ## Envoi vers Google Drive
 
-- Le droit reste `drive.file`. L'app demande un jeton juste avant chaque opération Drive. Sur une erreur 401, elle efface le jeton en cache (`clearToken`), en redemande un et refait l'appel une seule fois.
-- Dossier par défaut : quand Drive est activé sans dossier choisi, l'app cherche « Dictée » parmi les dossiers connus, puis dans Drive (requête sur le nom, limitée par Google aux dossiers accessibles à l'app). Sans résultat, elle crée « Dictée » à la racine.
-- « Envoyer » lit une fois les noms et tailles du dossier, page par page. Pour chaque enregistrement concerné et chaque fichier du téléphone (MP3, VTT, MD), le fichier est présent s'il existe un fichier du même nom dans le dossier. Pour le MP3, le nom sans préfixe (`<nom>.mp3`), utilisé par la version 0.1.5, compte aussi.
+- Le droit est `drive.file`. L'app demande un jeton avant chaque requête Drive. Sur une erreur 401, elle efface le jeton en cache (`clearToken`), en redemande un et refait l'appel une seule fois. Les délais sont de 30 secondes pour la connexion et de 120 secondes pour la lecture.
+- Dossier par défaut : quand Drive est activé sans dossier choisi, l'app cherche « Dictée » parmi les dossiers connus, puis dans Drive (requête sur le nom, limitée par Google aux dossiers accessibles à l'app). Sans résultat, elle crée « Dictée » à la racine. Ce choix se fait au premier envoi.
+- L'app lit les noms et tailles du dossier, page par page. Un fichier du téléphone est présent dans Drive s'il existe un fichier du même nom. Pour le MP3, le nom sans préfixe (`<nom>.mp3`), utilisé par la version 0.1.5, compte aussi. Un MP3 présent seulement dans Drive crée une ligne dans la liste.
 - Un fichier absent part en téléversement reprenable (`audio/mpeg`, `text/vtt` ou `text/markdown`). Il est déposé si la taille renvoyée par Drive égale la taille locale.
-- L'app ne remplace ni ne supprime jamais un fichier dans Drive. Un VTT exporté par DOWAY sous le même nom compte donc comme présent : le VTT de l'app n'est pas envoyé et le journal le signale.
+- L'app ne remplace ni ne supprime jamais un fichier dans Drive. Un VTT exporté par DOWAY sous le même nom compte donc comme présent.
 - Les fichiers du téléphone restent en place après l'envoi.
 
 ## Travaux longs
 
-- Un service de premier plan exécute les récupérations, les appels de transcription et de synthèse, et les envois. Il déclare le type `connectedDevice` pour le Bluetooth et `dataSync` pour le réseau.
-- Sa notification reprend le texte de la barre d'avancement. Sur Android 13 et plus, l'app demande la permission de notification au premier travail long. Un refus n'arrête pas le travail : seule la notification manque.
-- Trois files indépendantes tournent en parallèle : la file Bluetooth, la file de traitement (une transcription ou une synthèse à la fois) et la file Drive.
+- Un service de premier plan exécute les récupérations et les envois. Il déclare le type `dataSync`, et `connectedDevice` quand la permission Bluetooth est accordée. Il garde le processeur éveillé une heure au plus.
+- Sa notification, sur le canal « Travaux en cours », reprend le texte de la barre d'avancement. Sur Android 13 et plus, l'app demande la permission de notification au premier travail long de chaque lancement. Un refus n'arrête pas le travail : seule la notification manque.
+- Une récupération et un envoi peuvent tourner en même temps, mais jamais deux récupérations ni deux envois.
 
 ## Journal
 
 - Chaque ligne a la forme `HH:mm:ss SOURCE message`.
-- Les requêtes HTTP sont journalisées sans en-têtes ni corps : méthode, chemin, statut, durée et taille. Les clés d'API n'apparaissent jamais.
-- Les trames Bluetooth restent journalisées en hexadécimal, comme en 0.1.5.
+- Les requêtes HTTP sont journalisées sans en-têtes ni corps : méthode, chemin, statut, durée et taille.
+- Les trames Bluetooth sont journalisées en hexadécimal, précédées de TX ou RX.
 
 ## Erreurs et reprise
 
@@ -234,12 +161,11 @@ Le modèle de transcription doit renvoyer des segments horodatés en `verbose_js
 |---|---|
 | Boîtier hors de portée à l'ouverture | La pastille passe au point vide, la liste s'appuie sur la dernière liste lue, et « Récupérer » se grise. |
 | Coupure ou silence de 20 secondes pendant un transfert | Le fichier partiel est supprimé, l'enregistrement passe en erreur et la file s'arrête. |
-| Refus de `0x0b` | L'enregistrement passe en erreur et la file continue avec le suivant. |
-| Endpoint de transcription injoignable ou réponse en erreur | L'enregistrement passe en erreur avec le code reçu. Le MP3 reste en place, et « Réessayer » relance l'appel. |
-| Endpoint de synthèse injoignable ou réponse en erreur | L'enregistrement passe en erreur. Le VTT reste en place, et « Réessayer » relance l'appel. |
+| Aucune réponse à `0x0b` en 5 secondes | L'enregistrement passe en erreur et la file s'arrête. |
+| Refus de `0x0b`, taille inattendue ou en-tête MP3 absent | L'enregistrement passe en erreur et la file continue avec le suivant. |
 | Erreur 401 de Drive après le nouvel essai | L'envoi s'arrête avec le message « Accès Google à renouveler ». Les fichiers restent à envoyer. |
 | Dossier Drive inaccessible | L'envoi est annulé avec un message. L'app ne remplace jamais le dossier choisi sans action de l'utilisateur. |
-| Dossier du téléphone inaccessible ou plein | L'écriture échoue, l'enregistrement passe en erreur et le message renvoie vers Réglages. |
+| Dossier du téléphone inaccessible ou plein | L'écriture échoue, l'enregistrement passe en erreur, la file s'arrête et le message renvoie vers Réglages. |
 
 ## Architecture du code
 
@@ -247,29 +173,29 @@ Le modèle de transcription doit renvoyer des segments horodatés en `verbose_js
 
 | Fichier | Rôle |
 |---|---|
-| `Frame.kt`, `V05Session.kt` | Protocole et transfert, sans changement de fond |
-| `RecordName.kt` | Lecture et écriture des noms, type, durée |
-| `RecordingState.kt` | Calcul de l'état affiché à partir des sources, des travaux, des brouillons et des erreurs |
-| `Transcript.kt` | Segments horodatés lus dans la réponse de l'endpoint |
-| `Vtt.kt` | Écriture et lecture du WebVTT |
-| `PromptTemplate.kt` | Remplacement des variables |
-| `TranscriptionClient.kt`, `SummaryClient.kt` | Appels HTTP au format OpenAI, écrits contre l'interface `Http` existante |
+| `Frame.kt`, `V05Session.kt` | Trames du protocole, session et transfert |
+| `RecordName.kt` | Lecture et écriture des noms, type, durée, types MIME |
+| `RecordingState.kt` | Liste réunie, compteurs et état affiché à partir des sources, des travaux et des erreurs |
+| `RecoveryJob.kt`, `SendJob.kt` | File de récupération et file d'envoi |
 | `DriveClient.kt` | Dossiers, listes, téléversement, renouvellement du jeton |
-| `Journal.kt` | Journal sur sept jours |
+| `Journal.kt` | Journal sur sept jours et ses filtres |
+| `LocalState.kt` | Lecture, écriture et reprise de `state.json` |
 
 ### Unités Android
 
 | Fichier | Rôle |
 |---|---|
-| `BleLink.kt` | Liaison Bluetooth, sans changement de fond |
-| `PhoneFolder.kt` | Accès au dossier du téléphone par le Storage Access Framework |
-| `SecretStore.kt` | Chiffrement des clés avec le Keystore |
-| `WorkService.kt` | Service de premier plan et ses trois files |
-| `AppState.kt` | État observé par l'interface |
-| `ui/Theme.kt` | Tokens du design system en thème clair et sombre |
-| `ui/…Screen.kt` | Un fichier par écran : liste, fiche, réglages, prompt, dossier Drive, journal, feuille d'association |
+| `BleLink.kt`, `BoxConnection.kt` | Liaison Bluetooth, recherche et connexion au boîtier |
+| `PhoneFolder.kt`, `PhoneStore.kt` | Accès au dossier du téléphone par le Storage Access Framework |
+| `GoogleAuth.kt` | Autorisation Google, jeton et révocation |
+| `WorkService.kt` | Service de premier plan et sa notification |
+| `AppState.kt` | État observé par l'interface et actions de l'app |
+| `DicteeApp.kt`, `MainActivity.kt` | Application, activité unique et pile d'écrans |
+| `ui/Theme.kt`, `ui/Tokens.kt` | Tokens du design system en thème clair et sombre |
+| `ui/…Screen.kt`, `ui/AssociateSheet.kt` | Un fichier par écran : accueil, liste, fiche, réglages, dossier Drive, journal, feuille d'association |
+| `ui/Components.kt`, `ui/Rows.kt`, `ui/Dialogs.kt`, `ui/Modifiers.kt`, `ui/Playback.kt` | Composants partagés et lecteur audio |
 
-L'app garde une seule activité. Le passage d'un écran à l'autre suit une pile d'écrans tenue dans l'état, sans bibliothèque de navigation. Les dépendances ajoutées sont celles de Jetpack Compose (nomenclature, UI, foundation, material3 pour la feuille du bas et les interrupteurs, activity-compose). `play-services-auth` passe en 22.0.0, la version que cite la documentation de `revokeAccess`. Le lecteur audio utilise `MediaPlayer` d'Android.
+Les dépendances sont celles de Jetpack Compose (nomenclature, UI, foundation, material3, activity-compose), des coroutines Kotlin et de `play-services-auth` 22.0.0, la version que cite la documentation de `revokeAccess`. Le lecteur audio utilise `MediaPlayer` d'Android.
 
 ### Design system
 
@@ -295,55 +221,17 @@ Les aplats gris remplacent les contours : un champ ou un bouton secondaire n'a p
 
 La police d'interface est Figtree (graisses 400, 500, 600 et 700, en police variable) et la police à chasse fixe JetBrains Mono, embarquées dans l'app. Les titres sont en 700, le texte courant est à 15 sp. Le rayon est de 10 dp pour les boutons et les champs, de 12 dp pour les lignes et les encarts, de 16 dp pour les cartes et les dialogues, et les pastilles sont en pilule. Les boutons font 44 dp de haut, 36 dp pour le bouton compact (texte de 13 sp, zone tactile de 48 dp). L'icône de l'app est un D blanc sur fond noir, dessiné pour le lanceur dans la zone sûre des icônes adaptatives, avec la même forme en couche monochrome pour les icônes thématiques. Dans l'en-tête, l'icône est un carré noir incliné de 10° portant ce D, et elle s'inverse en thème sombre : le carré devient clair et le D sombre, ce qui tient lieu du liseré que le design system demande pour un carré presque noir sur fond sombre.
 
-## Lots
-
-Chaque lot a ses tests et sa propre version.
-
-| Lot | Version | Contenu |
-|---|---|---|
-| 1 | 0.2.0 | Design system et écrans en Compose, premier lancement et association, liste réunie, récupération (tout, sélection, à nouveau) vers le dossier du téléphone avec les préfixes, service de premier plan et barres d'avancement, fiche avec lecteur et menu, Réglages (boîtier, stockage, Drive, apparence, à propos), écran Dossier Drive, envoi vers Drive avec renouvellement du jeton, journal, reprise de l'état 0.1.5. La fiche n'a pas encore d'onglets, et les sections Transcription, Synthèse et Automatisation des Réglages arrivent avec leur lot. |
-| 2 | 0.3.0 | Réglages de transcription, appel à l'endpoint, VTT écrit dès son retour, onglet Transcription en lecture, chaîne automatique, envoi du VTT vers Drive |
-| 3 | 0.4.0 | Réglages de synthèse, écran Prompt et format, appel au LLM, relecture et enregistrement du MD, envoi du MD vers Drive |
-| 4 | 0.5.0 | Diarisation, à activer plus tard (section suivante) |
-
-## Lot 4 : diarisation, à activer plus tard
-
-Ce lot regroupe tout ce que demande un endpoint de diarisation. Il ne démarre qu'une fois le contrat d'API de l'endpoint de diarisation arrêté. La description ci-dessous suit un endpoint `/v1/audio/diarization`. L'écran 13 est l'onglet Transcription de ce lot.
-
-- **Réglages.** Un champ « Modèle de diarisation » s'ajoute à la section Transcription, par exemple `pyannote/speaker-diarization-community-1`.
-- **Requête.** Après la transcription, l'app envoie le même fichier à `POST {base}/audio/diarization`, avec `file`, `model` et `response_format=json`. La réponse donne des segments `start`, `end` et `speaker`. Si les segments de la transcription portent déjà un champ `speaker`, l'app les utilise tels quels et saute cet appel.
-- **Fusion.** Chaque segment de transcription reçoit l'intervenant dont les segments de diarisation le recouvrent le plus longtemps. Un segment sans recouvrement reprend l'intervenant du segment précédent. Les intervenants sont numérotés « Intervenant 1 », « Intervenant 2 », etc., dans leur ordre d'apparition.
-- **Relecture.** La transcription devient un brouillon (`drafts/<Type>-<nom>.transcript.json`) et l'enregistrement passe à « À relire ». Dans l'onglet Transcription, le bloc « Intervenants » liste les voix avec leur temps de parole, et un nom saisi remplace « Intervenant N » partout. « Enregistrer le VTT » écrit le VTT, puis lance la synthèse. Le bouton devient ensuite « Modifier les noms », qui relit le VTT et le réécrit avec les nouveaux noms.
-- **VTT.** Chaque segment porte une balise de voix, par exemple `<v Intervenant 1>Oui. Je propose de livrer la première version vendredi.`, où le nom saisi remplace « Intervenant 1 ».
-- **Synthèse.** La variable `{{intervenants}}` revient. Elle donne les noms lus dans le VTT, dans leur ordre d'apparition.
-- **Erreur.** Si la diarisation échoue, la transcription est gardée avec un seul intervenant. Le bandeau l'indique et le journal donne la raison.
-
 ## Vérifications
 
-### Par les tests et la compilation, à chaque lot
+### Par les tests et la compilation
 
-1. Les tests existants du protocole restent verts.
+1. Les tests du protocole passent.
 2. Les noms se lisent et s'écrivent dans les deux sens, préfixes compris, et la durée se calcule à partir de la taille.
 3. Le calcul de l'état affiché donne la valeur attendue pour chaque ligne du tableau « État affiché ».
-4. Lot 1 : la détection des fichiers déjà présents dans Drive tient compte des noms préfixés et des noms de la version 0.1.5. Une erreur 401 déclenche un seul nouvel essai avec un jeton neuf.
-5. Lot 2 : une réponse `verbose_json` enregistrée donne les segments attendus, et le VTT écrit puis relu redonne les mêmes segments.
-6. Lot 3 : les variables sont remplacées, et la requête envoyée contient les instructions, le format et le VTT.
-7. Lot 4 : la fusion transcription et diarisation attribue les intervenants attendus sur des réponses enregistrées, et le VTT relu redonne les mêmes noms.
-8. L'APK se compile et le lint passe.
+4. La détection des fichiers déjà présents dans Drive tient compte des noms préfixés et des noms de la version 0.1.5. Une erreur 401 déclenche un seul nouvel essai avec un jeton neuf.
+5. Les tokens de `Tokens.kt` correspondent à la copie de `tokens.json`.
+6. L'APK se compile et le lint passe.
 
 ### Sur un téléphone
 
-1. Lot 1 : l'association se fait une fois, et l'app s'ouvre ensuite sur la liste. La liste montre les mêmes enregistrements que DOWAY, avec le bon type. « Récupérer » écrit les MP3 préfixés dans le dossier choisi. « Envoyer » les dépose dans « Dictée » sans créer de doublon avec les fichiers de la version 0.1.5 ni avec les exports de DOWAY. Une récupération continue écran éteint, et un boîtier éteint pendant un transfert ne laisse aucun fichier partiel.
-2. Lot 2 : un enregistrement revient avec un VTT horodaté, qui s'ouvre dans un lecteur de sous-titres.
-3. Lot 3 : la synthèse suit le format réglé, et le MD validé arrive dans Drive à côté du MP3 et du VTT.
-4. Lot 4 : un enregistrement à deux voix revient avec deux intervenants, et le VTT enregistré porte les noms saisis.
-
-## Hors périmètre
-
-- Suppression ou modification d'enregistrements sur le boîtier.
-- Synchronisation en arrière-plan sans ouvrir l'app.
-- Modification du texte de la transcription.
-- Plusieurs prompts de synthèse.
-- Modèle diarisé d'OpenAI (`gpt-4o-transcribe-diarize`), déprécié.
-- Transfert des enregistrements par une autre liaison que le Bluetooth.
-- Partage d'un enregistrement vers une autre app, en dehors de l'export du journal.
+L'association se fait une fois, et l'app s'ouvre ensuite sur la liste. La liste montre les mêmes enregistrements que DOWAY, avec le bon type. « Récupérer » écrit les MP3 préfixés dans le dossier choisi. « Envoyer » les dépose dans « Dictée » sans créer de doublon avec les fichiers de la version 0.1.5 ni avec les exports de DOWAY. Une récupération continue écran éteint, et un boîtier éteint pendant un transfert ne laisse aucun fichier partiel.

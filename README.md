@@ -1,6 +1,6 @@
 # Dictée
 
-Dictée is an Android app that downloads the recordings of a MECHEN V05 voice recorder over Bluetooth Low Energy, stores them in a folder on the phone and can upload them to a Google Drive folder. Transcription and summarization are planned, as described in [docs/specification.md](docs/specification.md). It is an independent project with no affiliation to MECHEN or to the publisher of the DOWAY app.
+Dictée is an Android app that downloads the recordings of a MECHEN V05 voice recorder over Bluetooth Low Energy, stores them in a folder on the phone and can upload them to a Google Drive folder. Transcription and summarization are planned for later versions. It is an independent project with no affiliation to MECHEN or to the publisher of the DOWAY app.
 
 ## Ce que fait l'application
 
@@ -10,7 +10,7 @@ L'application réunit les enregistrements du boîtier, du téléphone et de Driv
 
 ## État
 
-La version actuelle est la 0.2.x. La récupération par Bluetooth, le stockage dans un dossier du téléphone, l'envoi vers Google Drive, l'écoute et le journal sont disponibles. La transcription et la synthèse sont prévues : [docs/specification.md](docs/specification.md) décrit les lots à venir.
+La version actuelle est la 0.2.x. La récupération par Bluetooth, le stockage dans un dossier du téléphone, l'envoi vers Google Drive, l'écoute et le journal sont disponibles. La transcription et la synthèse sont prévues dans les prochaines versions. [docs/specification.md](docs/specification.md) décrit la version livrée.
 
 ## Matériel
 
