@@ -107,8 +107,8 @@ private fun reasonOf(e: Throwable): String = e.message ?: e.javaClass.simpleName
  * l'action en attente est gardée, puis reprise par la méthode `on...` qui reçoit la réponse, ou abandonnée avec un message.
  */
 class AppModel(private val app: Application) {
-    private val store = LocalStateStore(File(app.filesDir, "state.json"))
-    private val localFlow = MutableStateFlow(store.load())
+    private val localRepository = LocalStateRepository(LocalStateStore(File(app.filesDir, "state.json")))
+    private val localFlow = localRepository.state
     val journal = Journal(File(app.filesDir, "journal")) { LocalDateTime.now() }
 
     init {
@@ -630,11 +630,11 @@ class AppModel(private val app: Application) {
     // --- Aides
 
     /**
-     * Applique [change] à l'état local, de façon atomique, puis l'écrit sur le disque si l'état a changé :
-     * les écritures s'enchaînent une à une et gardent la dernière valeur.
+     * Applique et enregistre [change] par le même dépôt que les futures écritures durables.
+     * Le dépôt publie l'état seulement après la réussite de l'écriture.
      */
     private fun update(change: (LocalState) -> LocalState) {
-        if (localFlow.updateChanged(change)) scope.launch(saver) { store.save(localFlow.value) }
+        localRepository.update(change)
     }
 
     private fun say(message: String) = liveFlow.update { it.copy(message = message) }

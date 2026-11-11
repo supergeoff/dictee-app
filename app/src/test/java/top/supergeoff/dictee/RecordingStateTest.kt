@@ -105,4 +105,24 @@ class RecordingStateTest {
         assertEquals("Récupération 1/2 · 40 %", Progress(ProgressKind.RECOVERY, 1, 2, 40).label())
         assertEquals("Envoi 1/3 · 90 %", Progress(ProgressKind.SEND, 1, 3, 90).label())
     }
+    @Test
+    fun `selection automatique et explicite signale les exclusions`() {
+        val a = "20261027080000"; val b = "20261028080000"; val c = "20261029080000"
+        val d = "20261030080000"; val e = "20261031080000"
+        val list = Recordings.merge(
+            listOf(a, b, c, d, e).map { ListItem.Entry(it, 100, 1) },
+            listOf("Note-$a.mp3", "Note-$b.mp3", "Note-$c.mp3", "Note-$c.vtt", "Note-$d.mp3", "Note-$e.vtt")
+                .map { PhoneFile(it, 100) }, null, emptyMap(), Busy())
+        val errors = mapOf(d to mapOf(Step.RECOVER to "coupure"), b to mapOf(Step.SEND to "envoi"))
+        val all = Recordings.toTranscribe(list, null, errors)
+        assertEquals(listOf(a, b), all.candidates.map { it.name })
+        assertEquals(mapOf(d to TranscriptionExclusion.RECOVERY_FAILED), all.excluded)
+        val selected = Recordings.toTranscribe(list, setOf(c, d, e, a, "absent"), errors)
+        assertEquals(listOf(a, c), selected.candidates.map { it.name })
+        assertEquals(mapOf(d to TranscriptionExclusion.RECOVERY_FAILED, e to TranscriptionExclusion.MISSING_MP3,
+            "absent" to TranscriptionExclusion.MISSING_MP3), selected.excluded)
+        assertEquals(SelectionResult(emptyList(), emptyMap()), Recordings.toTranscribe(list, emptySet(), errors))
+        val noVtt = listOf(list.first { it.name == e }.copy(phoneFiles = emptyMap()))
+        assertEquals(mapOf(e to TranscriptionExclusion.MISSING_MP3), Recordings.toTranscribe(noVtt, null, errors).excluded)
+    }
 }

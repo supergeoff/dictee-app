@@ -114,6 +114,27 @@ object Recordings {
         return if (drive == null) candidates else candidates.filter { missingInDrive(it, drive).isNotEmpty() }
     }
 
+    /** Sélectionne les MP3 locaux et signale les exclusions. */
+    fun toTranscribe(
+        recordings: List<Recording>, selectedNames: Set<String>?, errors: Map<String, Map<Step, String>>,
+    ): SelectionResult {
+        val candidates = mutableListOf<Recording>()
+        val excluded = linkedMapOf<String, TranscriptionExclusion>()
+        for (recording in recordings.sortedBy { it.name }) {
+            if (selectedNames != null && recording.name !in selectedNames) continue
+            if (selectedNames == null && FileKind.VTT in recording.phoneFiles) continue
+            when {
+                FileKind.MP3 !in recording.phoneFiles -> excluded[recording.name] = TranscriptionExclusion.MISSING_MP3
+                Step.RECOVER in errors[recording.name].orEmpty() -> excluded[recording.name] = TranscriptionExclusion.RECOVERY_FAILED
+                else -> candidates += recording
+            }
+        }
+        selectedNames?.minus(recordings.map { it.name }.toSet())?.sorted()?.forEach {
+            excluded[it] = TranscriptionExclusion.MISSING_MP3
+        }
+        return SelectionResult(candidates, excluded)
+    }
+
     /** « Aujourd'hui », « Hier », sinon le jour en toutes lettres, par exemple « Jeudi 29 octobre ». */
     fun dayLabel(date: LocalDate, today: LocalDate): String = when (date) {
         today -> "Aujourd'hui"

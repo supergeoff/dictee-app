@@ -1,5 +1,9 @@
 package top.supergeoff.dictee
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import org.json.JSONArray
@@ -7,6 +11,7 @@ import org.json.JSONException
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
+import java.io.FileOutputStream
 
 /** Thème de l'interface, choisi dans les réglages. */
 enum class ThemeChoice { LIGHT, DARK, SYSTEM }
@@ -18,9 +23,9 @@ enum class FolderOrigin { CREATED, PICKED }
 data class KnownFolder(val id: String, val name: String, val origin: FolderOrigin)
 
 /** Étape de traitement d'un enregistrement, dont l'erreur est gardée jusqu'à une réussite. */
-enum class Step { RECOVER, SEND }   // les lots 2 et 3 ajoutent TRANSCRIBE et SUMMARIZE
+enum class Step { RECOVER, SEND, TRANSCRIBE }
 
-/** État local tenu dans `state.json`, version 2. */
+/** État local tenu dans `state.json`, version 3. */
 data class LocalState(
     val deviceAddress: String? = null,
     val deviceName: String? = null,
@@ -33,6 +38,7 @@ data class LocalState(
     val chosenFolderId: String? = null,
     val errors: Map<String, Map<Step, String>> = emptyMap(),   // nom → étape → dernière erreur
     val theme: ThemeChoice = ThemeChoice.SYSTEM,
+    val transcriptionTasks: List<TranscriptionTask> = emptyList(),
 ) {
     /** Ajoute l'erreur de cette étape, ou remplace celle qu'elle avait déjà pour ce nom. */
     fun withError(name: String, step: Step, message: String): LocalState =
@@ -56,7 +62,7 @@ internal fun MutableStateFlow<LocalState>.updateChanged(change: (LocalState) -> 
 }
 
 /** Lit et écrit `state.json`. */
-class LocalStateStore(private val file: File) {
+class LocalStateStore(private val file: File, private val rename: (File, File) -> Boolean = { from, to -> from.renameTo(to) }) {
 
     /**
      * Lit l'état. Un fichier absent donne un état vide, et un fichier sans clé `version` est un état de la 0.1.5.
@@ -107,13 +113,34 @@ class LocalStateStore(private val file: File) {
                 }
             })
             .put("theme", state.theme.name)
+            .put("transcriptionTasks", JSONArray().apply {
+                state.transcriptionTasks.forEach { task ->
+                    put(JSONObject()
+                        .put("localId", task.localId)
+                        .put("recordingName", task.recordingName)
+                        .put("mp3Name", task.mp3Name)
+                        .put("vttName", task.vttName)
+                        .put("folderUri", task.folderUri)
+                        .put("mp3Sha256", task.mp3Sha256)
+                        .put("serverAddress", task.serverAddress)
+                        .put("encryptedKeyRef", task.encryptedKeyRef)
+                        .put("language", task.language)
+                        .put("model", task.model)
+                        .put("phase", task.phase.name)
+                        .put("serverId", task.serverId ?: JSONObject.NULL)
+                        .put("progress", task.progress ?: JSONObject.NULL)
+                        .put("error", task.error ?: JSONObject.NULL)
+                        .put("suspended", task.suspended)
+                        .put("suspensionReason", task.suspensionReason ?: JSONObject.NULL))
+                }
+            })
         file.parentFile?.mkdirs()
         val tmp = File(file.parentFile, file.name + ".tmp")
-        tmp.writeText(json.toString(2))
-        if (!tmp.renameTo(file)) {
-            file.delete()
-            tmp.renameTo(file)
+        FileOutputStream(tmp).use { output ->
+            output.write(json.toString(2).toByteArray(Charsets.UTF_8))
+            output.fd.sync()
         }
+        if (!rename(tmp, file)) throw IOException("Impossible de remplacer state.json")
     }
 
     private fun read(json: JSONObject): LocalState = LocalState(
@@ -127,6 +154,7 @@ class LocalStateStore(private val file: File) {
         chosenFolderId = json.stringOrNull("chosenFolderId"),
         errors = json.objectOrNull("errors")?.let { readErrors(it) }.orEmpty(),
         theme = json.stringOrNull("theme").toEnumOr(ThemeChoice.SYSTEM),
+        transcriptionTasks = json.arrayOrNull("transcriptionTasks")?.let { readTasks(it) }.orEmpty(),
     )
 
     /** Reprise de la 0.1.5 : boîtier et nom gardés, dossier Drive devenu dossier connu, enregistrements abandonnés. */
@@ -154,6 +182,23 @@ class LocalStateStore(private val file: File) {
         KnownFolder(o.getString("id"), o.getString("name"), o.stringOrNull("origin").toEnumOr(FolderOrigin.CREATED))
     }
 
+    private fun readTasks(array: JSONArray): List<TranscriptionTask> = List(array.length()) { i ->
+        val o = array.getJSONObject(i)
+        val phaseName = o.getString("phase")
+        val phase = TranscriptionPhase.entries.firstOrNull { it.name == phaseName }
+            ?: throw JSONException("Phase de transcription inconnue : $phaseName")
+        TranscriptionTask(
+            localId = o.getString("localId"), recordingName = o.getString("recordingName"),
+            mp3Name = o.getString("mp3Name"), vttName = o.getString("vttName"),
+            folderUri = o.getString("folderUri"), mp3Sha256 = o.getString("mp3Sha256"),
+            serverAddress = o.getString("serverAddress"), encryptedKeyRef = o.getString("encryptedKeyRef"),
+            language = o.getString("language"), model = o.getString("model"), phase = phase,
+            serverId = o.stringOrNull("serverId"), progress = if (o.isNull("progress")) null else o.getInt("progress"),
+            error = o.stringOrNull("error"), suspended = o.booleanOr("suspended", false),
+            suspensionReason = o.stringOrNull("suspensionReason"),
+        )
+    }
+
     /** Les noms et les étapes inconnus sont ignorés, de même que les erreurs sans message. */
     private fun readErrors(obj: JSONObject): Map<String, Map<Step, String>> {
         val errors = mutableMapOf<String, Map<Step, String>>()
@@ -170,7 +215,29 @@ class LocalStateStore(private val file: File) {
     }
 
     private companion object {
-        const val VERSION = 2
+        const val VERSION = 3
+    }
+}
+
+/** Un seul verrou pour tous les changements, publiés seulement après écriture réussie. */
+class LocalStateRepository(private val store: LocalStateStore) {
+    private val lock = Any()
+    private val mutableState = MutableStateFlow(store.load())
+    val state: StateFlow<LocalState> = mutableState.asStateFlow()
+
+    fun update(change: (LocalState) -> LocalState): LocalState = apply(change, forceSave = false)
+
+    suspend fun updateDurably(change: (LocalState) -> LocalState): LocalState =
+        withContext(Dispatchers.IO) { apply(change, forceSave = true) }
+
+    private fun apply(change: (LocalState) -> LocalState, forceSave: Boolean): LocalState = synchronized(lock) {
+        val old = mutableState.value
+        val next = change(old)
+        if (forceSave || next != old) {
+            store.save(next)
+            mutableState.value = next
+        }
+        next
     }
 }
 

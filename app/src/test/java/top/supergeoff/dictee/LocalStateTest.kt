@@ -103,4 +103,68 @@ class LocalStateTest {
         assertTrue(failures.isEmpty())
         assertTrue(store.load() in states)
     }
+    @Test
+    fun `migration v2 et aller retour des phases et erreurs sans cle en clair`() {
+        file().writeText("""{"version":2,"deviceName":"boitier","theme":"DARK","errors":{"N":{"RECOVER":"coupure"}}}""")
+        val store = LocalStateStore(file())
+        val old = store.load()
+        assertEquals("boitier", old.deviceName)
+        assertEquals(ThemeChoice.DARK, old.theme)
+        assertEquals(emptyList<TranscriptionTask>(), old.transcriptionTasks)
+        val tasks = TranscriptionPhase.entries.mapIndexed { i, phase ->
+            sampleTask().copy(localId = "task-$i", phase = phase, serverId = if (i % 2 == 0) "server-$i" else null,
+                progress = if (i % 2 == 0) i * 10 else null, error = if (i == 7) "erreur serveur" else null,
+                suspended = i == 3, suspensionReason = if (i == 3) "connexion absente" else null)
+        }
+        val state = old.copy(transcriptionTasks = tasks).withError("N", Step.TRANSCRIBE, "erreur")
+        store.save(state)
+        assertEquals(state, LocalStateStore(file()).load())
+        assertTrue(file().readText().contains("encrypted-key-ref"))
+        assertFalse(file().readText().contains("cleartext-api-key"))
+        assertTrue(file().readText().contains("\"version\": 3"))
+    }
+
+    @Test
+    fun `echec du renommage conserve le fichier et ne publie pas le changement`() {
+        val store = LocalStateStore(file())
+        store.save(LocalState(deviceName = "ancien"))
+        val before = file().readText()
+        val repository = LocalStateRepository(LocalStateStore(file(), rename = { _, _ -> false }))
+        try {
+            kotlinx.coroutines.runBlocking { repository.updateDurably { it.copy(deviceName = "nouveau") } }
+            org.junit.Assert.fail("le renommage doit echouer")
+        } catch (_: java.io.IOException) { }
+        assertEquals(before, file().readText())
+        assertEquals("ancien", repository.state.value.deviceName)
+    }
+    @Test
+    fun `modifications concurrentes des reglages et de la tache sont conservees`() {
+        val repository = LocalStateRepository(LocalStateStore(file()))
+        val failures = ConcurrentLinkedQueue<Throwable>()
+        val start = java.util.concurrent.CountDownLatch(1)
+        val threads = listOf(
+            Thread { try { start.await(); kotlinx.coroutines.runBlocking {
+                repository.updateDurably { it.copy(theme = ThemeChoice.DARK) }
+            } } catch (e: Throwable) { failures.add(e) } },
+            Thread { try { start.await(); kotlinx.coroutines.runBlocking {
+                repository.updateDurably { it.copy(transcriptionTasks = listOf(sampleTask())) }
+            } } catch (e: Throwable) { failures.add(e) } },
+        )
+        threads.forEach { it.start() }; start.countDown(); threads.forEach { it.join() }
+        assertTrue(failures.toString(), failures.isEmpty())
+        val restored = LocalStateStore(file()).load()
+        assertEquals(ThemeChoice.DARK, restored.theme)
+        assertEquals(listOf(sampleTask()), restored.transcriptionTasks)
+        assertEquals(restored, repository.state.value)
+    }
+
+    @Test
+    fun `une mise a jour durable identique confirme aussi une ecriture`() {
+        val repository = LocalStateRepository(LocalStateStore(file(), rename = { _, _ -> false }))
+        try {
+            kotlinx.coroutines.runBlocking { repository.updateDurably { it } }
+            org.junit.Assert.fail("l'ecriture doit echouer")
+        } catch (_: java.io.IOException) { }
+        assertFalse(file().exists())
+    }
 }
