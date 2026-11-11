@@ -31,6 +31,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,7 +41,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
-import top.supergeoff.dictee.TranscriptionSettings
+import top.supergeoff.dictee.TranscriptionSettingsForm
 import androidx.compose.ui.unit.dp
 import top.supergeoff.dictee.AppModel
 import top.supergeoff.dictee.BuildConfig
@@ -81,7 +83,7 @@ fun SettingsScreen(
             BoxSection(ui.local, busy = ui.recovering, onAssociate = onAssociate)
             StorageSection(ui.phoneFolder, busy = ui.recovering || ui.sending, onChange = model::choosePhoneFolder)
             DriveSection(ui.local, model, onDriveFolders)
-            TranscriptionSection(ui.local, model::saveTranscriptionSettings)
+            TranscriptionSection(ui.local, model.transcriptionForm)
             AppearanceSection(ui.local.theme, model::setTheme)
             AboutSection(onJournal)
         }
@@ -193,25 +195,21 @@ private fun TextAction(text: String, onClick: () -> Unit) {
     }
 }
 
-/** La clé saisie reste locale au formulaire et ne préremplit jamais le champ. */
+/** Le formulaire reste dans le modèle pendant la sauvegarde et ne préremplit jamais la clé. */
 @Composable
-private fun TranscriptionSection(local: LocalState, onSave: (TranscriptionSettings, String) -> Unit) {
+private fun TranscriptionSection(local: LocalState, form: TranscriptionSettingsForm) {
+    LaunchedEffect(form) { form.initialize(local.transcriptionSettings) }
+    val draft by form.state.collectAsState()
     val settings = local.transcriptionSettings
-    var baseUrl by remember(settings) { mutableStateOf(settings.baseUrl) }
-    var language by remember(settings) { mutableStateOf(settings.language) }
-    var model by remember(settings) { mutableStateOf(settings.model) }
-    var secret by remember { mutableStateOf("") }
     Section("Transcription") {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(baseUrl, { baseUrl = it }, label = { Text("Adresse du serveur (/v1)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(secret, { secret = it }, label = { Text("Nouvelle clé") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(draft.baseUrl, form::setBaseUrl, enabled = draft.initialized && !draft.saving, label = { Text("Adresse du serveur (/v1)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(draft.secret, form::setSecret, enabled = draft.initialized && !draft.saving, label = { Text("Nouvelle clé") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
             Text(if (settings.credentialRef == null) "Aucune clé enregistrée" else "Une clé est enregistrée. Laisse ce champ vide pour la conserver.", color = Dictee.colors.textSecondary)
-            OutlinedTextField(language, { language = it }, label = { Text("Langue") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(model, { model = it }, label = { Text("Modèle") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            Button(onClick = {
-                onSave(settings.copy(baseUrl = baseUrl.trim(), language = language.trim(), model = model.trim()), secret)
-                secret = ""
-            }) { Text("Enregistrer") }
+            OutlinedTextField(draft.language, form::setLanguage, enabled = draft.initialized && !draft.saving, label = { Text("Langue") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(draft.model, form::setModel, enabled = draft.initialized && !draft.saving, label = { Text("Modèle") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            Button(onClick = { form.submit() }, enabled = draft.initialized && !draft.saving) { Text(if (draft.saving) "Enregistrement…" else "Enregistrer") }
+            draft.message?.let { Text(it, color = Dictee.colors.textSecondary) }
             local.transcriptionTasks.filter { it.suspended && it.suspensionReason?.contains("Clé inaccessible") == true }.forEach { task ->
                 Text("${task.recordingName} : clé inaccessible. La nouvelle clé ne modifie pas cette tâche ; il faudra la relancer avec les nouveaux réglages.", color = Dictee.colors.textSecondary)
             }

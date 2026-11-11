@@ -94,6 +94,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
     /** Écrit l'état dans `state.json.tmp`, puis le renomme sur `state.json`. */
     @Synchronized
     fun save(state: LocalState) {
+        if (!isValidTranscriptionBaseUrl(state.transcriptionSettings.baseUrl)) throw InvalidTranscriptionAddressException()
         val json = JSONObject()
             .put("version", VERSION)
             .put("deviceAddress", state.deviceAddress ?: JSONObject.NULL)

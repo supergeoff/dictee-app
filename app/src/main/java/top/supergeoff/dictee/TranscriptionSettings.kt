@@ -7,6 +7,7 @@ import android.util.Base64
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.net.URI
 import java.security.KeyStore
 import java.util.UUID
 import javax.crypto.Cipher
@@ -19,6 +20,22 @@ data class TranscriptionSettings(
     val language: String = "fr",
     val model: String = "dictee-diarize",
     val credentialRef: String? = null,
+)
+
+/** Seul le défaut relatif ou une adresse HTTP(S) de serveur terminée par /v1 est admis. */
+fun isValidTranscriptionBaseUrl(value: String): Boolean {
+    if (value == "/v1") return true
+    return try {
+        val uri = URI(value)
+        uri.scheme in setOf("http", "https") && uri.host != null &&
+            uri.rawUserInfo == null && uri.rawQuery == null && uri.rawFragment == null &&
+            uri.rawPath == "/v1" && uri.port in -1..65535 && uri.port != 0 &&
+            !uri.rawAuthority.endsWith(":")
+    } catch (_: Exception) { false }
+}
+
+class InvalidTranscriptionAddressException : Exception(
+    "Adresse invalide. Utilise une adresse HTTP(S) terminée par /v1, sans identifiants, requête ni fragment."
 )
 
 interface CredentialStore {
@@ -82,6 +99,7 @@ class TranscriptionSettingsManager(private val repository: LocalStateRepository,
     private val mutex = Mutex()
 
     suspend fun save(settings: TranscriptionSettings, newSecret: String?) = mutex.withLock {
+        if (!isValidTranscriptionBaseUrl(settings.baseUrl)) throw InvalidTranscriptionAddressException()
         try {
             repository.awaitInitialized()
             val newRef = newSecret?.takeIf { it.isNotEmpty() }?.let { credentials.save(it) }

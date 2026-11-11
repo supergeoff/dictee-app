@@ -34,6 +34,34 @@ class TranscriptionSettingsTest {
         assertEquals(defaults, LocalStateStore(file()).load().transcriptionSettings)
     }
 
+    @Test fun urlValidationRejectsCredentialsQueryFragmentAndUnexpectedPaths() = runBlocking {
+        val valid = listOf("/v1", "https://example.invalid/v1", "http://localhost:8080/v1", "https://[::1]:443/v1")
+        val invalid = listOf(
+            "https://user:synthetic-secret@example.invalid/v1",
+            "https://user%3Asynthetic-secret@example.invalid/v1",
+            "https://example.invalid/v1?api_key=synthetic-secret",
+            "https://example.invalid/v1?", "https://example.invalid/v1#synthetic-secret",
+            "https://example.invalid/v1#", "https://example.invalid/v1/",
+            "https://example.invalid/secret/v1", "https://example.invalid/%76%31",
+            "ftp://example.invalid/v1", "https:///v1", "https://example.invalid:0/v1",
+            "https://example.invalid:65536/v1", "https://example.invalid:/v1",
+        )
+        valid.forEach { assertTrue(it, isValidTranscriptionBaseUrl(it)) }
+        val store = FakeStore()
+        val repository = LocalStateRepository(LocalStateStore(file()))
+        val manager = TranscriptionSettingsManager(repository, store)
+        invalid.forEach { address ->
+            assertFalse(address, isValidTranscriptionBaseUrl(address))
+            try { manager.save(TranscriptionSettings(baseUrl = address), synthetic); fail(address) }
+            catch (e: InvalidTranscriptionAddressException) { assertFalse(e.toString().contains("synthetic-secret")) }
+            try { LocalStateStore(file()).save(LocalState(transcriptionSettings = TranscriptionSettings(baseUrl = address))); fail(address) }
+            catch (e: InvalidTranscriptionAddressException) { assertFalse(e.toString().contains("synthetic-secret")) }
+            assertTrue(store.values.isEmpty())
+            assertFalse(file().exists())
+            assertFalse(File(tmp.root, "state.json.tmp").exists())
+        }
+    }
+
     @Test fun newKeyPreservesTaskReferenceAndStateIsSecretFree() = runBlocking {
         val store = FakeStore()
         val repository = LocalStateRepository(LocalStateStore(file()))
