@@ -60,6 +60,12 @@ class TranscriptionClientTest {
         listOf("name=\"file\"; filename=\"audio.mp3\"", "Content-Type: audio/mpeg", "name=\"model\"\r\n\r\ndictee-diarize", "name=\"response_format\"\r\n\r\nvtt", "name=\"background\"\r\n\r\ntrue", "name=\"language\"\r\n\r\nfr", mp3.toString(Charsets.ISO_8859_1)).forEach { assertTrue(it, body.contains(it)) }
         assertEquals(listOf("old-ref"), creds.refs); assertTrue(c.closed)
     }
+    @Test fun multipartUsesFrozenConfigurableModel() = runBlocking {
+        reply(200, json("queued"))
+        client().submit(task().copy(model = "synthetic-alternative"))
+        val body = connections.single().written.toString(Charsets.UTF_8.name())
+        assertTrue(body.contains("name=\"model\"\r\n\r\nsynthetic-alternative\r\n"))
+    }
     @Test fun routesStatusesAndOutput() = runBlocking {
         val c = client()
         for (status in listOf("queued", "in_progress", "completed", "failed", "cancelled")) {
@@ -80,6 +86,81 @@ class TranscriptionClientTest {
         assertArrayEquals(bytes, (client().submit(task()) as SubmitResult.DirectVtt).bytes)
         reply(200, "WEBVTT\n\n", "text/vtt"); assertArrayEquals("WEBVTT\n\n".toByteArray(), (client().submit(task()) as SubmitResult.DirectVtt).bytes)
     }
+    @Test fun vttSignaturesPreserveBomAndLineEndingsInDirectAndJsonOutput() = runBlocking {
+        val endings = listOf("\n", "\r\n", "\r")
+        val client = client()
+        for (bom in listOf("", "\uFEFF")) for (ending in endings) {
+            val content = bom + "WEBVTT" + ending + ending + "00:00:00.000 --> 00:00:01.000" + ending + "é" + ending
+            val expected = content.toByteArray(Charsets.UTF_8)
+            reply(200, content, "text/vtt")
+            assertArrayEquals(expected, (client.submit(task()) as SubmitResult.DirectVtt).bytes)
+            val data = org.json.JSONObject().put("id", "job-1").put("status", "completed").put("output", content)
+            reply(200, data.toString())
+            assertArrayEquals(expected, (client.submit(task()) as SubmitResult.Accepted).task.output)
+            reply(200, data.toString())
+            assertArrayEquals(expected, client.get(task("job-1")).output)
+        }
+        for (content in listOf("\uFEFFWEBVTT", "\uFEFFWEBVTT header\r", "\uFEFFWEBVTT\tmetadata\r")) {
+            reply(200, content, "text/vtt")
+            assertArrayEquals(content.toByteArray(Charsets.UTF_8), (client.submit(task()) as SubmitResult.DirectVtt).bytes)
+        }
+        for (invalid in listOf("\uFEFF\uFEFFWEBVTT\r", "WEBVTTx\r", "xWEBVTT\r")) {
+            reply(200, invalid, "text/vtt")
+            try { client.submit(task()); fail("invalid signature accepted") } catch (_: TranscriptionProtocolException) {}
+            val data = org.json.JSONObject().put("id", "job-1").put("status", "completed").put("output", invalid)
+            reply(200, data.toString())
+            try { client.get(task("job-1")); fail("invalid JSON output accepted") } catch (_: TranscriptionProtocolException) {}
+        }
+    }
+
+    @Test fun injectableExceptionsNeverCrossTheBoundary() = runBlocking {
+        fun untrusted(kind: Int): TranscriptionClientException {
+            val error = when (kind) {
+                0 -> TranscriptionClientException("synthetic-secret in message")
+                1 -> TranscriptionClientException("safe-looking").apply { initCause(IOException("synthetic-secret in cause")) }
+                2 -> TranscriptionClientException("safe-looking").apply { addSuppressed(IOException("synthetic-secret in suppressed")) }
+                3 -> TranscriptionHttpException(401).apply { addSuppressed(IOException("synthetic-secret in suppressed")) }
+                else -> TranscriptionProtocolException().apply { initCause(IOException("synthetic-secret in cause")) }
+            }
+            return error
+        }
+        for (kind in 0..4) for (phase in listOf("openMp3", "readMp3", "closeMp3", "openConnection", "writeRequest", "readResponse")) {
+            lateinit var providerError: TranscriptionClientException
+            fun failFromProvider(): Nothing { providerError = untrusted(kind); throw providerError }
+            val c = UrlTranscriptionClient(creds, {
+                if (phase == "openMp3") failFromProvider()
+                object : ByteArrayInputStream(mp3) {
+                    override fun read(b: ByteArray, off: Int, len: Int): Int {
+                        if (phase == "readMp3") failFromProvider()
+                        return super.read(b, off, len)
+                    }
+                    override fun close() { if (phase == "closeMp3") failFromProvider() }
+                }
+            }, { url ->
+                if (phase == "openConnection") failFromProvider()
+                object : HttpURLConnection(url) {
+                    override fun connect() {}
+                    override fun disconnect() {}
+                    override fun usingProxy() = false
+                    override fun getResponseCode(): Int { if (phase == "readResponse") failFromProvider(); return 200 }
+                    override fun getInputStream(): InputStream = ByteArrayInputStream("WEBVTT\n".toByteArray())
+                    override fun getOutputStream(): OutputStream = if (phase == "writeRequest") object : OutputStream() {
+                        override fun write(b: Int) { failFromProvider() }
+                    } else ByteArrayOutputStream()
+                }
+            })
+            try { c.submit(task()); fail("expected failure: $phase, $kind") } catch (e: TranscriptionNetworkException) {
+                assertSafeError(e)
+                var cause: Throwable? = e
+                while (cause != null) {
+                    assertNotSame("provider exception must not cross the boundary", providerError, cause)
+                    assertTrue(cause.suppressed.isEmpty())
+                    cause = cause.cause
+                }
+            }
+        }
+    }
+
     @Test fun errorsNeverRetryOrLeak() = runBlocking {
         for ((code, body) in listOf(400 to "{\"error\":\"synthetic-secret\"}", 401 to "synthetic-secret", 404 to "synthetic-secret", 429 to "{\"error\":{\"code\":\"long_audio_busy\"}}", 200 to "{\"id\":\"job-1\"}")) {
             val before = connections.size; reply(code, body)

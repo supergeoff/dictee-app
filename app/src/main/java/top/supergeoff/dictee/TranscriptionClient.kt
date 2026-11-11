@@ -55,6 +55,15 @@ class UrlTranscriptionClient(
 ) : TranscriptionClient {
     init { require(totalTimeoutMs > 0) }
 
+    private enum class FailureKind { CREDENTIAL, PROTOCOL, HTTP }
+    private class InternalFailure(val kind: FailureKind, val code: Int = 0) : Exception()
+
+    private fun safeFailure(failure: InternalFailure): Exception = when (failure.kind) {
+        FailureKind.CREDENTIAL -> CredentialException()
+        FailureKind.PROTOCOL -> TranscriptionProtocolException()
+        FailureKind.HTTP -> TranscriptionHttpException(failure.code)
+    }
+
     override suspend fun submit(task: TranscriptionTask): SubmitResult = execute { resources ->
         val connection = connection(task.serverAddress, task.encryptedKeyRef, "/audio/transcriptions", "POST", resources)
         val boundary = "dictee-" + UUID.randomUUID()
@@ -83,13 +92,13 @@ class UrlTranscriptionClient(
     override suspend fun get(task: TranscriptionTask): ServerTask = execute { resources ->
         val id = safeId(task.serverId)
         val c = connection(task.serverAddress, task.encryptedKeyRef, "/audio/transcriptions/$id?response_format=vtt", "GET", resources)
-        parseTask(response(c)).also { if (it.id != id) throw TranscriptionProtocolException() }
+        parseTask(response(c)).also { if (it.id != id) throw InternalFailure(FailureKind.PROTOCOL) }
     }
 
     override suspend fun cancel(task: TranscriptionTask): ServerTask = execute { resources ->
         val id = safeId(task.serverId)
         val c = connection(task.serverAddress, task.encryptedKeyRef, "/audio/transcriptions/$id/cancel", "POST", resources)
-        parseTask(response(c)).also { if (it.id != id) throw TranscriptionProtocolException() }
+        parseTask(response(c)).also { if (it.id != id) throw InternalFailure(FailureKind.PROTOCOL) }
     }
 
     override suspend fun test(settings: TranscriptionSettings) {
@@ -100,15 +109,15 @@ class UrlTranscriptionClient(
     }
 
     private fun safeId(id: String?): String {
-        if (id.isNullOrEmpty() || !id.matches(Regex("[A-Za-z0-9_-]+"))) throw TranscriptionProtocolException()
+        if (id.isNullOrEmpty() || !id.matches(Regex("[A-Za-z0-9_-]+"))) throw InternalFailure(FailureKind.PROTOCOL)
         return id
     }
 
     private fun connection(base: String, ref: String, path: String, method: String, resources: Resources): HttpURLConnection {
-        if (base == "/v1" || !isValidTranscriptionBaseUrl(base)) throw TranscriptionProtocolException()
-        if (ref.isBlank()) throw CredentialException()
-        val key = try { credentials.read(ref) } catch (_: Exception) { throw CredentialException() }
-        if (key.isBlank() || key.any { it == '\r' || it == '\n' }) throw CredentialException()
+        if (base == "/v1" || !isValidTranscriptionBaseUrl(base)) throw InternalFailure(FailureKind.PROTOCOL)
+        if (ref.isBlank()) throw InternalFailure(FailureKind.CREDENTIAL)
+        val key = try { credentials.read(ref) } catch (_: Exception) { throw InternalFailure(FailureKind.CREDENTIAL) }
+        if (key.isBlank() || key.any { it == '\r' || it == '\n' }) throw InternalFailure(FailureKind.CREDENTIAL)
         val c = openConnection(URL(base + path))
         resources.connection.set(c)
         if (resources.cancelled.get()) { c.disconnect(); throw CancellationException() }
@@ -122,45 +131,47 @@ class UrlTranscriptionClient(
 
     private fun response(c: HttpURLConnection): ByteArray {
         val code = c.responseCode
-        if (code !in 200..299) throw TranscriptionHttpException(code)
+        if (code !in 200..299) throw InternalFailure(FailureKind.HTTP, code)
         val bytes = c.inputStream.use { input ->
             val out = ByteArrayOutputStream()
             input.copyTo(out)
             out.toByteArray()
         }
         val length = c.contentLengthLong
-        if (length >= 0 && length != bytes.size.toLong()) throw TranscriptionProtocolException()
+        if (length >= 0 && length != bytes.size.toLong()) throw InternalFailure(FailureKind.PROTOCOL)
         return bytes
     }
 
     private fun isVtt(bytes: ByteArray): Boolean {
         val text = decode(bytes)
-        return text == "WEBVTT" || text.startsWith("WEBVTT\n") || text.startsWith("WEBVTT\r\n") || text.startsWith("WEBVTT ") || text.startsWith("WEBVTT\t")
+        val signature = if (text.startsWith('\uFEFF')) text.substring(1) else text
+        return signature == "WEBVTT" || (signature.startsWith("WEBVTT") &&
+            signature.length > 6 && signature[6] in charArrayOf('\n', '\r', ' ', '\t'))
     }
 
     private fun decode(bytes: ByteArray): String = try {
         Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString()
-    } catch (_: Exception) { throw TranscriptionProtocolException() }
+    } catch (_: Exception) { throw InternalFailure(FailureKind.PROTOCOL) }
 
     private fun parseTask(bytes: ByteArray): ServerTask = try {
         val json = JSONObject(decode(bytes))
         val id = safeId(json.opt("id") as? String)
-        val status = ServerStatus.entries.firstOrNull { it.wire == json.opt("status") } ?: throw TranscriptionProtocolException()
+        val status = ServerStatus.entries.firstOrNull { it.wire == json.opt("status") } ?: throw InternalFailure(FailureKind.PROTOCOL)
         val raw = json.opt("progress")
         val progress = if (raw == null || raw == JSONObject.NULL) null else {
-            val value = (raw as? Number)?.toDouble() ?: throw TranscriptionProtocolException()
-            if (!value.isFinite() || value !in 0.0..1.0) throw TranscriptionProtocolException()
+            val value = (raw as? Number)?.toDouble() ?: throw InternalFailure(FailureKind.PROTOCOL)
+            if (!value.isFinite() || value !in 0.0..1.0) throw InternalFailure(FailureKind.PROTOCOL)
             value
         }
         val output = when (val rawOutput = json.opt("output")) {
             null, JSONObject.NULL -> null
-            is String -> rawOutput.toByteArray(Charsets.UTF_8).also { if (!isVtt(it)) throw TranscriptionProtocolException() }
-            else -> throw TranscriptionProtocolException()
+            is String -> rawOutput.toByteArray(Charsets.UTF_8).also { if (!isVtt(it)) throw InternalFailure(FailureKind.PROTOCOL) }
+            else -> throw InternalFailure(FailureKind.PROTOCOL)
         }
-        if (status == ServerStatus.COMPLETED && output == null) throw TranscriptionProtocolException()
+        if (status == ServerStatus.COMPLETED && output == null) throw InternalFailure(FailureKind.PROTOCOL)
         ServerTask(id, status, progress, output)
-    } catch (e: TranscriptionProtocolException) { throw e }
-      catch (_: Exception) { throw TranscriptionProtocolException() }
+    } catch (e: InternalFailure) { throw e }
+      catch (_: Exception) { throw InternalFailure(FailureKind.PROTOCOL) }
 
     private class Resources {
         val connection = AtomicReference<HttpURLConnection?>()
@@ -190,10 +201,9 @@ class UrlTranscriptionClient(
                         if (continuation.isActive) continuation.resume(value)
                     } catch (_: CancellationException) {
                         if (continuation.isActive) continuation.resumeWithException(TranscriptionNetworkException())
-                    } catch (e: CredentialException) {
-                        if (continuation.isActive) continuation.resumeWithException(CredentialException())
-                    } catch (e: TranscriptionClientException) {
-                        if (continuation.isActive) continuation.resumeWithException(e)
+                    } catch (e: InternalFailure) {
+                        // Un fournisseur peut ajouter des exceptions supprimées, même à une erreur interne.
+                        if (continuation.isActive) continuation.resumeWithException(safeFailure(e))
                     } catch (_: Exception) {
                         if (continuation.isActive) continuation.resumeWithException(TranscriptionNetworkException())
                     } finally {
