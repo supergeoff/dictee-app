@@ -1,5 +1,6 @@
 package top.supergeoff.dictee
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -260,6 +261,60 @@ class AppStateIntegrationTest {
             assertEquals(0, transformCalls.get())
             assertEquals(original, store.load())
         } finally { release.countDown() }
+    }
+
+    @Test
+    fun `la reprise reussie rafraichit apres la fin retardee du premier echec`() = runBlocking {
+        val store = LocalStateStore(file())
+        val original = LocalState(deviceName = "persisté")
+        store.save(original)
+        val firstEntered = CountDownLatch(1)
+        val failFirst = CountDownLatch(1)
+        val loads = AtomicInteger()
+        val repo = LocalStateRepository(store, load = {
+            if (loads.incrementAndGet() == 1) {
+                firstEntered.countDown()
+                check(failFirst.await(10, TimeUnit.SECONDS))
+                throw SecurityException("refus")
+            }
+            store.load()
+        })
+        val coordinator = RefreshCoordinator {}
+        val oldFailed = CompletableDeferred<Unit>()
+        val releaseOld = CompletableDeferred<Unit>()
+        val reads = mutableListOf<String>()
+        val old = async(start = CoroutineStart.UNDISPATCHED) {
+            runCatching {
+                coordinator.run(waitForCurrent = false) {
+                    try { repo.awaitInitialized(); reads += "ancien" }
+                    catch (e: SecurityException) {
+                        oldFailed.complete(Unit)
+                        releaseOld.await()
+                        throw e
+                    }
+                }
+            }
+        }
+        try {
+            assertTrue(firstEntered.await(5, TimeUnit.SECONDS))
+            failFirst.countDown()
+            withTimeout(5000) { oldFailed.await() }
+            assertTrue(repo.retryInitialization())
+            assertEquals(original, withTimeout(5000) { repo.awaitInitialized() })
+            val retry = async(start = CoroutineStart.UNDISPATCHED) {
+                refreshAfterInitializationRetry(repo, { true }, coordinator) {
+                    repo.awaitInitialized()
+                    reads += listOf("téléphone", "Drive", "boîtier")
+                }
+            }
+            assertFalse(retry.isCompleted)
+            assertTrue(reads.isEmpty())
+            releaseOld.complete(Unit)
+            assertTrue(withTimeout(5000) { old.await() }.isFailure)
+            withTimeout(5000) { retry.await() }
+            assertEquals(listOf("téléphone", "Drive", "boîtier"), reads)
+            assertEquals(original, store.load())
+        } finally { failFirst.countDown(); releaseOld.complete(Unit) }
     }
 
 }

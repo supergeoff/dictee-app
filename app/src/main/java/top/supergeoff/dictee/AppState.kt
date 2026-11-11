@@ -125,6 +125,9 @@ class AppModel(
 ) {
     val journal = Journal(File(app.filesDir, "journal")) { LocalDateTime.now() }
     private val liveFlow = MutableStateFlow(Live())
+    private val refreshCoordinator = RefreshCoordinator { refreshing ->
+        liveFlow.update { it.copy(refreshing = refreshing) }
+    }
     val localRepository = repository ?: LocalStateRepository(LocalStateStore(File(app.filesDir, "state.json"))) { e ->
         val message = "Impossible d'enregistrer l'état local : ${reasonOf(e)}"
         say(message)
@@ -193,8 +196,9 @@ class AppModel(
         if (!localRepository.retryInitialization()) return
         scope.launch {
             try {
-                localRepository.awaitInitialized()
-                if (foreground) refresh()
+                refreshAfterInitializationRetry(localRepository, { foreground }, refreshCoordinator, ::readForRefresh)
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Exception) {
                 // L'écran d'initialisation affiche l'échec de cette tentative.
             }
@@ -215,18 +219,19 @@ class AppModel(
 
     /** Relit le dossier du téléphone, Drive et le boîtier. Ne demande rien au système. Un seul rafraîchissement à la fois. */
     fun refresh() {
-        scope.launch {
-            if (liveFlow.getAndUpdate { it.copy(refreshing = true) }.refreshing) return@launch
-            try {
-                localRepository.awaitInitialized()
-                coroutineScope {
-                    launch { readPhone() }
-                    launch { readDrive() }
-                    if (hasBluetooth()) launch { readBoxList() }
-                }
-            } finally {
-                liveFlow.update { it.copy(refreshing = false) }
-            }
+        scope.launch { runRefresh(waitForCurrent = false) }
+    }
+
+    private suspend fun runRefresh(waitForCurrent: Boolean) {
+        refreshCoordinator.run(waitForCurrent, ::readForRefresh)
+    }
+
+    private suspend fun readForRefresh() {
+        localRepository.awaitInitialized()
+        coroutineScope {
+            launch { readPhone() }
+            launch { readDrive() }
+            if (hasBluetooth()) launch { readBoxList() }
         }
     }
 
@@ -266,7 +271,7 @@ class AppModel(
      */
     fun associate(name: String, address: String) {
         endSearch()
-        val started = !liveFlow.getAndUpdate { it.copy(refreshing = true) }.refreshing
+        val started = refreshCoordinator.tryStart()
         val saved = update { it.copy(deviceAddress = address, deviceName = name, boxList = emptyList()) }
         scope.launch {
             try {
@@ -275,7 +280,7 @@ class AppModel(
                 box.close()
                 if (hasBluetooth()) readBoxList()
             } finally {
-                if (started) liveFlow.update { it.copy(refreshing = false) }
+                if (started) refreshCoordinator.finish()
             }
         }
     }
