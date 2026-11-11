@@ -140,4 +140,73 @@ class TranscriptionSettingsTest {
         catch (e: CredentialException) { assertFalse(e.toString().contains(synthetic)); assertNull(e.cause) }
         assertFalse(LocalStateStore(file()).load().transcriptionTasks.single().suspended)
     }
+    @Test fun migrationWarningPersistsUntilARealAddressIsSavedAndTaskDoesNotMove() = runBlocking {
+        val old = org.json.JSONObject().put("version", 3).put("transcriptionSettings", org.json.JSONObject()
+            .put("baseUrl", "https://example.invalid/v1?key=synthetic-old-secret")
+            .put("credentialRef", "kept-ref").put("language", "en").put("model", "old-model"))
+        file().writeText(old.toString())
+        val repository = LocalStateRepository(LocalStateStore(file()))
+        val manager = TranscriptionSettingsManager(repository, FakeStore())
+        val migrated = repository.awaitInitialized()
+        assertTrue(migrated.transcriptionAddressNeedsReview)
+        repository.updateDurably { it.copy(transcriptionTasks = listOf(task("task-ref"))) }
+        manager.save(migrated.transcriptionSettings, null)
+        assertTrue(LocalStateStore(file()).load().transcriptionAddressNeedsReview)
+        manager.save(migrated.transcriptionSettings.copy(baseUrl = "https://new.example.invalid/v1"), null)
+        val loaded = LocalStateStore(file()).load()
+        assertFalse(loaded.transcriptionAddressNeedsReview)
+        assertEquals("kept-ref", loaded.transcriptionSettings.credentialRef)
+        assertEquals(task("task-ref"), loaded.transcriptionTasks.single())
+        assertFalse(file().readText().contains("synthetic-old-secret"))
+    }
+
+    @Test fun unsafeFrozenTaskAddressIsNeverWrittenOrUsed() = runBlocking {
+        val secret = "synthetic-task-secret"
+        val unsafe = task("task-ref").copy(serverAddress = "https://example.invalid/v1?key=$secret")
+        try { LocalStateStore(file()).save(LocalState(transcriptionTasks = listOf(unsafe))); fail() }
+        catch (e: InvalidTranscriptionAddressException) { assertFalse(e.toString().contains(secret)) }
+        assertFalse(file().exists())
+        assertFalse(File(tmp.root, "state.json.tmp").exists())
+        LocalStateStore(file()).save(LocalState(transcriptionTasks = listOf(task("task-ref"))))
+        val old = org.json.JSONObject(file().readText())
+        old.getJSONArray("transcriptionTasks").getJSONObject(0).put("serverAddress", unsafe.serverAddress)
+        file().writeText(old.toString())
+        val fake = FakeStore().apply { values["task-ref"] = synthetic }
+        val repo = LocalStateRepository(LocalStateStore(file()))
+        assertNull(TranscriptionSettingsManager(repo, fake).readForTask("1"))
+        assertTrue(repo.awaitInitialized().transcriptionTasks.single().suspended)
+        repo.updateDurably { it.copy(theme = ThemeChoice.DARK) }
+        val blocked = LocalStateStore(file()).load().transcriptionTasks.single()
+        assertEquals("", blocked.serverAddress)
+        assertTrue(blocked.suspended)
+        assertEquals("task-ref", blocked.encryptedKeyRef)
+        assertFalse(file().readText().contains(secret))
+        TranscriptionSettingsManager(repo, fake).save(TranscriptionSettings(baseUrl = "https://new.example.invalid/v1"), null)
+        assertEquals(blocked, LocalStateStore(file()).load().transcriptionTasks.single())
+        assertNull(TranscriptionSettingsManager(repo, fake).readForTask("1"))
+    }
+
+    @Test fun migrationCoversForbiddenAddressFormsWithoutChangingOtherSettings() {
+        val invalid = listOf("https://user:synthetic@example.invalid/v1",
+            "https://example.invalid/v1?token=synthetic", "https://example.invalid/v1#synthetic",
+            "https://example.invalid/other", "not a url")
+        invalid.forEach { address ->
+            val before = org.json.JSONObject().put("version", 3).put("transcriptionSettings", org.json.JSONObject()
+                .put("baseUrl", address).put("credentialRef", "ref-kept").put("language", "en").put("model", "model-kept")).toString()
+            file().writeText(before)
+            val loaded = LocalStateStore(file()).load()
+            assertEquals(before, file().readText())
+            assertEquals(TranscriptionSettings("/v1", "en", "model-kept", "ref-kept"), loaded.transcriptionSettings)
+            assertTrue(loaded.transcriptionAddressNeedsReview)
+            assertFalse(loaded.toString().contains("synthetic"))
+            LocalStateStore(file()).save(loaded)
+            assertFalse(file().readText().contains("synthetic"))
+            assertTrue(LocalStateStore(file()).load().transcriptionAddressNeedsReview)
+        }
+        val valid = TranscriptionSettings(baseUrl = "https://example.invalid/v1", credentialRef = "ref-kept")
+        LocalStateStore(file()).save(LocalState(transcriptionSettings = valid))
+        assertEquals(valid, LocalStateStore(file()).load().transcriptionSettings)
+        assertFalse(LocalStateStore(file()).load().transcriptionAddressNeedsReview)
+    }
+
 }

@@ -48,6 +48,7 @@ data class LocalState(
     val theme: ThemeChoice = ThemeChoice.SYSTEM,
     val transcriptionTasks: List<TranscriptionTask> = emptyList(),
     val transcriptionSettings: TranscriptionSettings = TranscriptionSettings(),
+    val transcriptionAddressNeedsReview: Boolean = false,
 ) {
     /** Ajoute l'erreur de cette étape, ou remplace celle qu'elle avait déjà pour ce nom. */
     fun withError(name: String, step: Step, message: String): LocalState =
@@ -94,7 +95,8 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
     /** Écrit l'état dans `state.json.tmp`, puis le renomme sur `state.json`. */
     @Synchronized
     fun save(state: LocalState) {
-        if (!isValidTranscriptionBaseUrl(state.transcriptionSettings.baseUrl)) throw InvalidTranscriptionAddressException()
+        if (!isValidTranscriptionBaseUrl(state.transcriptionSettings.baseUrl) ||
+            state.transcriptionTasks.any { !isSafeStoredTaskAddress(it) }) throw InvalidTranscriptionAddressException()
         val json = JSONObject()
             .put("version", VERSION)
             .put("deviceAddress", state.deviceAddress ?: JSONObject.NULL)
@@ -115,6 +117,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
                 }
             })
             .put("theme", state.theme.name)
+            .put("transcriptionAddressNeedsReview", state.transcriptionAddressNeedsReview)
             .put("transcriptionSettings", JSONObject()
                 .put("baseUrl", state.transcriptionSettings.baseUrl)
                 .put("language", state.transcriptionSettings.language)
@@ -150,20 +153,25 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
         if (!rename(tmp, file)) throw IOException("Impossible de remplacer state.json")
     }
 
-    private fun read(json: JSONObject): LocalState = LocalState(
-        deviceAddress = json.stringOrNull("deviceAddress"),
-        deviceName = json.stringOrNull("deviceName"),
-        boxList = json.arrayOrNull("boxList")?.let { readBoxList(it) }.orEmpty(),
-        phoneTreeUri = json.stringOrNull("phoneTreeUri"),
-        driveEnabled = json.booleanOr("driveEnabled", false),
-        driveAccount = json.stringOrNull("driveAccount"),
-        knownFolders = json.arrayOrNull("knownFolders")?.let { readKnownFolders(it) }.orEmpty(),
-        chosenFolderId = json.stringOrNull("chosenFolderId"),
-        errors = json.objectOrNull("errors")?.let { readErrors(it) }.orEmpty(),
-        theme = json.stringOrNull("theme").toEnumOr(ThemeChoice.SYSTEM),
-        transcriptionTasks = json.arrayOrNull("transcriptionTasks")?.let { readTasks(it) }.orEmpty(),
-        transcriptionSettings = json.objectOrNull("transcriptionSettings")?.let { readSettings(it) } ?: TranscriptionSettings(),
-    )
+    private fun read(json: JSONObject): LocalState {
+        val settings = json.objectOrNull("transcriptionSettings")?.let { readSettings(it) } ?: TranscriptionSettings()
+        val invalidAddress = !isValidTranscriptionBaseUrl(settings.baseUrl)
+        return LocalState(
+            deviceAddress = json.stringOrNull("deviceAddress"),
+            deviceName = json.stringOrNull("deviceName"),
+            boxList = json.arrayOrNull("boxList")?.let { readBoxList(it) }.orEmpty(),
+            phoneTreeUri = json.stringOrNull("phoneTreeUri"),
+            driveEnabled = json.booleanOr("driveEnabled", false),
+            driveAccount = json.stringOrNull("driveAccount"),
+            knownFolders = json.arrayOrNull("knownFolders")?.let { readKnownFolders(it) }.orEmpty(),
+            chosenFolderId = json.stringOrNull("chosenFolderId"),
+            errors = json.objectOrNull("errors")?.let { readErrors(it) }.orEmpty(),
+            theme = json.stringOrNull("theme").toEnumOr(ThemeChoice.SYSTEM),
+            transcriptionTasks = json.arrayOrNull("transcriptionTasks")?.let { readTasks(it) }.orEmpty(),
+            transcriptionSettings = if (invalidAddress) settings.copy(baseUrl = "/v1") else settings,
+            transcriptionAddressNeedsReview = invalidAddress || json.booleanOr("transcriptionAddressNeedsReview", false),
+        )
+    }
 
     /** Reprise de la 0.1.5 : boîtier et nom gardés, dossier Drive devenu dossier connu, enregistrements abandonnés. */
     private fun migrate(json: JSONObject): LocalState {
@@ -205,7 +213,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
         val phaseName = o.getString("phase")
         val phase = TranscriptionPhase.entries.firstOrNull { it.name == phaseName }
             ?: throw JSONException("Phase de transcription inconnue : $phaseName")
-        TranscriptionTask(
+        val task = TranscriptionTask(
             localId = o.getString("localId"), recordingName = o.getString("recordingName"),
             mp3Name = o.getString("mp3Name"), vttName = o.getString("vttName"),
             folderUri = o.getString("folderUri"), mp3Sha256 = o.getString("mp3Sha256"),
@@ -214,6 +222,9 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
             serverId = o.stringOrNull("serverId"), progress = if (o.isNull("progress")) null else o.getDouble("progress"),
             error = o.stringOrNull("error"), suspended = o.booleanOr("suspended", false),
             suspensionReason = o.stringOrNull("suspensionReason"),
+        )
+        if (isSafeStoredTaskAddress(task)) task else task.copy(
+            serverAddress = "", suspended = true, suspensionReason = INVALID_TASK_ADDRESS_REASON,
         )
     }
 

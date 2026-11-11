@@ -14,7 +14,7 @@ class TranscriptionStateTest {
 internal fun sampleTask() = TranscriptionTask(
     localId = "local-1", recordingName = "20261030160502", mp3Name = "Note-20261030160502.mp3",
     vttName = "Note-20261030160502.vtt", folderUri = "content://test/tree", mp3Sha256 = "a".repeat(64),
-    serverAddress = "https://example.invalid", encryptedKeyRef = "encrypted-key-ref", language = "fr", model = "test-model",
+    serverAddress = "https://example.invalid/v1", encryptedKeyRef = "encrypted-key-ref", language = "fr", model = "test-model",
     phase = TranscriptionPhase.PENDING, serverId = null, progress = null, error = null,
     suspended = false, suspensionReason = null,
 )

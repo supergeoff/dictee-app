@@ -34,6 +34,13 @@ fun isValidTranscriptionBaseUrl(value: String): Boolean {
     } catch (_: Exception) { false }
 }
 
+/** Une adresse figée non sûre est remplacée par une valeur vide et la tâche reste suspendue. */
+const val INVALID_TASK_ADDRESS_REASON = "Adresse de serveur invalide. Cette tâche ne peut pas changer de serveur ; crée une nouvelle tâche après avoir vérifié les réglages."
+
+internal fun isSafeStoredTaskAddress(task: TranscriptionTask): Boolean =
+    (task.serverAddress != "/v1" && isValidTranscriptionBaseUrl(task.serverAddress)) ||
+        (task.serverAddress.isEmpty() && task.suspended && task.suspensionReason == INVALID_TASK_ADDRESS_REASON)
+
 class InvalidTranscriptionAddressException : Exception(
     "Adresse invalide. Utilise une adresse HTTP(S) terminée par /v1, sans identifiants, requête ni fragment."
 )
@@ -104,7 +111,10 @@ class TranscriptionSettingsManager(private val repository: LocalStateRepository,
             repository.awaitInitialized()
             val newRef = newSecret?.takeIf { it.isNotEmpty() }?.let { credentials.save(it) }
             repository.updateDurably { state ->
-                state.copy(transcriptionSettings = settings.copy(credentialRef = newRef ?: state.transcriptionSettings.credentialRef))
+                state.copy(
+                    transcriptionSettings = settings.copy(credentialRef = newRef ?: state.transcriptionSettings.credentialRef),
+                    transcriptionAddressNeedsReview = state.transcriptionAddressNeedsReview && settings.baseUrl == "/v1",
+                )
             }
         } catch (e: CancellationException) { throw e }
         catch (_: Exception) { throw CredentialException() }
@@ -113,6 +123,7 @@ class TranscriptionSettingsManager(private val repository: LocalStateRepository,
     /** Appelé par un futur coordinateur avant tout effet réseau. */
     suspend fun readForTask(localId: String): String? {
         val task = repository.awaitInitialized().transcriptionTasks.firstOrNull { it.localId == localId } ?: return null
+        if (task.serverAddress.isEmpty()) return null
         return try {
             credentials.read(task.encryptedKeyRef)
         } catch (e: CancellationException) { throw e }

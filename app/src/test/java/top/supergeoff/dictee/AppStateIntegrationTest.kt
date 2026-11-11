@@ -454,4 +454,46 @@ class AppStateIntegrationTest {
             assertEquals(2, saves.get())
         } finally { releaseSave.countDown() }
     }
+    @Test fun `ancienne adresse invalide ne bloque ni theme ni garde`() = runBlocking {
+        val secret = "synthetic-legacy-key"
+        val before = org.json.JSONObject().put("version", 3).put("transcriptionSettings", org.json.JSONObject()
+            .put("baseUrl", "https://example.invalid/v1?key=$secret").put("credentialRef", "ref-kept")).toString()
+        file().writeText(before)
+        val repository = LocalStateRepository(LocalStateStore(file()))
+        val migrated = repository.awaitInitialized()
+        assertTrue(migrated.transcriptionAddressNeedsReview)
+        assertEquals(before, file().readText())
+        AppLocalState(repository).setTheme(ThemeChoice.DARK).await().getOrThrow()
+        val safety = RecoverySafety(repository)
+        var effect = false
+        safety.withTransferLock {
+            safety.begin(name)
+            assertTrue(Step.RECOVER in LocalStateStore(file()).load().errors.getValue(name))
+            effect = true
+        }
+        assertTrue(effect)
+        val persisted = LocalStateStore(file()).load()
+        assertEquals(ThemeChoice.DARK, persisted.theme)
+        assertTrue(persisted.transcriptionAddressNeedsReview)
+        assertEquals("ref-kept", persisted.transcriptionSettings.credentialRef)
+        assertFalse(file().readText().contains(secret))
+    }
+
+    @Test fun `apres migration un echec disque bloque toujours l effet protege`() = runBlocking {
+        val before = org.json.JSONObject().put("version", 3).put("transcriptionSettings", org.json.JSONObject()
+            .put("baseUrl", "https://example.invalid/v1?key=synthetic-failure-secret").put("credentialRef", "ref-kept")).toString()
+        file().writeText(before)
+        val repo = LocalStateRepository(LocalStateStore(file(), rename = { _, _ -> false }))
+        val safety = RecoverySafety(repo)
+        var effect = false
+        try {
+            safety.withTransferLock { safety.begin(name); effect = true }
+            fail("la garde doit échouer")
+        } catch (_: RecoveryGuardException) { }
+        assertFalse(effect)
+        assertEquals(before, file().readText())
+        assertFalse(File(tmp.root, "state.json.tmp").readText().contains("synthetic-failure-secret"))
+        assertTrue(repo.awaitInitialized().errors.isEmpty())
+    }
+
 }

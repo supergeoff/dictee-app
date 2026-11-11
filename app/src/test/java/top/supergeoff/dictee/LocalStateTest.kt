@@ -284,4 +284,37 @@ class LocalStateTest {
         assertEquals(result, LocalStateStore(file()).load())
     }
 
+    @Test fun `lecture migre en memoire sans toucher au fichier`() {
+        val store = LocalStateStore(file())
+        val valid = sampleTask()
+        store.save(LocalState(deviceName = "boitier", transcriptionTasks = listOf(valid, valid.copy(localId = "ancien"))))
+        val old = org.json.JSONObject(file().readText())
+        val secret = "synthetic-legacy-secret"
+        val invalid = "https://user:$secret@example.invalid/v1?key=$secret"
+        old.put("transcriptionSettings", org.json.JSONObject().put("baseUrl", invalid)
+            .put("language", "en").put("model", "old-model").put("credentialRef", "kept-ref"))
+        old.getJSONArray("transcriptionTasks").getJSONObject(1).put("serverAddress", invalid)
+        file().writeText(old.toString())
+        val before = file().readBytes()
+        val loaded = store.load()
+        assertTrue(before.contentEquals(file().readBytes()))
+        assertFalse(File(tmp.root, "state.json.tmp").exists())
+        assertFalse(File(tmp.root, "state.json.bad").exists())
+        assertEquals("/v1", loaded.transcriptionSettings.baseUrl)
+        assertEquals("en", loaded.transcriptionSettings.language)
+        assertEquals("old-model", loaded.transcriptionSettings.model)
+        assertEquals("kept-ref", loaded.transcriptionSettings.credentialRef)
+        assertTrue(loaded.transcriptionAddressNeedsReview)
+        assertEquals(valid, loaded.transcriptionTasks.first())
+        val blocked = loaded.transcriptionTasks.last()
+        assertEquals("", blocked.serverAddress)
+        assertTrue(blocked.suspended)
+        assertEquals(INVALID_TASK_ADDRESS_REASON, blocked.suspensionReason)
+        assertEquals(valid.encryptedKeyRef, blocked.encryptedKeyRef)
+        assertFalse(loaded.toString().contains(secret))
+        store.save(loaded.copy(theme = ThemeChoice.DARK))
+        assertFalse(file().readText().contains(secret))
+        assertEquals(loaded.copy(theme = ThemeChoice.DARK), store.load())
+    }
+
 }

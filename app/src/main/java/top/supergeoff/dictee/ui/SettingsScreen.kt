@@ -203,6 +203,9 @@ private fun TranscriptionSection(local: LocalState, form: TranscriptionSettingsF
     val settings = local.transcriptionSettings
     Section("Transcription") {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (local.transcriptionAddressNeedsReview) {
+                Text("L’ancienne adresse de transcription était invalide. Saisis une adresse de serveur et enregistre les réglages.", color = Dictee.colors.textSecondary)
+            }
             OutlinedTextField(draft.baseUrl, form::setBaseUrl, enabled = draft.initialized && !draft.saving, label = { Text("Adresse du serveur (/v1)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(draft.secret, form::setSecret, enabled = draft.initialized && !draft.saving, label = { Text("Nouvelle clé") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
             Text(if (settings.credentialRef == null) "Aucune clé enregistrée" else "Une clé est enregistrée. Laisse ce champ vide pour la conserver.", color = Dictee.colors.textSecondary)
@@ -212,6 +215,9 @@ private fun TranscriptionSection(local: LocalState, form: TranscriptionSettingsF
             draft.message?.let { Text(it, color = Dictee.colors.textSecondary) }
             local.transcriptionTasks.filter { it.suspended && it.suspensionReason?.contains("Clé inaccessible") == true }.forEach { task ->
                 Text("${task.recordingName} : clé inaccessible. La nouvelle clé ne modifie pas cette tâche ; il faudra la relancer avec les nouveaux réglages.", color = Dictee.colors.textSecondary)
+            }
+            local.transcriptionTasks.filter { it.suspended && it.serverAddress.isEmpty() }.forEach { task ->
+                Text("${task.recordingName} : adresse de serveur invalide. Cette tâche ne peut pas changer de serveur ; crée une nouvelle tâche après avoir vérifié les réglages.", color = Dictee.colors.textSecondary)
             }
             Text("Le test de connexion sera disponible ultérieurement.", color = Dictee.colors.textSecondary)
         }
