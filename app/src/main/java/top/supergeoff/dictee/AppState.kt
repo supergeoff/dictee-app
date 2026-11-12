@@ -11,8 +11,10 @@ import androidx.core.net.toUri
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -98,6 +100,7 @@ private data class Live(
 
 private val BLUETOOTH_PERMISSIONS = listOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
 private const val PHONE_FOLDER_LOST = "Dossier du téléphone inaccessible. Choisis-le de nouveau dans Réglages."
+private const val TRANSCRIPTION_POLL_MS = 5_000L
 private const val OUT_OF_RANGE = "Boîtier hors de portée."
 private const val NO_FOLDER = "Aucun dossier choisi"
 private const val WAIT_FOR_TRANSFER = "Attends la fin du transfert pour changer de dossier."
@@ -137,7 +140,25 @@ class AppModel(
         get() = checkNotNull(localRepository.state.value) { "L'état local n'est pas encore chargé" }
     private val appLocalState = AppLocalState(localRepository)
     val recoverySafety = RecoverySafety(localRepository)
-    val transcriptionSettings = TranscriptionSettingsManager(localRepository, AndroidCredentialStore(app))
+    private val transcriptionCredentials = AndroidCredentialStore(app)
+    val transcriptionSettings = TranscriptionSettingsManager(localRepository, transcriptionCredentials)
+    internal val transcriptionCoordinator: TranscriptionCoordinator by lazy {
+        val scheduler = TranscriptionSchedule(androidx.work.WorkManager.getInstance(app))
+        val client = UrlTranscriptionClient(transcriptionCredentials, { task ->
+            PhoneFolder(app, task.folderUri.toUri()).open(task.mp3Name)
+        })
+        TranscriptionCoordinator(localRepository, client, transcriptionSettings, recoverySafety,
+            verifyAudio = { task -> withContext(Dispatchers.IO) {
+                TranscriptionAudio.matches(PhoneFolder(app, task.folderUri.toUri()), task)
+            } },
+            prepare = { names -> withContext(Dispatchers.IO) {
+                val state = localRepository.awaitInitialized()
+                val folder = state.phoneTreeUri ?: throw PhoneStoreException(PHONE_FOLDER_LOST)
+                TranscriptionPreparation.prepare(PhoneFolder(app, folder.toUri()), folder,
+                    state.transcriptionSettings, state.errors, names) { java.util.UUID.randomUUID().toString() }
+            } },
+            schedule = scheduler::enqueue, launch = { startWork() })
+    }
 
     private val scope = CoroutineScope(
         SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, e -> journal.error(Source.APP, reasonOf(e)) },
@@ -210,6 +231,7 @@ class AppModel(
 
     fun onForeground() {
         foregroundBoxGate.onForeground()
+        scope.launch { transcriptionCoordinator.reconcile() }
         scope.launch { refreshWhenForeground(refreshCoordinator, { foregroundBoxGate.isForeground }, ::readForRefresh) }
     }
 
@@ -388,6 +410,46 @@ class AppModel(
             localRepository.awaitInitialized()
             if (localFlow.driveEnabled && !liveFlow.value.sending) sendNow(names)
         }
+    }
+
+    @Volatile private var transcriptionLoop: Job? = null
+
+    /**
+     * Lance la transcription de [names] (null : tout ce qui est éligible). La planification WorkManager est confirmée avant
+     * la tâche durable et le service ; la boucle interactive suit ensuite les tâches jusqu'à leur fin ou leur suspension.
+     */
+    fun transcribe(names: Set<String>?) {
+        scope.launch {
+            jobs.incrementAndGet()
+            try {
+                val started = transcriptionCoordinator.start(names)
+                if (started.isNotEmpty()) {
+                    val loop = scope.launch { followTranscriptions() }
+                    transcriptionLoop = loop
+                    loop.join()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                journal.error(Source.APP, "transcription : ${reasonOf(e)}")
+                say(reasonOf(e))
+            } finally {
+                jobs.decrementAndGet()
+            }
+        }
+    }
+
+    private suspend fun followTranscriptions() {
+        while (true) {
+            val next = localFlow.transcriptionTasks.filter { !it.phase.isTerminal() && !it.suspended }
+                .minByOrNull { it.recordingName } ?: return
+            if (transcriptionCoordinator.runBounded(next.localId) == RunOutcome.Resume) delay(TRANSCRIPTION_POLL_MS)
+        }
+    }
+
+    /** Cesse le suivi interactif (timeout du service) ; le travail périodique déjà programmé prend le relais. */
+    fun stopInteractiveTranscription() {
+        transcriptionLoop?.cancel()
     }
 
     private suspend fun sendNow(names: List<String>?) {

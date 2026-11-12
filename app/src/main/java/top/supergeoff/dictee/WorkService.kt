@@ -57,6 +57,7 @@ class WorkService : Service() {
 
     /** Android 15 limite la durée d'un service `dataSync` et exige l'arrêt dans les secondes qui suivent ce rappel. */
     override fun onTimeout(startId: Int, fgsType: Int) {
+        model().stopInteractiveTranscription()
         stopping = true
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
