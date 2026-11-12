@@ -45,8 +45,9 @@ L'app garde une seule activité. Le passage d'un écran à l'autre suit une pile
 - Les filtres sont « Tous », « À relire » et « Sur le boîtier », chacun avec son compteur. « Sur le boîtier » retient les enregistrements du boîtier qui n'ont aucun fichier sur le téléphone. « À relire » ne retient aucun enregistrement en 0.2.4 et affiche toujours 0.
 - « Récupérer (N) » compte les enregistrements du boîtier qui ne sont ni sur le téléphone ni dans Drive. Il n'est actif que si la liaison est ouverte, qu'aucune récupération ne tourne et que N n'est pas nul. Il affiche « Récupération… » pendant le travail.
 - « Envoyer (N) » n'apparaît que si Drive est activé. Il compte les enregistrements dont au moins un fichier du téléphone manque dans le dossier Drive, sauf ceux dont la récupération est en erreur. Tant que le contenu du dossier Drive n'est pas connu, il compte tous les enregistrements qui ont un fichier sur le téléphone. Il affiche « Envoi… » pendant le travail.
+- « VTT + MD (N) » se place entre « Envoyer » et « Récupérer ». Sans sélection, il compte les MP3 du téléphone sans VTT, du plus ancien au plus récent ; en sélection, il compte les lignes cochées qui ont un MP3, même avec un VTT déjà présent (le serveur peut alors rendre un résultat déjà calculé : l'app ne force pas de recalcul). Il ne produit pas encore de MD et n'envoie rien vers Drive. Une ligne sans MP3 ou en erreur de récupération est signalée par un message ; une ligne déjà en cours n'est pas relancée.
 - Un appui long passe en sélection. La barre affiche le nombre de lignes cochées, une croix pour sortir et « Tout », qui coche les lignes du filtre en cours. Les deux boutons portent alors sur les lignes cochées : récupérer une ligne cochée la transfère de nouveau depuis le boîtier, quel que soit son état. La sélection se vide après l'action.
-- La barre d'avancement affiche « Récupération i/N · p % » ou « Envoi i/N · p % ». Pour un envoi, N compte les fichiers, et p est le pourcentage du fichier en cours. Les deux barres peuvent s'afficher l'une sous l'autre.
+- La barre d'avancement affiche « Récupération i/N · p % » ou « Envoi i/N · p % ». Pour un envoi, N compte les fichiers, et p est le pourcentage du fichier en cours. Une transcription affiche « Transcription i/N · p % », ou « Transcription i/N » avec une barre indéterminée quand le serveur ne donne pas d'avancement. Les barres peuvent s'afficher les unes sous les autres.
 
 ### Fiche d'un enregistrement
 
@@ -55,10 +56,13 @@ L'app garde une seule activité. Le passage d'un écran à l'autre suit une pile
 - Le lecteur lit le MP3 du téléphone avec `MediaPlayer` : lecture, pause, barre de position et temps en minutes et secondes. Sans MP3 sur le téléphone, la fiche affiche « Le MP3 n'est pas encore sur le téléphone. ». La lecture se met en pause quand l'app passe en arrière-plan.
 - La fiche affiche le nom du fichier et son dossier. Elle se ferme d'elle-même si l'enregistrement disparaît de la liste.
 - Bandeau d'erreur : il affiche la raison en clair et un bouton « Réessayer », qui relance la récupération ou l'envoi selon l'étape en erreur.
+- Quand un VTT est présent, la carte « Transcription » liste ses segments avec l'heure et le locuteur ; toucher un segment place le lecteur à son début et le lance. Un VTT illisible ou sans parole n'affecte que cette carte.
+- Le menu propose « Annuler la transcription » tant qu'une tâche est active. Une confirmation prévient que, si la tâche est partagée avec d'autres clients du serveur, elle est annulée pour eux aussi. Si le serveur a déjà terminé la tâche, l'annulation n'écrit rien et ne détruit pas le VTT existant.
 
 ### Réglages
 
 - Les sections sont Boîtier, Stockage sur le téléphone, Google Drive, Apparence et À propos.
+- La section Transcription règle l'adresse du serveur, la langue et la clé, protégée par Android Keystore, avec un test de connexion.
 - Stockage : « Changer » ouvre le sélecteur de dossiers. Le changement est refusé pendant un transfert, avec le message « Attends la fin du transfert pour changer de dossier. ».
 - Google Drive : l'interrupteur « Envoyer vers Drive » demande aussitôt l'accord de Google. Une fois activé, la section affiche le compte et l'entrée « Dossier ». « Déconnecter » révoque l'accès de l'app avec `AuthorizationClient.revokeAccess`, en utilisant l'adresse du compte lue par `about.get`, puis désactive l'envoi. Désactiver l'envoi efface les erreurs d'envoi.
 - Apparence : « Clair », « Sombre » ou « Système ».
@@ -149,6 +153,15 @@ L'app reprend l'état de la version 0.1.5 au premier lancement : elle garde l'ad
 - Sa notification, sur le canal « Travaux en cours », reprend le texte de la barre d'avancement. Sur Android 13 et plus, l'app demande la permission de notification au premier travail long de chaque lancement. Un refus n'arrête pas le travail : seule la notification manque.
 - Une récupération et un envoi peuvent tourner en même temps, mais jamais deux récupérations ni deux envois.
 
+## Transcription
+
+- Le MP3 part vers `POST /v1/audio/transcriptions` (`dictee-diarize`, `response_format=vtt`, `background=true`). Le contexte (dossier, clé, adresse, empreinte SHA-256 du MP3) est figé dans `state.json` avant tout envoi, et l'identifiant serveur y est écrit dès sa réception. L'app suit ensuite la tâche par `GET`.
+- Une reprise périodique WorkManager (15 minutes au plus court, réseau requis) est programmée avant le premier envoi et couvre le retrait de l'app des récents. Un seul enregistrement est traité à la fois, du plus ancien au plus récent, par le service de premier plan ou par le worker, qui partagent le même coordinateur. Android peut retarder la reprise, et un arrêt forcé depuis les réglages Android n'est pas couvert.
+- Le serveur garde le résultat 24 heures après sa fin. Une réponse 404 peut aussi venir d'un autre compte : l'app suspend la tâche sans la renvoyer.
+- Si la réponse à l'envoi est perdue, la tâche est suspendue et l'app ne renvoie rien sans action de l'utilisateur. Un MP3 modifié ou absent suspend aussi la tâche.
+- Le VTT reçu est validé en entier (UTF-8, en-tête `WEBVTT`, horodatages), puis écrit tel quel par le mécanisme `.part` / `.old`. Un VTT invalide n'est jamais écrit. Une annulation demandée avant la promotion l'empêche. Une récupération ne peut pas écraser un MP3 suivi par une tâche active.
+- Si le serveur refuse explicitement le champ `background`, l'app l'indique ; le mode synchrone ne permet pas de reprendre une réponse perdue.
+
 ## Journal
 
 - Chaque ligne a la forme `HH:mm:ss SOURCE message`.
@@ -165,6 +178,7 @@ L'app reprend l'état de la version 0.1.5 au premier lancement : elle garde l'ad
 | Refus de `0x0b`, taille inattendue ou en-tête MP3 absent | L'enregistrement passe en erreur et la file continue avec le suivant. |
 | Erreur 401 de Drive après le nouvel essai | L'envoi s'arrête avec le message « Accès Google à renouveler ». Les fichiers restent à envoyer. |
 | Dossier Drive inaccessible | L'envoi est annulé avec un message. L'app ne remplace jamais le dossier choisi sans action de l'utilisateur. |
+| Réponse perdue à l'envoi d'une transcription, 404 du serveur, MP3 modifié | La tâche est suspendue avec un message, sans renvoi automatique. |
 | Dossier du téléphone inaccessible ou plein | L'écriture échoue, l'enregistrement passe en erreur, la file s'arrête et le message renvoie vers Réglages. |
 
 ## Architecture du code
