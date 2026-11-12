@@ -122,6 +122,7 @@ object Recordings {
     /** Sélectionne les MP3 locaux et signale les exclusions. */
     fun toTranscribe(
         recordings: List<Recording>, selectedNames: Set<String>?, errors: Map<String, Map<Step, String>>,
+        activeNames: Set<String> = emptySet(),
     ): SelectionResult {
         val candidates = mutableListOf<Recording>()
         val excluded = linkedMapOf<String, TranscriptionExclusion>()
@@ -129,6 +130,7 @@ object Recordings {
             if (selectedNames != null && recording.name !in selectedNames) continue
             if (selectedNames == null && FileKind.VTT in recording.phoneFiles) continue
             when {
+                recording.name in activeNames -> excluded[recording.name] = TranscriptionExclusion.ALREADY_ACTIVE
                 FileKind.MP3 !in recording.phoneFiles -> excluded[recording.name] = TranscriptionExclusion.MISSING_MP3
                 Step.RECOVER in errors[recording.name].orEmpty() -> excluded[recording.name] = TranscriptionExclusion.RECOVERY_FAILED
                 else -> candidates += recording

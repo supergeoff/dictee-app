@@ -48,6 +48,7 @@ import top.supergeoff.dictee.RecordType
 import top.supergeoff.dictee.Recording
 import top.supergeoff.dictee.Recordings
 import top.supergeoff.dictee.UiState
+import top.supergeoff.dictee.isTerminal
 import java.time.LocalDate
 
 /**
@@ -311,6 +312,8 @@ private fun SelectionMark(checked: Boolean) {
 private fun ActionBar(ui: UiState, model: AppModel, checked: Set<String>?, onDone: () -> Unit) {
     val recoverNames = checked?.let { names -> ui.local.boxList.map { it.name }.filter { it in names } }
     val sendNames = checked?.let { names -> ui.toSend.map { it.name }.filter { it in names } }
+    val active = ui.local.transcriptionTasks.filter { !it.phase.isTerminal() }.mapTo(mutableSetOf()) { it.recordingName }
+    val transcribe = Recordings.toTranscribe(ui.recordings, checked, ui.local.errors, active).candidates.map { it.name }
     val recoverCount = recoverNames?.size ?: ui.toRecover.size
     val sendCount = sendNames?.size ?: ui.toSend.size
     Column(modifier = Modifier.fillMaxWidth().background(Dictee.colors.surface).navigationBarsPadding()) {
@@ -329,6 +332,14 @@ private fun ActionBar(ui: UiState, model: AppModel, checked: Set<String>?, onDon
                     model.send(sendNames)
                     onDone()
                 }
+            }
+            SecondaryButton(
+                text = "VTT + MD (${transcribe.size})",
+                enabled = transcribe.isNotEmpty(),
+                modifier = Modifier.weight(1f),
+            ) {
+                model.transcribe(checked)
+                onDone()
             }
             PrimaryButton(
                 text = if (ui.recovering) "Récupération…" else "Récupérer ($recoverCount)",

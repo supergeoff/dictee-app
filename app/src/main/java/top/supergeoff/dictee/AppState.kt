@@ -362,7 +362,9 @@ class AppModel(
     private fun recoveryEntries(names: List<String>?): List<ListItem.Entry> {
         val wanted = names?.toSet() ?: buildUi(localFlow, phoneFlow.value, driveFlow.value, box.status.value, liveFlow.value)
             .toRecover.mapTo(mutableSetOf()) { it.name }
-        return localFlow.boxList.filter { it.name in wanted }
+        // Un MP3 suivi par une transcription active ne doit pas être écrasé par une récupération.
+        val inUse = localFlow.transcriptionTasks.filter { !it.phase.isTerminal() }.mapTo(mutableSetOf()) { it.recordingName }
+        return localFlow.boxList.filter { it.name in wanted && it.name !in inUse }
     }
 
     /**
@@ -433,6 +435,7 @@ class AppModel(
         scope.launch {
             jobs.incrementAndGet()
             try {
+                announceExclusions(names)
                 val started = transcriptionCoordinator.start(names)
                 if (started.isNotEmpty()) {
                     val loop = scope.launch { followTranscriptions() }
@@ -448,6 +451,17 @@ class AppModel(
                 jobs.decrementAndGet()
             }
         }
+    }
+
+    /** Signale les éléments choisis qui ne seront pas transcrits : sans MP3 sur le téléphone ou en erreur de récupération. */
+    private suspend fun announceExclusions(names: Set<String>?) {
+        if (names == null) return
+        val state = localRepository.awaitInitialized()
+        val current = buildUi(state, phoneFlow.value, driveFlow.value, box.status.value, liveFlow.value)
+        val active = state.transcriptionTasks.filter { !it.phase.isTerminal() }.mapTo(mutableSetOf()) { it.recordingName }
+        val excluded = Recordings.toTranscribe(current.recordings, names, state.errors, active).excluded
+        val missing = excluded.filterValues { it == TranscriptionExclusion.MISSING_MP3 || it == TranscriptionExclusion.RECOVERY_FAILED }.keys
+        if (missing.isNotEmpty()) say("Sans MP3 exploitable sur le téléphone, non transcrit : ${missing.sorted().joinToString(", ")}.")
     }
 
     private suspend fun followTranscriptions() {

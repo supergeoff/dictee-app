@@ -31,7 +31,7 @@ data class TranscriptionTask(
     val suspensionReason: String? = null,
 )
 
-enum class TranscriptionExclusion { MISSING_MP3, RECOVERY_FAILED }
+enum class TranscriptionExclusion { MISSING_MP3, RECOVERY_FAILED, ALREADY_ACTIVE }
 
 data class SelectionResult(
     val candidates: List<Recording>,

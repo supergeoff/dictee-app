@@ -126,6 +126,16 @@ class RecordingStateTest {
         assertEquals(mapOf(e to TranscriptionExclusion.MISSING_MP3), Recordings.toTranscribe(noVtt, null, errors).excluded)
     }
 
+    @Test fun `un travail deja actif n'est pas relance et reste signale`() {
+        val list = Recordings.merge(emptyList(),
+            listOf("Note-$n.mp3", "Note-20261031000000.mp3").map { PhoneFile(it, 100) }, null, emptyMap(), Busy())
+        val result = Recordings.toTranscribe(list, null, emptyMap(), activeNames = setOf(n))
+        assertEquals(listOf("20261031000000"), result.candidates.map { it.name })
+        assertEquals(mapOf(n to TranscriptionExclusion.ALREADY_ACTIVE), result.excluded)
+        assertEquals(TranscriptionExclusion.ALREADY_ACTIVE,
+            Recordings.toTranscribe(list, setOf(n), emptyMap(), activeNames = setOf(n)).excluded[n])
+    }
+
     @Test fun `transcription en cours avec ou sans progression serveur`() {
         assertEquals("Transcription 40 %", one(phone = listOf("Call-$n.mp3"), busy = Busy(transcribing = n, transcribingPercent = 40)).state.label)
         assertEquals("Transcription…", one(phone = listOf("Call-$n.mp3"), busy = Busy(transcribing = n)).state.label)
