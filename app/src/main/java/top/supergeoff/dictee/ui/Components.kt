@@ -195,7 +195,7 @@ fun StateBadge(state: DisplayState) {
 private fun DisplayState.tone(): BadgeTone = when (this) {
     is DisplayState.Error -> BadgeTone.Destructive
     DisplayState.OnDrive, DisplayState.Ready, DisplayState.Recovered -> BadgeTone.Success
-    is DisplayState.Recovering, DisplayState.Sending, DisplayState.OnBox -> BadgeTone.Neutral
+    is DisplayState.Recovering, DisplayState.Sending, is DisplayState.Transcribing, DisplayState.OnBox -> BadgeTone.Neutral
 }
 
 /** Pictogramme de 12 dp devant le libellé : un arc qui avance ou tourne pendant un traitement, rien pour une erreur. */
@@ -210,6 +210,11 @@ private fun BadgeIcon(state: DisplayState, tint: Color) {
             trackColor = Color.Transparent,
         )
         DisplayState.Sending -> CircularProgressIndicator(modifier = Modifier.size(12.dp), color = tint, strokeWidth = 2.dp)
+        is DisplayState.Transcribing -> state.percent?.let {
+            CircularProgressIndicator(
+                progress = { it / 100f }, modifier = Modifier.size(12.dp), color = tint, strokeWidth = 2.dp, trackColor = Color.Transparent,
+            )
+        } ?: CircularProgressIndicator(modifier = Modifier.size(12.dp), color = tint, strokeWidth = 2.dp)
         DisplayState.OnDrive -> BadgeSymbol(R.drawable.ic_cloud, tint)
         DisplayState.Ready, DisplayState.Recovered -> BadgeSymbol(R.drawable.ic_check, tint)
         DisplayState.OnBox -> BadgeSymbol(R.drawable.ic_recorder, tint)
@@ -295,14 +300,15 @@ private fun ButtonBox(
 
 /** Une ligne et sa barre fine par traitement en cours ; rien ne s'affiche sans récupération ni envoi. */
 @Composable
-fun ProgressBars(recovery: Progress?, send: Progress?) {
-    if (recovery == null && send == null) return
+fun ProgressBars(recovery: Progress?, send: Progress?, transcription: Progress? = null) {
+    if (recovery == null && send == null && transcription == null) return
     Column(
         modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         recovery?.let { ProgressLine(it) }
         send?.let { ProgressLine(it) }
+        transcription?.let { ProgressLine(it) }
     }
 }
 
@@ -318,7 +324,11 @@ private fun ProgressLine(progress: Progress) {
                 .clip(RoundedCornerShape(1.dp))
                 .background(colors.border),
         ) {
-            Box(
+            if (progress.percent == Progress.UNKNOWN) {
+                androidx.compose.material3.LinearProgressIndicator(
+                    modifier = Modifier.fillMaxSize(), color = colors.primary, trackColor = Color.Transparent,
+                )
+            } else Box(
                 modifier = Modifier
                     .fillMaxWidth(progress.percent.coerceIn(0, 100) / 100f)
                     .fillMaxHeight()

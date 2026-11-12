@@ -81,7 +81,7 @@ class WorkService : Service() {
             stopSelf(lastStartId)
             return
         }
-        show(listOfNotNull(ui.recovery?.label(), ui.send?.label()).joinToString("\n").ifEmpty { PREPARING })
+        show(listOfNotNull(ui.recovery?.label(), ui.send?.label(), ui.transcription?.label()).joinToString("\n").ifEmpty { PREPARING })
     }
 
     private fun show(text: String) {

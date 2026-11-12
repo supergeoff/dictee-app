@@ -121,7 +121,7 @@ fun RecordingsScreen(ui: UiState, model: AppModel, onOpen: (name: String) -> Uni
         } else {
             SelectionBar(checked.size, onClose = selection::clear, onAll = { selection.addAll(shown.map { it.name }) })
         }
-        ProgressBars(ui.recovery, ui.send)
+        ProgressBars(ui.recovery, ui.send, ui.transcription)
         Filters(ui.recordings, filter) { filter = it }
         PullToRefreshBox(isRefreshing = ui.refreshing, onRefresh = model::refresh, modifier = Modifier.weight(1f)) {
             when {

@@ -56,6 +56,7 @@ import top.supergeoff.dictee.R
 import top.supergeoff.dictee.RecordName
 import top.supergeoff.dictee.Recording
 import top.supergeoff.dictee.UiState
+import top.supergeoff.dictee.isTerminal
 
 /**
  * Fiche d'un enregistrement : titre, durée et état dans l'en-tête, le lecteur du MP3 du téléphone, puis le fichier et son dossier.
@@ -71,7 +72,24 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
     }
     val canRecover = ui.local.boxList.any { it.name == name } && ui.link == LinkStatus.CONNECTED && !ui.recovering
     Column(modifier = Modifier.fillMaxSize().background(Dictee.colors.background)) {
-        RecordingBar(recording, canRecover, onBack, onRecover = { model.recover(listOf(name)) })
+        val cancellable = ui.local.transcriptionTasks.any { it.recordingName == name && !it.phase.isTerminal() }
+        var confirmCancel by remember { mutableStateOf(false) }
+        if (confirmCancel) {
+            DicteeDialog(
+                title = "Annuler la transcription ?",
+                confirm = "Annuler la transcription",
+                destructive = true,
+                onConfirm = { confirmCancel = false; model.cancelTranscription(name) },
+                onDismiss = { confirmCancel = false },
+            ) {
+                Text(
+                    text = "Si cette tâche est partagée avec d'autres clients du serveur, elle sera annulée pour eux aussi.",
+                    style = Dictee.type.caption, color = Dictee.colors.textSecondary,
+                )
+            }
+        }
+        RecordingBar(recording, canRecover, onBack, onRecover = { model.recover(listOf(name)) },
+            canCancelTranscription = cancellable, onCancelTranscription = { confirmCancel = true })
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -94,7 +112,10 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
 
 /** En-tête : le retour, le titre, la durée avec l'état, puis le menu. */
 @Composable
-private fun RecordingBar(recording: Recording, canRecover: Boolean, onBack: () -> Unit, onRecover: () -> Unit) {
+private fun RecordingBar(
+    recording: Recording, canRecover: Boolean, onBack: () -> Unit, onRecover: () -> Unit,
+    canCancelTranscription: Boolean, onCancelTranscription: () -> Unit,
+) {
     val colors = Dictee.colors
     Row(
         modifier = Modifier
@@ -118,7 +139,7 @@ private fun RecordingBar(recording: Recording, canRecover: Boolean, onBack: () -
                 StateBadge(recording.state)
             }
         }
-        RecordingMenu(canRecover, onRecover)
+        RecordingMenu(canRecover, onRecover, canCancelTranscription, onCancelTranscription)
     }
 }
 
@@ -128,7 +149,7 @@ private fun duration(recording: Recording): String =
 
 /** Menu de la fiche : « Récupérer à nouveau », grisé sans liaison avec le boîtier ou pendant une récupération. */
 @Composable
-private fun RecordingMenu(canRecover: Boolean, onRecover: () -> Unit) {
+private fun RecordingMenu(canRecover: Boolean, onRecover: () -> Unit, canCancelTranscription: Boolean, onCancelTranscription: () -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
         IconAction(R.drawable.ic_more, "Plus d'actions") { open = true }
@@ -145,6 +166,13 @@ private fun RecordingMenu(canRecover: Boolean, onRecover: () -> Unit) {
                 onClick = {
                     open = false
                     onRecover()
+                },
+            )
+            if (canCancelTranscription) DropdownMenuItem(
+                text = { Text(text = "Annuler la transcription", style = Dictee.type.rowTitle) },
+                onClick = {
+                    open = false
+                    onCancelTranscription()
                 },
             )
         }

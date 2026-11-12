@@ -45,6 +45,23 @@ class TranscriptionCoordinator(
         }
     }
 
+    /**
+     * L'intention d'annuler est persistée avant tout appel réseau, sans attendre le verrou : une soumission longue
+     * ne la retarde pas, et [update] la préserve face aux réponses qui arrivent ensuite.
+     */
+    suspend fun requestCancel(localId: String) {
+        repository.updateDurably { current ->
+            current.copy(transcriptionTasks = current.transcriptionTasks.map { task ->
+                if (task.localId != localId || task.phase.isTerminal()) task
+                else task.copy(
+                    phase = TranscriptionPhase.CANCEL_REQUESTED, suspended = false, suspensionReason = null,
+                    error = if (task.serverId == null && task.phase in MAYBE_SENT) CANNOT_CONFIRM else task.error,
+                )
+            })
+        }
+        mutex.withLock { recoverySafety.withTransferLock { runLocked(localId) } }
+    }
+
     suspend fun runBounded(localId: String): RunOutcome = mutex.withLock {
         recoverySafety.withTransferLock { runLocked(localId) }
     }
@@ -54,7 +71,8 @@ class TranscriptionCoordinator(
         val task = state.transcriptionTasks.firstOrNull { it.localId == localId } ?: return RunOutcome.Resume
         if (task.phase.isTerminal()) return RunOutcome.Finished
         if (task.suspended) return RunOutcome.Suspended
-        val first = state.transcriptionTasks.filter { !it.phase.isTerminal() && !it.suspended }
+        if (task.phase == TranscriptionPhase.CANCEL_REQUESTED) return cancelOnServer(task)
+        val first = state.transcriptionTasks.filter { !it.phase.isTerminal() && !it.suspended && it.phase != TranscriptionPhase.CANCEL_REQUESTED }
             .minByOrNull { it.recordingName }
         if (first?.localId != localId) return RunOutcome.Resume
 
@@ -78,6 +96,7 @@ class TranscriptionCoordinator(
             return RunOutcome.Suspended
         }
         val submitting = update(task.localId) { it.copy(phase = TranscriptionPhase.SUBMITTING) }
+        if (submitting.phase == TranscriptionPhase.CANCEL_REQUESTED) return RunOutcome.Resume
         return try {
             when (val result = client.submit(submitting)) {
                 is SubmitResult.Accepted -> applyServer(task.localId, result.task)
@@ -124,6 +143,44 @@ class TranscriptionCoordinator(
         RunOutcome.Resume
     }
 
+    private suspend fun cancelOnServer(task: TranscriptionTask): RunOutcome {
+        if (task.serverId == null) {
+            update(task.localId) { it.copy(phase = TranscriptionPhase.CANCELLED) }
+            return RunOutcome.Finished
+        }
+        if (settings.readForTask(task.localId) == null) return RunOutcome.Suspended
+        return try {
+            val server = client.cancel(task)
+            when (server.status) {
+                // Même un résultat déjà prêt n'est pas enregistré : l'ancien VTT reste intact.
+                ServerStatus.CANCELLED, ServerStatus.COMPLETED -> {
+                    update(task.localId) { it.copy(phase = TranscriptionPhase.CANCELLED, error = null, progress = server.progress) }
+                    RunOutcome.Finished
+                }
+                ServerStatus.FAILED -> {
+                    update(task.localId) { it.copy(phase = TranscriptionPhase.FAILED, error = null) }
+                    RunOutcome.Failed
+                }
+                ServerStatus.QUEUED, ServerStatus.IN_PROGRESS -> {
+                    update(task.localId) { it.copy(progress = server.progress) }
+                    RunOutcome.Resume
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: TranscriptionHttpException) {
+            if (e.code == 404) {
+                update(task.localId) { it.copy(suspended = true,
+                    suspensionReason = "Tâche introuvable sur le serveur : l'annulation n'est pas confirmée. Vérifie le compte.") }
+                RunOutcome.Suspended
+            } else RunOutcome.Resume
+        } catch (_: CredentialException) {
+            RunOutcome.Suspended
+        } catch (_: TranscriptionClientException) {
+            RunOutcome.Resume
+        }
+    }
+
     private suspend fun applyServer(localId: String, server: ServerTask): RunOutcome {
         val phase = when (server.status) {
             ServerStatus.QUEUED, ServerStatus.IN_PROGRESS -> TranscriptionPhase.TRACKING
@@ -141,8 +198,19 @@ class TranscriptionCoordinator(
 
     private suspend fun update(localId: String, change: (TranscriptionTask) -> TranscriptionTask): TranscriptionTask {
         val state = repository.updateDurably { current ->
-            current.copy(transcriptionTasks = current.transcriptionTasks.map { if (it.localId == localId) change(it) else it })
+            current.copy(transcriptionTasks = current.transcriptionTasks.map {
+                if (it.localId != localId) return@map it
+                val next = change(it)
+                // Une annulation demandée n'est écrasée que par une fin de tâche.
+                if (it.phase == TranscriptionPhase.CANCEL_REQUESTED && !next.phase.isTerminal())
+                    next.copy(phase = TranscriptionPhase.CANCEL_REQUESTED) else next
+            })
         }
         return state.transcriptionTasks.first { it.localId == localId }
+    }
+
+    private companion object {
+        val MAYBE_SENT = setOf(TranscriptionPhase.SUBMITTING, TranscriptionPhase.UNKNOWN_SUBMISSION)
+        const val CANNOT_CONFIRM = "L'arrêt côté serveur ne peut pas être confirmé : l'envoi n'a pas reçu d'identifiant."
     }
 }

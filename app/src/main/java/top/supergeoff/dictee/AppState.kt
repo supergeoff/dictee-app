@@ -49,6 +49,7 @@ data class UiState(
     val sending: Boolean = false,
     val recovery: Progress? = null,
     val send: Progress? = null,
+    val transcription: Progress? = null,
     val phoneFolder: String? = null,      // chemin affiché, null sans dossier
     val phoneFolderOk: Boolean = false,
     val drive: DriveListing? = null,      // null si Drive est désactivé ou illisible
@@ -444,6 +445,22 @@ class AppModel(
             val next = localFlow.transcriptionTasks.filter { !it.phase.isTerminal() && !it.suspended }
                 .minByOrNull { it.recordingName } ?: return
             if (transcriptionCoordinator.runBounded(next.localId) == RunOutcome.Resume) delay(TRANSCRIPTION_POLL_MS)
+        }
+    }
+
+    /** Demande l'annulation de la transcription de [name] ; l'intention est persistée avant tout appel au serveur. */
+    fun cancelTranscription(name: String) {
+        scope.launch {
+            val task = localRepository.awaitInitialized().transcriptionTasks
+                .firstOrNull { it.recordingName == name && !it.phase.isTerminal() } ?: return@launch
+            try {
+                transcriptionCoordinator.requestCancel(task.localId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                journal.error(Source.APP, "annulation de transcription : ${reasonOf(e)}")
+                say(reasonOf(e))
+            }
         }
     }
 
@@ -904,7 +921,9 @@ class AppModel(
 
     private fun buildUi(local: LocalState, phone: PhoneSnapshot, drive: DriveListing?, link: LinkStatus, live: Live): UiState {
         val listing = drive.takeIf { local.driveEnabled }
-        val busy = Busy(live.recoveryName, live.recovery?.percent ?: 0, live.sendName)
+        val transcription = TranscriptionProgress.current(local.transcriptionTasks)
+        val busy = Busy(live.recoveryName, live.recovery?.percent ?: 0, live.sendName, transcription?.first,
+            transcription?.second?.percent?.takeIf { it != Progress.UNKNOWN })
         return UiState(
             local = local,
             recordings = Recordings.merge(local.boxList, phone.files, listing, local.errors, busy, ::noteUnknownFlag),
@@ -914,6 +933,7 @@ class AppModel(
             sending = live.sending,
             recovery = live.recovery,
             send = live.send,
+            transcription = transcription?.second,
             phoneFolder = local.phoneTreeUri?.let { runCatching { PhoneFolder.displayPath(it.toUri()) }.getOrDefault(it) },
             phoneFolderOk = phone.ok,
             drive = listing,

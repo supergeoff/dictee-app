@@ -36,7 +36,9 @@ class TranscriptionCoordinatorTest {
         }
         override suspend fun submit(task: TranscriptionTask): SubmitResult { submissions++; return onSubmit(task) }
         override suspend fun get(task: TranscriptionTask): ServerTask { reads++; return onGet(task) }
-        override suspend fun cancel(task: TranscriptionTask): ServerTask = error("unexpected cancel")
+        var cancels = 0
+        var onCancel: suspend (TranscriptionTask) -> ServerTask = { error("unexpected cancel") }
+        override suspend fun cancel(task: TranscriptionTask): ServerTask { cancels++; return onCancel(task) }
         override suspend fun test(settings: TranscriptionSettings) = Unit
     }
 
@@ -226,5 +228,92 @@ class TranscriptionCoordinatorTest {
         assertTrue(saved.suspended)
         assertEquals(TranscriptionPhase.PENDING, saved.phase)
         assertEquals(0, client.submissions)
+    }
+
+    private fun tracking() = task(phase = TranscriptionPhase.TRACKING).copy(serverId = "server-1")
+
+    @Test fun `cancel intent is durable before the network call and server confirmation ends the task`() = runBlocking {
+        store.save(LocalState(transcriptionTasks = listOf(tracking())))
+        val client = FakeClient().apply {
+            onCancel = {
+                assertEquals(TranscriptionPhase.CANCEL_REQUESTED, store.load().transcriptionTasks.single().phase)
+                ServerTask("server-1", ServerStatus.CANCELLED, null, null)
+            }
+        }
+        coordinator(LocalStateRepository(store), client).requestCancel("local-1")
+        assertEquals(1, client.cancels)
+        assertEquals(TranscriptionPhase.CANCELLED, store.load().transcriptionTasks.single().phase)
+    }
+
+    @Test fun `cancel intent survives a restart and a network failure keeps it pending`() = runBlocking {
+        store.save(LocalState(transcriptionTasks = listOf(tracking())))
+        val failing = FakeClient().apply { onCancel = { throw TranscriptionNetworkException() } }
+        coordinator(LocalStateRepository(store), failing).requestCancel("local-1")
+        assertEquals(TranscriptionPhase.CANCEL_REQUESTED, store.load().transcriptionTasks.single().phase)
+
+        val client = FakeClient().apply { onCancel = { ServerTask("server-1", ServerStatus.CANCELLED, null, null) } }
+        val restarted = coordinator(LocalStateRepository(store), client)
+        restarted.runBounded("local-1")
+        assertEquals(1, client.cancels)
+        assertEquals(0, client.reads)
+        assertEquals(TranscriptionPhase.CANCELLED, store.load().transcriptionTasks.single().phase)
+    }
+
+    @Test fun `a 404 on cancel is not a success`() = runBlocking {
+        store.save(LocalState(transcriptionTasks = listOf(tracking())))
+        val client = FakeClient().apply { onCancel = { throw TranscriptionHttpException(404) } }
+        coordinator(LocalStateRepository(store), client).requestCancel("local-1")
+        val saved = store.load().transcriptionTasks.single()
+        assertEquals(TranscriptionPhase.CANCEL_REQUESTED, saved.phase)
+        assertTrue(saved.suspended)
+        assertEquals("server-1", saved.serverId)
+    }
+
+    @Test fun `an already completed task is not saved after a cancel request`() = runBlocking {
+        store.save(LocalState(transcriptionTasks = listOf(tracking())))
+        val client = FakeClient().apply { onCancel = { ServerTask("server-1", ServerStatus.COMPLETED, 1.0, "WEBVTT\n".toByteArray()) } }
+        coordinator(LocalStateRepository(store), client).requestCancel("local-1")
+        val saved = store.load().transcriptionTasks.single()
+        assertEquals(TranscriptionPhase.CANCELLED, saved.phase)
+    }
+
+    @Test fun `cancel without server id after an unknown submission cannot be confirmed`() = runBlocking {
+        store.save(LocalState(transcriptionTasks = listOf(task(phase = TranscriptionPhase.UNKNOWN_SUBMISSION).copy(suspended = true))))
+        val client = FakeClient()
+        coordinator(LocalStateRepository(store), client).requestCancel("local-1")
+        val saved = store.load().transcriptionTasks.single()
+        assertEquals(0, client.cancels)
+        assertEquals(TranscriptionPhase.CANCELLED, saved.phase)
+        assertTrue(saved.error!!.contains("confirm"))
+    }
+
+    @Test fun `cancelling a task never submitted needs no network`() = runBlocking {
+        store.save(LocalState(transcriptionTasks = listOf(task())))
+        val client = FakeClient()
+        coordinator(LocalStateRepository(store), client).requestCancel("local-1")
+        assertEquals(TranscriptionPhase.CANCELLED, store.load().transcriptionTasks.single().phase)
+        assertEquals(0, client.cancels + client.submissions)
+    }
+
+    @Test fun `cancel arriving during submission wins over the later server answer`() = runBlocking {
+        store.save(LocalState(transcriptionTasks = listOf(task())))
+        val repository = LocalStateRepository(store)
+        val client = FakeClient()
+        val inSubmit = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        client.onSubmit = { inSubmit.complete(Unit); release.await()
+            SubmitResult.Accepted(ServerTask("server-1", ServerStatus.QUEUED, null, null)) }
+        client.onCancel = { ServerTask("server-1", ServerStatus.CANCELLED, null, null) }
+        val coordinator = coordinator(repository, client)
+        val running = async(Dispatchers.Default) { coordinator.runBounded("local-1") }
+        inSubmit.await()
+        val cancelling = async(Dispatchers.Default) { coordinator.requestCancel("local-1") }
+        while (store.load().transcriptionTasks.single().phase != TranscriptionPhase.CANCEL_REQUESTED) Thread.sleep(5)
+        release.complete(Unit)
+        running.await(); cancelling.await()
+        val saved = store.load().transcriptionTasks.single()
+        assertEquals(TranscriptionPhase.CANCELLED, saved.phase)
+        assertEquals(1, client.cancels)
+        assertEquals(1, client.submissions)
     }
 }

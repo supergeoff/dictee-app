@@ -125,4 +125,29 @@ class RecordingStateTest {
         val noVtt = listOf(list.first { it.name == e }.copy(phoneFiles = emptyMap()))
         assertEquals(mapOf(e to TranscriptionExclusion.MISSING_MP3), Recordings.toTranscribe(noVtt, null, errors).excluded)
     }
+
+    @Test fun `transcription en cours avec ou sans progression serveur`() {
+        assertEquals("Transcription 40 %", one(phone = listOf("Call-$n.mp3"), busy = Busy(transcribing = n, transcribingPercent = 40)).state.label)
+        assertEquals("Transcription…", one(phone = listOf("Call-$n.mp3"), busy = Busy(transcribing = n)).state.label)
+        assertEquals("Transcription 1/2 · 40 %", Progress(ProgressKind.TRANSCRIPTION, 1, 2, 40).label())
+        assertEquals("Transcription 1/2", Progress(ProgressKind.TRANSCRIPTION, 1, 2, Progress.UNKNOWN).label())
+    }
+
+    @Test fun `la progression suit la tache active la plus ancienne et ignore les suspendues`() {
+        fun t(name: String, phase: TranscriptionPhase, progress: Double? = null, suspended: Boolean = false) =
+            TranscriptionTask("l-$name", name, "Note-$name.mp3", "Note-$name.vtt", "u", "h", "a", "r", "fr", "m", phase,
+                progress = progress, suspended = suspended)
+        assertEquals(null, TranscriptionProgress.current(emptyList()))
+        val tasks = listOf(
+            t("20261102000000", TranscriptionPhase.TRACKING, 0.4),
+            t("20261101000000", TranscriptionPhase.COMPLETED),
+            t("20261103000000", TranscriptionPhase.PENDING),
+            t("20261104000000", TranscriptionPhase.TRACKING, suspended = true),
+        )
+        val (name, progress) = TranscriptionProgress.current(tasks)!!
+        assertEquals("20261102000000", name)
+        assertEquals(Progress(ProgressKind.TRANSCRIPTION, 1, 2, 40), progress)
+        val unknown = TranscriptionProgress.current(listOf(t("20261102000000", TranscriptionPhase.TRACKING)))!!.second
+        assertEquals(Progress.UNKNOWN, unknown.percent)
+    }
 }
