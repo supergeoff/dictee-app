@@ -158,7 +158,17 @@ class AppModel(
                 TranscriptionPreparation.prepare(PhoneFolder(app, folder.toUri()), folder,
                     state.transcriptionSettings, state.errors, names) { java.util.UUID.randomUUID().toString() }
             } },
-            schedule = scheduler::enqueue, launch = { startWork() })
+            schedule = scheduler::enqueue,
+            saveVtt = { task, bytes -> withContext(Dispatchers.IO) {
+                val spool = java.io.File(app.cacheDir, "vtt-" + java.util.UUID.randomUUID())
+                try {
+                    spool.writeBytes(bytes)
+                    PhoneFolder(app, task.folderUri.toUri()).write(task.vttName, spool)
+                } catch (e: java.io.IOException) {
+                    throw PhoneStoreException("Écriture impossible dans le dossier du téléphone.", e)
+                } finally { spool.delete() }
+            } },
+            launch = { startWork() })
     }
 
     private val scope = CoroutineScope(
@@ -721,6 +731,19 @@ class AppModel(
     suspend fun phoneUri(fileName: String): Uri? {
         localRepository.awaitInitialized()
         return localFlow.phoneTreeUri?.let { PhoneFolder(app, it.toUri()).uriOf(fileName) }
+    }
+
+    /** Segments du VTT affichés sur la fiche. Le fichier n'est jamais modifié ; échec : message lisible. À appeler hors du fil principal. */
+    suspend fun readTranscript(fileName: String): Result<List<VttCue>> {
+        localRepository.awaitInitialized()
+        val tree = localFlow.phoneTreeUri ?: return Result.failure(PhoneStoreException(PHONE_FOLDER_LOST))
+        return try {
+            Result.success(WebVtt.parse(PhoneFolder(app, tree.toUri()).open(fileName).use { it.readBytes() }))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 
     fun consumeMessage() = liveFlow.update { it.copy(message = null) }

@@ -21,6 +21,8 @@ class TranscriptionCoordinator(
     private val verifyAudio: suspend (TranscriptionTask) -> Boolean,
     private val prepare: suspend (Set<String>?) -> List<TranscriptionTask> = { emptyList() },
     private val schedule: suspend (String) -> Unit = { error("Planification indisponible") },
+    /** Écrit les octets exacts du VTT dans le dossier, en protégeant l'ancien fichier ; lève [PhoneStoreException] sinon. */
+    private val saveVtt: suspend (TranscriptionTask, ByteArray) -> Unit = { _, _ -> error("Sauvegarde indisponible") },
     private val launch: suspend () -> Unit = {},
 ) {
     private val mutex = Mutex()
@@ -82,8 +84,10 @@ class TranscriptionCoordinator(
             return RunOutcome.Suspended
         }
         if (task.phase == TranscriptionPhase.UNKNOWN_SUBMISSION) return RunOutcome.Suspended
-        if (task.phase != TranscriptionPhase.PENDING && task.phase != TranscriptionPhase.TRACKING) return RunOutcome.Resume
+        if (task.phase != TranscriptionPhase.PENDING && task.phase != TranscriptionPhase.TRACKING &&
+            task.phase != TranscriptionPhase.SAVING) return RunOutcome.Resume
         if (settings.readForTask(localId) == null) return RunOutcome.Suspended
+        if (task.phase == TranscriptionPhase.SAVING) return save(task.localId, null)
 
         return if (task.phase == TranscriptionPhase.PENDING) submit(task) else track(task)
     }
@@ -101,10 +105,8 @@ class TranscriptionCoordinator(
             when (val result = client.submit(submitting)) {
                 is SubmitResult.Accepted -> applyServer(task.localId, result.task)
                 is SubmitResult.DirectVtt -> {
-                    // La conservation durable du VTT direct sera raccordée à la sauvegarde.
-                    update(task.localId) { it.copy(phase = TranscriptionPhase.UNKNOWN_SUBMISSION, suspended = true,
-                        suspensionReason = "La réponse directe ne peut pas encore être enregistrée.") }
-                    RunOutcome.Suspended
+                    update(task.localId) { it.copy(phase = TranscriptionPhase.SAVING) }
+                    save(task.localId, result.bytes)
                 }
                 SubmitResult.BackgroundUnsupported -> {
                     update(task.localId) { it.copy(phase = TranscriptionPhase.FAILED,
@@ -188,12 +190,63 @@ class TranscriptionCoordinator(
             ServerStatus.FAILED -> TranscriptionPhase.FAILED
             ServerStatus.CANCELLED -> TranscriptionPhase.CANCELLED
         }
-        update(localId) { it.copy(phase = phase, serverId = server.id, progress = server.progress) }
+        val updated = update(localId) { it.copy(phase = phase, serverId = server.id, progress = server.progress) }
+        if (phase == TranscriptionPhase.SAVING && updated.phase == TranscriptionPhase.SAVING) return save(localId, server.output)
         return when (phase) {
             TranscriptionPhase.FAILED -> RunOutcome.Failed
             TranscriptionPhase.CANCELLED -> RunOutcome.Finished
             else -> RunOutcome.Resume
         }
+    }
+
+    /**
+     * Valide puis écrit les octets reçus. La phase est relue juste avant l'écriture : une annulation persistée entre-temps
+     * empêche la promotion. Sans octets connus, le résultat est relu sur le serveur (conservé 24 heures).
+     */
+    private suspend fun save(localId: String, known: ByteArray?): RunOutcome {
+        var task = repository.awaitInitialized().transcriptionTasks.first { it.localId == localId }
+        val bytes = known ?: run {
+            if (task.serverId == null) {
+                update(localId) { it.copy(phase = TranscriptionPhase.FAILED,
+                    error = "Le résultat n'est plus disponible. Relance la transcription.") }
+                return RunOutcome.Failed
+            }
+            val server = try {
+                client.get(task)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: TranscriptionHttpException) {
+                if (e.code != 404) return RunOutcome.Resume
+                update(localId) { it.copy(suspended = true,
+                    suspensionReason = "Résultat introuvable sur le serveur. Vérifie le compte ou relance la transcription.") }
+                return RunOutcome.Suspended
+            } catch (_: TranscriptionClientException) {
+                return RunOutcome.Resume
+            }
+            if (server.status != ServerStatus.COMPLETED || server.output == null) return applyServer(localId, server)
+            server.output
+        }
+        try {
+            WebVtt.parse(bytes)
+        } catch (_: VttFormatException) {
+            update(localId) { it.copy(phase = TranscriptionPhase.FAILED,
+                error = "Le serveur a renvoyé un VTT invalide. L'ancien fichier est conservé.") }
+            return RunOutcome.Failed
+        }
+        task = repository.awaitInitialized().transcriptionTasks.first { it.localId == localId }
+        if (task.phase != TranscriptionPhase.SAVING) return RunOutcome.Resume
+        try {
+            saveVtt(task, bytes)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: PhoneStoreException) {
+            update(localId) { it.copy(suspended = true, suspensionReason = e.message ?: "Écriture impossible dans le dossier.") }
+            return RunOutcome.Suspended
+        } catch (_: java.io.IOException) {
+            return RunOutcome.Resume
+        }
+        update(localId) { it.copy(phase = TranscriptionPhase.COMPLETED, progress = 1.0, error = null) }
+        return RunOutcome.Finished
     }
 
     private suspend fun update(localId: String, change: (TranscriptionTask) -> TranscriptionTask): TranscriptionTask {

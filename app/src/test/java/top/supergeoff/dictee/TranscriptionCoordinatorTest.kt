@@ -4,6 +4,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
+
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -42,9 +43,13 @@ class TranscriptionCoordinatorTest {
         override suspend fun test(settings: TranscriptionSettings) = Unit
     }
 
+    private val saved = mutableListOf<Pair<String, ByteArray>>()
+    private var saveFailure: Exception? = null
+
     private fun coordinator(repository: LocalStateRepository, client: FakeClient) =
         TranscriptionCoordinator(repository, client, TranscriptionSettingsManager(repository, credentials), RecoverySafety(repository),
-            verifyAudio = { true })
+            verifyAudio = { true },
+            saveVtt = { task, bytes -> saveFailure?.let { throw it }; saved += task.vttName to bytes })
 
     @Test fun `reconciliation restores missing work for active tasks but not terminal tasks`() = runBlocking {
         val pending = task(id = "pending")
@@ -315,5 +320,79 @@ class TranscriptionCoordinatorTest {
         assertEquals(TranscriptionPhase.CANCELLED, saved.phase)
         assertEquals(1, client.cancels)
         assertEquals(1, client.submissions)
+    }
+
+    private val vtt = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n<v A>Bonjour &amp; bienvenue\n".toByteArray()
+    private fun completed(bytes: ByteArray = vtt) = ServerTask("server-1", ServerStatus.COMPLETED, 1.0, bytes)
+
+    @Test fun `completed result is saved byte for byte before the task completes`() = runBlocking {
+        store.save(LocalState(transcriptionTasks = listOf(tracking())))
+        val client = FakeClient().apply { onGet = { completed() } }
+        val outcome = coordinator(LocalStateRepository(store), client).runBounded("local-1")
+        assertEquals(RunOutcome.Finished, outcome)
+        assertArrayEquals(vtt, saved.single().second)
+        assertEquals("Note-20261111120000.vtt", saved.single().first)
+        assertEquals(TranscriptionPhase.COMPLETED, store.load().transcriptionTasks.single().phase)
+    }
+
+    @Test fun `a valid vtt without speech is saved`() = runBlocking {
+        store.save(LocalState(transcriptionTasks = listOf(tracking())))
+        val client = FakeClient().apply { onGet = { completed("WEBVTT\n\n".toByteArray()) } }
+        coordinator(LocalStateRepository(store), client).runBounded("local-1")
+        assertEquals(1, saved.size)
+    }
+
+    @Test fun `an invalid vtt is never written`() = runBlocking {
+        store.save(LocalState(transcriptionTasks = listOf(tracking())))
+        val client = FakeClient().apply { onGet = { completed("pas du vtt".toByteArray()) } }
+        coordinator(LocalStateRepository(store), client).runBounded("local-1")
+        assertTrue(saved.isEmpty())
+        assertEquals(TranscriptionPhase.FAILED, store.load().transcriptionTasks.single().phase)
+    }
+
+    @Test fun `a folder failure keeps the saving phase and suspends with the folder message`() = runBlocking {
+        store.save(LocalState(transcriptionTasks = listOf(tracking())))
+        saveFailure = PhoneStoreException("Dossier inaccessible")
+        val client = FakeClient().apply { onGet = { completed() } }
+        coordinator(LocalStateRepository(store), client).runBounded("local-1")
+        val task = store.load().transcriptionTasks.single()
+        assertEquals(TranscriptionPhase.SAVING, task.phase)
+        assertTrue(task.suspended)
+        assertEquals("Dossier inaccessible", task.suspensionReason)
+    }
+
+    @Test fun `saving after a restart fetches the result again`() = runBlocking {
+        store.save(LocalState(transcriptionTasks = listOf(task(phase = TranscriptionPhase.SAVING).copy(serverId = "server-1"))))
+        val client = FakeClient().apply { onGet = { completed() } }
+        coordinator(LocalStateRepository(store), client).runBounded("local-1")
+        assertEquals(1, client.reads)
+        assertEquals(1, saved.size)
+        assertEquals(TranscriptionPhase.COMPLETED, store.load().transcriptionTasks.single().phase)
+    }
+
+    @Test fun `a cancel persisted before promotion prevents the write`() = runBlocking {
+        store.save(LocalState(transcriptionTasks = listOf(tracking())))
+        val repository = LocalStateRepository(store)
+        val client = FakeClient().apply {
+            onGet = {
+                repository.updateDurably { s -> s.copy(transcriptionTasks = s.transcriptionTasks.map { it.copy(phase = TranscriptionPhase.CANCEL_REQUESTED) }) }
+                completed()
+            }
+            onCancel = { ServerTask("server-1", ServerStatus.CANCELLED, null, null) }
+        }
+        val coordinator = coordinator(repository, client)
+        coordinator.runBounded("local-1")
+        assertTrue(saved.isEmpty())
+        coordinator.runBounded("local-1")
+        assertTrue(saved.isEmpty())
+        assertEquals(TranscriptionPhase.CANCELLED, store.load().transcriptionTasks.single().phase)
+    }
+
+    @Test fun `a direct vtt response is saved without a server id`() = runBlocking {
+        store.save(LocalState(transcriptionTasks = listOf(task())))
+        val client = FakeClient().apply { onSubmit = { SubmitResult.DirectVtt(vtt) } }
+        assertEquals(RunOutcome.Finished, coordinator(LocalStateRepository(store), client).runBounded("local-1"))
+        assertArrayEquals(vtt, saved.single().second)
+        assertEquals(TranscriptionPhase.COMPLETED, store.load().transcriptionTasks.single().phase)
     }
 }

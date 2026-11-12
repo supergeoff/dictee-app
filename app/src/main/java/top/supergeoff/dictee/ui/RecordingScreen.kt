@@ -28,6 +28,10 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.produceState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import top.supergeoff.dictee.VttCue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -103,8 +107,10 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
             if (mp3 == null) {
                 MissingMp3()
             } else {
-                Player(model, mp3)
+                val playback = rememberPlayback(model, mp3.fileName, mp3.size)
+                Player(playback)
                 FileLine(mp3.fileName, ui.phoneFolder)
+                recording.phoneFiles[FileKind.VTT]?.let { Transcript(model, it, playback) }
             }
         }
     }
@@ -193,10 +199,40 @@ private fun MissingMp3() {
     }
 }
 
+/** Segments du VTT : un toucher place la lecture du MP3 au début du segment et la lance. Un fichier illisible n'affecte que cette carte. */
+@Composable
+private fun Transcript(model: AppModel, vtt: PhoneFile, playback: Playback) {
+    val colors = Dictee.colors
+    val cues by produceState<Result<List<VttCue>>?>(null, vtt.fileName, vtt.size) {
+        value = withContext(Dispatchers.IO) { model.readTranscript(vtt.fileName) }
+    }
+    Column(modifier = Modifier.fillMaxWidth().card().padding(vertical = 4.dp)) {
+        Text(text = "Transcription", style = Dictee.type.rowTitle, color = colors.text, modifier = Modifier.padding(12.dp))
+        val result = cues
+        when {
+            result == null -> Text("Lecture…", style = Dictee.type.caption, color = colors.textSecondary, modifier = Modifier.padding(12.dp))
+            result.isFailure -> Text("Le fichier VTT n'est pas lisible.", style = Dictee.type.caption, color = colors.destructive, modifier = Modifier.padding(12.dp))
+            result.getOrThrow().isEmpty() -> Text("Aucune parole détectée.", style = Dictee.type.caption, color = colors.textSecondary, modifier = Modifier.padding(12.dp))
+            else -> result.getOrThrow().forEach { cue ->
+                Column(
+                    modifier = Modifier.fillMaxWidth()
+                        .pressable(radius = 0.dp, enabled = playback.status != PlaybackStatus.FAILED, onClick = { playback.playFrom(cue.startMs) })
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                ) {
+                    Text(
+                        text = formatClock(cue.startMs.toInt()) + (cue.speaker?.let { " · $it" } ?: ""),
+                        style = Dictee.type.mono.copy(fontSize = 12.sp, lineHeight = 16.sp), color = colors.textSecondary,
+                    )
+                    Text(text = cue.text, style = Dictee.type.body, color = colors.text)
+                }
+            }
+        }
+    }
+}
+
 /** Lecteur du MP3 : le bouton lecture ou pause, la barre de position, puis la position et la durée. */
 @Composable
-private fun Player(model: AppModel, mp3: PhoneFile) {
-    val playback = rememberPlayback(model, mp3.fileName, mp3.size)
+private fun Player(playback: Playback) {
     // Pendant un glissement, la barre et le temps suivent le doigt ; la lecture ne saute qu'à la fin du geste.
     var drag by remember { mutableStateOf<Float?>(null) }
     Row(
