@@ -3,6 +3,7 @@ package top.supergeoff.dictee.ui
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,15 +23,26 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Button
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.KeyboardType
+import top.supergeoff.dictee.transcriptionTaskSettingsMessages
+import top.supergeoff.dictee.TranscriptionSettingsForm
 import androidx.compose.ui.unit.dp
 import top.supergeoff.dictee.AppModel
 import top.supergeoff.dictee.BuildConfig
@@ -72,6 +84,7 @@ fun SettingsScreen(
             BoxSection(ui.local, busy = ui.recovering, onAssociate = onAssociate)
             StorageSection(ui.phoneFolder, busy = ui.recovering || ui.sending, onChange = model::choosePhoneFolder)
             DriveSection(ui.local, model, onDriveFolders)
+            TranscriptionSection(ui.local, model.transcriptionForm)
             AppearanceSection(ui.local.theme, model::setTheme)
             AboutSection(onJournal)
         }
@@ -180,6 +193,32 @@ private fun TextAction(text: String, onClick: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         Text(text = text, style = Dictee.type.controlSm, color = Dictee.colors.textSecondary, maxLines = 1)
+    }
+}
+
+/** Le formulaire reste dans le modèle pendant la sauvegarde et ne préremplit jamais la clé. */
+@Composable
+private fun TranscriptionSection(local: LocalState, form: TranscriptionSettingsForm) {
+    LaunchedEffect(form) { form.initialize(local.transcriptionSettings) }
+    val draft by form.state.collectAsState()
+    val settings = local.transcriptionSettings
+    Section("Transcription") {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (local.transcriptionAddressNeedsReview) {
+                Text("L’ancienne adresse de transcription était invalide. Saisis une adresse de serveur et enregistre les réglages.", color = Dictee.colors.textSecondary)
+            }
+            OutlinedTextField(draft.baseUrl, form::setBaseUrl, enabled = draft.initialized && !draft.saving, label = { Text("Adresse du serveur (/v1)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(draft.secret, form::setSecret, enabled = draft.initialized && !draft.saving, label = { Text("Nouvelle clé") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+            Text(if (settings.credentialRef == null) "Aucune clé enregistrée" else "Une clé est enregistrée. Laisse ce champ vide pour la conserver.", color = Dictee.colors.textSecondary)
+            OutlinedTextField(draft.language, form::setLanguage, enabled = draft.initialized && !draft.saving, label = { Text("Langue") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(draft.model, form::setModel, enabled = draft.initialized && !draft.saving, label = { Text("Modèle") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            Button(onClick = { form.submit() }, enabled = draft.initialized && !draft.saving) { Text(if (draft.saving) "Enregistrement…" else "Enregistrer") }
+            draft.message?.let { Text(it, color = Dictee.colors.textSecondary) }
+            transcriptionTaskSettingsMessages(local.transcriptionTasks).forEach { message ->
+                Text(message, color = Dictee.colors.textSecondary)
+            }
+            Text("Le test de connexion sera disponible ultérieurement.", color = Dictee.colors.textSecondary)
+        }
     }
 }
 

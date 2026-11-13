@@ -15,6 +15,8 @@ sealed class DisplayState(val label: String) {
     data class Error(val message: String) : DisplayState("Erreur")
     data class Recovering(val percent: Int) : DisplayState("Récupération $percent %")
     data object Sending : DisplayState("Envoi…")
+    /** [percent] nul : le serveur ne donne pas d'avancement. */
+    data class Transcribing(val percent: Int?) : DisplayState(if (percent == null) "Transcription…" else "Transcription $percent %")
     data object OnDrive : DisplayState("Sur Drive")
     data object Ready : DisplayState("Prêt")
     data object Recovered : DisplayState("Récupéré")
@@ -22,7 +24,10 @@ sealed class DisplayState(val label: String) {
 }
 
 /** Traitements en cours : le nom en cours de récupération avec son avancement, et le nom en cours d'envoi. */
-data class Busy(val recovering: String? = null, val recoveringPercent: Int = 0, val sending: String? = null)
+data class Busy(
+    val recovering: String? = null, val recoveringPercent: Int = 0, val sending: String? = null,
+    val transcribing: String? = null, val transcribingPercent: Int? = null,
+)
 
 /** Enregistrement de la liste réunie. [phoneFiles] suit l'ordre des formats : MP3, VTT, MD. */
 data class Recording(
@@ -114,6 +119,29 @@ object Recordings {
         return if (drive == null) candidates else candidates.filter { missingInDrive(it, drive).isNotEmpty() }
     }
 
+    /** Sélectionne les MP3 locaux et signale les exclusions. */
+    fun toTranscribe(
+        recordings: List<Recording>, selectedNames: Set<String>?, errors: Map<String, Map<Step, String>>,
+        activeNames: Set<String> = emptySet(),
+    ): SelectionResult {
+        val candidates = mutableListOf<Recording>()
+        val excluded = linkedMapOf<String, TranscriptionExclusion>()
+        for (recording in recordings.sortedBy { it.name }) {
+            if (selectedNames != null && recording.name !in selectedNames) continue
+            if (selectedNames == null && FileKind.VTT in recording.phoneFiles) continue
+            when {
+                recording.name in activeNames -> excluded[recording.name] = TranscriptionExclusion.ALREADY_ACTIVE
+                FileKind.MP3 !in recording.phoneFiles -> excluded[recording.name] = TranscriptionExclusion.MISSING_MP3
+                Step.RECOVER in errors[recording.name].orEmpty() -> excluded[recording.name] = TranscriptionExclusion.RECOVERY_FAILED
+                else -> candidates += recording
+            }
+        }
+        selectedNames?.minus(recordings.map { it.name }.toSet())?.sorted()?.forEach {
+            excluded[it] = TranscriptionExclusion.MISSING_MP3
+        }
+        return SelectionResult(candidates, excluded)
+    }
+
     /** « Aujourd'hui », « Hier », sinon le jour en toutes lettres, par exemple « Jeudi 29 octobre ». */
     fun dayLabel(date: LocalDate, today: LocalDate): String = when (date) {
         today -> "Aujourd'hui"
@@ -167,6 +195,7 @@ object Recordings {
             error != null -> DisplayState.Error(error)
             busy.recovering == name -> DisplayState.Recovering(busy.recoveringPercent)
             busy.sending == name -> DisplayState.Sending
+            busy.transcribing == name -> DisplayState.Transcribing(busy.transcribingPercent)
             drive != null && mp3InDrive(name, drive) && missing(phoneFiles.values, drive).isEmpty() -> DisplayState.OnDrive
             phoneFiles.keys.containsAll(FileKind.entries) -> DisplayState.Ready
             phoneFiles.isNotEmpty() -> DisplayState.Recovered
@@ -186,10 +215,15 @@ object Recordings {
 }
 
 /** Nature d'un traitement suivi par une barre d'avancement. */
-enum class ProgressKind(val label: String) { RECOVERY("Récupération"), SEND("Envoi") }
+enum class ProgressKind(val label: String) { RECOVERY("Récupération"), SEND("Envoi"), TRANSCRIPTION("Transcription") }
 
 /** Avancement : fichier [index] sur [total], [percent] pour cent du fichier en cours. */
 data class Progress(val kind: ProgressKind, val index: Int, val total: Int, val percent: Int) {
     /** Libellé de la barre, par exemple « Récupération 1/2 · 40 % ». */
-    fun label(): String = "${kind.label} $index/$total · $percent %"
+    fun label(): String = if (percent == UNKNOWN) "${kind.label} $index/$total" else "${kind.label} $index/$total · $percent %"
+
+    companion object {
+        /** Avancement non fourni : barre indéterminée. */
+        const val UNKNOWN = -1
+    }
 }

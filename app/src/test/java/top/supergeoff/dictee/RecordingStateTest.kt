@@ -105,4 +105,59 @@ class RecordingStateTest {
         assertEquals("Récupération 1/2 · 40 %", Progress(ProgressKind.RECOVERY, 1, 2, 40).label())
         assertEquals("Envoi 1/3 · 90 %", Progress(ProgressKind.SEND, 1, 3, 90).label())
     }
+    @Test
+    fun `selection automatique et explicite signale les exclusions`() {
+        val a = "20261027080000"; val b = "20261028080000"; val c = "20261029080000"
+        val d = "20261030080000"; val e = "20261031080000"
+        val list = Recordings.merge(
+            listOf(a, b, c, d, e).map { ListItem.Entry(it, 100, 1) },
+            listOf("Note-$a.mp3", "Note-$b.mp3", "Note-$c.mp3", "Note-$c.vtt", "Note-$d.mp3", "Note-$e.vtt")
+                .map { PhoneFile(it, 100) }, null, emptyMap(), Busy())
+        val errors = mapOf(d to mapOf(Step.RECOVER to "coupure"), b to mapOf(Step.SEND to "envoi"))
+        val all = Recordings.toTranscribe(list, null, errors)
+        assertEquals(listOf(a, b), all.candidates.map { it.name })
+        assertEquals(mapOf(d to TranscriptionExclusion.RECOVERY_FAILED), all.excluded)
+        val selected = Recordings.toTranscribe(list, setOf(c, d, e, a, "absent"), errors)
+        assertEquals(listOf(a, c), selected.candidates.map { it.name })
+        assertEquals(mapOf(d to TranscriptionExclusion.RECOVERY_FAILED, e to TranscriptionExclusion.MISSING_MP3,
+            "absent" to TranscriptionExclusion.MISSING_MP3), selected.excluded)
+        assertEquals(SelectionResult(emptyList(), emptyMap()), Recordings.toTranscribe(list, emptySet(), errors))
+        val noVtt = listOf(list.first { it.name == e }.copy(phoneFiles = emptyMap()))
+        assertEquals(mapOf(e to TranscriptionExclusion.MISSING_MP3), Recordings.toTranscribe(noVtt, null, errors).excluded)
+    }
+
+    @Test fun `un travail deja actif n'est pas relance et reste signale`() {
+        val list = Recordings.merge(emptyList(),
+            listOf("Note-$n.mp3", "Note-20261031000000.mp3").map { PhoneFile(it, 100) }, null, emptyMap(), Busy())
+        val result = Recordings.toTranscribe(list, null, emptyMap(), activeNames = setOf(n))
+        assertEquals(listOf("20261031000000"), result.candidates.map { it.name })
+        assertEquals(mapOf(n to TranscriptionExclusion.ALREADY_ACTIVE), result.excluded)
+        assertEquals(TranscriptionExclusion.ALREADY_ACTIVE,
+            Recordings.toTranscribe(list, setOf(n), emptyMap(), activeNames = setOf(n)).excluded[n])
+    }
+
+    @Test fun `transcription en cours avec ou sans progression serveur`() {
+        assertEquals("Transcription 40 %", one(phone = listOf("Call-$n.mp3"), busy = Busy(transcribing = n, transcribingPercent = 40)).state.label)
+        assertEquals("Transcription…", one(phone = listOf("Call-$n.mp3"), busy = Busy(transcribing = n)).state.label)
+        assertEquals("Transcription 1/2 · 40 %", Progress(ProgressKind.TRANSCRIPTION, 1, 2, 40).label())
+        assertEquals("Transcription 1/2", Progress(ProgressKind.TRANSCRIPTION, 1, 2, Progress.UNKNOWN).label())
+    }
+
+    @Test fun `la progression suit la tache active la plus ancienne et ignore les suspendues`() {
+        fun t(name: String, phase: TranscriptionPhase, progress: Double? = null, suspended: Boolean = false) =
+            TranscriptionTask("l-$name", name, "Note-$name.mp3", "Note-$name.vtt", "u", "h", "a", "r", "fr", "m", phase,
+                progress = progress, suspended = suspended)
+        assertEquals(null, TranscriptionProgress.current(emptyList()))
+        val tasks = listOf(
+            t("20261102000000", TranscriptionPhase.TRACKING, 0.4),
+            t("20261101000000", TranscriptionPhase.COMPLETED),
+            t("20261103000000", TranscriptionPhase.PENDING),
+            t("20261104000000", TranscriptionPhase.TRACKING, suspended = true),
+        )
+        val (name, progress) = TranscriptionProgress.current(tasks)!!
+        assertEquals("20261102000000", name)
+        assertEquals(Progress(ProgressKind.TRANSCRIPTION, 1, 2, 40), progress)
+        val unknown = TranscriptionProgress.current(listOf(t("20261102000000", TranscriptionPhase.TRACKING)))!!.second
+        assertEquals(Progress.UNKNOWN, unknown.percent)
+    }
 }

@@ -16,8 +16,16 @@ import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -28,7 +36,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import top.supergeoff.dictee.ui.AssociateSheet
@@ -36,6 +47,7 @@ import top.supergeoff.dictee.ui.Dictee
 import top.supergeoff.dictee.ui.DicteeTheme
 import top.supergeoff.dictee.ui.DriveFolderScreen
 import top.supergeoff.dictee.ui.JournalScreen
+import top.supergeoff.dictee.ui.PrimaryButton
 import top.supergeoff.dictee.ui.RecordingScreen
 import top.supergeoff.dictee.ui.RecordingsScreen
 import top.supergeoff.dictee.ui.SettingsScreen
@@ -140,8 +152,9 @@ class MainActivity : ComponentActivity() {
         }
         DicteeTheme(dark) {
             Box(modifier = Modifier.fillMaxSize().background(Dictee.colors.background)) {
-                Navigation(ui, model, stack, onSearch = ::startSearch)
-                if (associating) {
+                if (ui.initialized) Navigation(ui, model, stack, onSearch = ::startSearch)
+                else InitializationScreen(ui.initializationError, model::retryLocalState)
+                if (ui.initialized && associating) {
                     // Quelle que soit la sortie de la feuille, y compris sa disparition avec l'activité, le modèle peut rouvrir la liaison.
                     DisposableEffect(Unit) { onDispose { model.endSearch() } }
                     AssociateSheet(
@@ -172,6 +185,30 @@ class MainActivity : ComponentActivity() {
 
     private companion object {
         val BLUETOOTH_PERMISSIONS = arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
+    }
+}
+
+@Composable
+private fun InitializationScreen(error: String?, onRetry: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        if (error == null) {
+            CircularProgressIndicator(color = Dictee.colors.primary)
+            Text("Chargement des données locales…", modifier = Modifier.padding(top = 16.dp),
+                style = Dictee.type.body, color = Dictee.colors.text)
+        } else {
+            Text("Impossible de charger les données locales", style = Dictee.type.titleSection,
+                color = Dictee.colors.destructive, textAlign = TextAlign.Center)
+            Text(error, modifier = Modifier.padding(top = 12.dp), style = Dictee.type.body,
+                color = Dictee.colors.text, textAlign = TextAlign.Center)
+            Text("Les données existantes ne sont pas remplacées. Vérifie leur accès avant de réessayer.",
+                modifier = Modifier.padding(top = 12.dp), style = Dictee.type.body,
+                color = Dictee.colors.textSecondary, textAlign = TextAlign.Center)
+            PrimaryButton(text = "Réessayer", modifier = Modifier.padding(top = 20.dp), onClick = onRetry)
+        }
     }
 }
 

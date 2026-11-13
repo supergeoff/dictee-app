@@ -28,6 +28,10 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.produceState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import top.supergeoff.dictee.VttCue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -56,6 +60,7 @@ import top.supergeoff.dictee.R
 import top.supergeoff.dictee.RecordName
 import top.supergeoff.dictee.Recording
 import top.supergeoff.dictee.UiState
+import top.supergeoff.dictee.isTerminal
 
 /**
  * Fiche d'un enregistrement : titre, durée et état dans l'en-tête, le lecteur du MP3 du téléphone, puis le fichier et son dossier.
@@ -71,7 +76,24 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
     }
     val canRecover = ui.local.boxList.any { it.name == name } && ui.link == LinkStatus.CONNECTED && !ui.recovering
     Column(modifier = Modifier.fillMaxSize().background(Dictee.colors.background)) {
-        RecordingBar(recording, canRecover, onBack, onRecover = { model.recover(listOf(name)) })
+        val cancellable = ui.local.transcriptionTasks.any { it.recordingName == name && !it.phase.isTerminal() }
+        var confirmCancel by remember { mutableStateOf(false) }
+        if (confirmCancel) {
+            DicteeDialog(
+                title = "Annuler la transcription ?",
+                confirm = "Annuler la transcription",
+                destructive = true,
+                onConfirm = { confirmCancel = false; model.cancelTranscription(name) },
+                onDismiss = { confirmCancel = false },
+            ) {
+                Text(
+                    text = "Si cette tâche est partagée avec d'autres clients du serveur, elle sera annulée pour eux aussi.",
+                    style = Dictee.type.caption, color = Dictee.colors.textSecondary,
+                )
+            }
+        }
+        RecordingBar(recording, canRecover, onBack, onRecover = { model.recover(listOf(name)) },
+            canCancelTranscription = cancellable, onCancelTranscription = { confirmCancel = true })
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -85,8 +107,10 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
             if (mp3 == null) {
                 MissingMp3()
             } else {
-                Player(model, mp3)
+                val playback = rememberPlayback(model, mp3.fileName, mp3.size)
+                Player(playback)
                 FileLine(mp3.fileName, ui.phoneFolder)
+                recording.phoneFiles[FileKind.VTT]?.let { Transcript(model, it, playback) }
             }
         }
     }
@@ -94,7 +118,10 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
 
 /** En-tête : le retour, le titre, la durée avec l'état, puis le menu. */
 @Composable
-private fun RecordingBar(recording: Recording, canRecover: Boolean, onBack: () -> Unit, onRecover: () -> Unit) {
+private fun RecordingBar(
+    recording: Recording, canRecover: Boolean, onBack: () -> Unit, onRecover: () -> Unit,
+    canCancelTranscription: Boolean, onCancelTranscription: () -> Unit,
+) {
     val colors = Dictee.colors
     Row(
         modifier = Modifier
@@ -118,7 +145,7 @@ private fun RecordingBar(recording: Recording, canRecover: Boolean, onBack: () -
                 StateBadge(recording.state)
             }
         }
-        RecordingMenu(canRecover, onRecover)
+        RecordingMenu(canRecover, onRecover, canCancelTranscription, onCancelTranscription)
     }
 }
 
@@ -128,7 +155,7 @@ private fun duration(recording: Recording): String =
 
 /** Menu de la fiche : « Récupérer à nouveau », grisé sans liaison avec le boîtier ou pendant une récupération. */
 @Composable
-private fun RecordingMenu(canRecover: Boolean, onRecover: () -> Unit) {
+private fun RecordingMenu(canRecover: Boolean, onRecover: () -> Unit, canCancelTranscription: Boolean, onCancelTranscription: () -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
         IconAction(R.drawable.ic_more, "Plus d'actions") { open = true }
@@ -145,6 +172,13 @@ private fun RecordingMenu(canRecover: Boolean, onRecover: () -> Unit) {
                 onClick = {
                     open = false
                     onRecover()
+                },
+            )
+            if (canCancelTranscription) DropdownMenuItem(
+                text = { Text(text = "Annuler la transcription", style = Dictee.type.rowTitle) },
+                onClick = {
+                    open = false
+                    onCancelTranscription()
                 },
             )
         }
@@ -165,10 +199,40 @@ private fun MissingMp3() {
     }
 }
 
+/** Segments du VTT : un toucher place la lecture du MP3 au début du segment et la lance. Un fichier illisible n'affecte que cette carte. */
+@Composable
+private fun Transcript(model: AppModel, vtt: PhoneFile, playback: Playback) {
+    val colors = Dictee.colors
+    val cues by produceState<Result<List<VttCue>>?>(null, vtt.fileName, vtt.size) {
+        value = withContext(Dispatchers.IO) { model.readTranscript(vtt.fileName) }
+    }
+    Column(modifier = Modifier.fillMaxWidth().card().padding(vertical = 4.dp)) {
+        Text(text = "Transcription", style = Dictee.type.rowTitle, color = colors.text, modifier = Modifier.padding(12.dp))
+        val result = cues
+        when {
+            result == null -> Text("Lecture…", style = Dictee.type.caption, color = colors.textSecondary, modifier = Modifier.padding(12.dp))
+            result.isFailure -> Text("Le fichier VTT n'est pas lisible.", style = Dictee.type.caption, color = colors.destructive, modifier = Modifier.padding(12.dp))
+            result.getOrThrow().isEmpty() -> Text("Aucune parole détectée.", style = Dictee.type.caption, color = colors.textSecondary, modifier = Modifier.padding(12.dp))
+            else -> result.getOrThrow().forEach { cue ->
+                Column(
+                    modifier = Modifier.fillMaxWidth()
+                        .pressable(radius = 0.dp, enabled = playback.status != PlaybackStatus.FAILED, onClick = { playback.playFrom(cue.startMs) })
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                ) {
+                    Text(
+                        text = formatClock(cue.startMs.toInt()) + (cue.speaker?.let { " · $it" } ?: ""),
+                        style = Dictee.type.mono.copy(fontSize = 12.sp, lineHeight = 16.sp), color = colors.textSecondary,
+                    )
+                    Text(text = cue.text, style = Dictee.type.body, color = colors.text)
+                }
+            }
+        }
+    }
+}
+
 /** Lecteur du MP3 : le bouton lecture ou pause, la barre de position, puis la position et la durée. */
 @Composable
-private fun Player(model: AppModel, mp3: PhoneFile) {
-    val playback = rememberPlayback(model, mp3.fileName, mp3.size)
+private fun Player(playback: Playback) {
     // Pendant un glissement, la barre et le temps suivent le doigt ; la lecture ne saute qu'à la fin du geste.
     var drag by remember { mutableStateOf<Float?>(null) }
     Row(

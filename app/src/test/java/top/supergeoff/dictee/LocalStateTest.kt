@@ -1,5 +1,6 @@
 package top.supergeoff.dictee
 
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -41,18 +42,22 @@ class LocalStateTest {
     }
 
     @Test
-    fun `un etat illisible donne un etat vide et reste de cote`() {
-        file().writeText("""{"version":2,"deviceAdd""")
-        assertEquals(LocalState(), LocalStateStore(file()).load())
-        assertTrue(File(tmp.root, "state.json.bad").exists())
+    fun `un etat illisible reste intact ainsi que le fichier bad`() {
+        val content = "json invalide"
+        file().writeText(content)
+        val bad = File(tmp.root, "state.json.bad").apply { writeText("ancienne sauvegarde") }
+        try { LocalStateStore(file()).load(); org.junit.Assert.fail("le chargement doit échouer") } catch (_: org.json.JSONException) { }
+        assertEquals(content, file().readText())
+        assertEquals("ancienne sauvegarde", bad.readText())
     }
 
     @Test
-    fun `un etat qu'on ne peut pas lire donne un etat vide et reste de cote`() {
-        file().mkdir()   // lire un dossier lève une IOException, pas une JSONException
-        assertEquals(LocalState(), LocalStateStore(file()).load())
-        assertTrue(File(tmp.root, "state.json.bad").isDirectory)
-        assertFalse(file().exists())
+    fun `une erreur de lecture ne deplace ni ne supprime les fichiers`() {
+        file().mkdir()
+        val bad = File(tmp.root, "state.json.bad").apply { writeText("ancienne sauvegarde") }
+        try { LocalStateStore(file()).load(); org.junit.Assert.fail("le chargement doit échouer") } catch (_: java.io.IOException) { }
+        assertTrue(file().isDirectory)
+        assertEquals("ancienne sauvegarde", bad.readText())
     }
 
     @Test
@@ -103,4 +108,265 @@ class LocalStateTest {
         assertTrue(failures.isEmpty())
         assertTrue(store.load() in states)
     }
+    @Test
+    fun `migration v2 et aller retour des phases et erreurs sans cle en clair`() {
+        file().writeText("""{"version":2,"deviceName":"boitier","theme":"DARK","errors":{"N":{"RECOVER":"coupure"}}}""")
+        val store = LocalStateStore(file())
+        val old = store.load()
+        assertEquals("boitier", old.deviceName)
+        assertEquals(ThemeChoice.DARK, old.theme)
+        assertEquals(emptyList<TranscriptionTask>(), old.transcriptionTasks)
+        val tasks = TranscriptionPhase.entries.mapIndexed { i, phase ->
+            sampleTask().copy(localId = "task-$i", phase = phase, serverId = if (i % 2 == 0) "server-$i" else null,
+                progress = if (i % 2 == 0) i / 10.0 else null, error = if (i == 7) "erreur serveur" else null,
+                suspended = i == 3, suspensionReason = if (i == 3) "connexion absente" else null)
+        }
+        val state = old.copy(transcriptionTasks = tasks).withError("N", Step.TRANSCRIBE, "erreur")
+        store.save(state)
+        assertEquals(state, LocalStateStore(file()).load())
+        assertTrue(file().readText().contains("encrypted-key-ref"))
+        assertFalse(file().readText().contains("cleartext-api-key"))
+        assertTrue(file().readText().contains("\"version\": 3"))
+    }
+
+    @Test
+    fun `echec du renommage conserve le fichier et ne publie pas le changement`() {
+        val store = LocalStateStore(file())
+        store.save(LocalState(deviceName = "ancien"))
+        val before = file().readText()
+        val repository = LocalStateRepository(LocalStateStore(file(), rename = { _, _ -> false }))
+        try {
+            kotlinx.coroutines.runBlocking { repository.updateDurably { it.copy(deviceName = "nouveau") } }
+            org.junit.Assert.fail("le renommage doit echouer")
+        } catch (_: java.io.IOException) { }
+        assertEquals(before, file().readText())
+        assertEquals("ancien", repository.state.value!!.deviceName)
+    }
+    @Test
+    fun `modifications concurrentes des reglages et de la tache sont conservees`() {
+        val repository = LocalStateRepository(LocalStateStore(file()))
+        val failures = ConcurrentLinkedQueue<Throwable>()
+        val start = java.util.concurrent.CountDownLatch(1)
+        val threads = listOf(
+            Thread { try { start.await(); kotlinx.coroutines.runBlocking {
+                repository.updateDurably { it.copy(theme = ThemeChoice.DARK) }
+            } } catch (e: Throwable) { failures.add(e) } },
+            Thread { try { start.await(); kotlinx.coroutines.runBlocking {
+                repository.updateDurably { it.copy(transcriptionTasks = listOf(sampleTask())) }
+            } } catch (e: Throwable) { failures.add(e) } },
+        )
+        threads.forEach { it.start() }; start.countDown(); threads.forEach { it.join() }
+        assertTrue(failures.toString(), failures.isEmpty())
+        val restored = LocalStateStore(file()).load()
+        assertEquals(ThemeChoice.DARK, restored.theme)
+        assertEquals(listOf(sampleTask()), restored.transcriptionTasks)
+        assertEquals(restored, repository.state.value)
+    }
+
+    @Test
+    fun `une mise a jour durable identique confirme aussi une ecriture`() {
+        val repository = LocalStateRepository(LocalStateStore(file(), rename = { _, _ -> false }))
+        try {
+            kotlinx.coroutines.runBlocking { repository.updateDurably { it } }
+            org.junit.Assert.fail("l'ecriture doit echouer")
+        } catch (_: java.io.IOException) { }
+        assertFalse(file().exists())
+    }
+    @Test
+    fun `une progression fractionnaire et une progression nulle se relisent sans perte`() {
+        val store = LocalStateStore(file())
+        val state = LocalState(transcriptionTasks = listOf(
+            sampleTask().copy(progress = 0.35), sampleTask().copy(localId = "null"),
+            sampleTask().copy(localId = "zero", progress = 0.0), sampleTask().copy(localId = "one", progress = 1.0),
+        ))
+        store.save(state)
+        assertEquals(0.35, org.json.JSONObject(file().readText()).getJSONArray("transcriptionTasks").getJSONObject(0).getDouble("progress"), 0.0)
+        assertEquals(state, LocalStateStore(file()).load())
+    }
+
+    @Test
+    fun `une sauvegarde ordinaire ne bloque pas le thread appelant`() {
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val returned = java.util.concurrent.CountDownLatch(1)
+        val repo = LocalStateRepository(LocalStateStore(file(), rename = { from, to ->
+            entered.countDown()
+            release.await(5, java.util.concurrent.TimeUnit.SECONDS)
+            from.renameTo(to)
+        }))
+        val thread = Thread { try { repo.update { it.copy(deviceName = "nouveau") } } finally { returned.countDown() } }
+        thread.start()
+        try {
+            assertTrue(entered.await(3, java.util.concurrent.TimeUnit.SECONDS))
+            assertTrue("l'appelant attend le disque", returned.await(1, java.util.concurrent.TimeUnit.SECONDS))
+        } finally { release.countDown(); thread.join(5000) }
+    }
+
+    @Test
+    fun `un echec ordinaire est signale sans publication et la file continue`() = kotlinx.coroutines.runBlocking {
+        val errors = ConcurrentLinkedQueue<Exception>()
+        var attempts = 0
+        val repo = LocalStateRepository(LocalStateStore(file(), rename = { from, to ->
+            attempts++
+            if (attempts == 1) false else from.renameTo(to)
+        }), onSaveError = { errors.add(it) })
+        val failed = repo.update { it.copy(deviceName = "perdu") }.await()
+        assertTrue(failed.isFailure)
+        assertEquals(1, errors.size)
+        assertEquals(null, repo.state.value!!.deviceName)
+        assertFalse(file().exists())
+        val result = repo.update { it.copy(theme = ThemeChoice.DARK) }.await().getOrThrow()
+        assertEquals(null, result.deviceName)
+        assertEquals(result, LocalStateStore(file()).load())
+    }
+
+    @Test
+    fun `les mises a jour ordinaires et durables restent ordonnees et ne perdent aucune mutation`() = kotlinx.coroutines.runBlocking {
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        var calls = 0
+        val repo = LocalStateRepository(LocalStateStore(file(), rename = { from, to ->
+            if (++calls == 1) { entered.countDown(); release.await(5, java.util.concurrent.TimeUnit.SECONDS) }
+            from.renameTo(to)
+        }))
+        val first = repo.update { it.copy(deviceName = "A") }
+        assertTrue(entered.await(3, java.util.concurrent.TimeUnit.SECONDS))
+        assertEquals(null, repo.state.value!!.deviceName)
+        val second = repo.update { it.copy(deviceName = it.deviceName + "B") }
+        val durable = async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            repo.updateDurably { it.copy(transcriptionTasks = listOf(sampleTask())) }
+        }
+        val last = repo.update { it.copy(deviceName = it.deviceName + "C") }
+        try { assertFalse(durable.isCompleted) } finally { release.countDown() }
+        first.await().getOrThrow(); second.await().getOrThrow()
+        assertEquals("AB", durable.await().deviceName)
+        val result = last.await().getOrThrow()
+        assertEquals("ABC", result.deviceName)
+        assertEquals(listOf(sampleTask()), result.transcriptionTasks)
+        assertEquals(result, repo.state.value)
+        assertEquals(result, LocalStateStore(file()).load())
+    }
+
+    @Test
+    fun `une erreur durable empeche son effet dependant et laisse passer les changements suivants`() = kotlinx.coroutines.runBlocking {
+        var attempts = 0
+        val repo = LocalStateRepository(LocalStateStore(file(), rename = { from, to ->
+            attempts++
+            if (attempts == 1) false else from.renameTo(to)
+        }))
+        var effect = false
+        try {
+            repo.updateDurably { it.copy(deviceName = "perdu") }
+            effect = true
+            org.junit.Assert.fail("la sauvegarde doit echouer")
+        } catch (_: java.io.IOException) { }
+        assertFalse(effect)
+        assertEquals(null, repo.state.value!!.deviceName)
+        val next = repo.updateDurably { it.copy(theme = ThemeChoice.DARK) }
+        assertEquals(next, LocalStateStore(file()).load())
+        assertEquals(null, next.deviceName)
+    }
+    @Test
+    fun `les modifications ordinaires concurrentes sont toutes conservees`() = kotlinx.coroutines.runBlocking {
+        val repo = LocalStateRepository(LocalStateStore(file()))
+        val start = java.util.concurrent.CountDownLatch(1)
+        val writes = ConcurrentLinkedQueue<kotlinx.coroutines.Deferred<Result<LocalState>>>()
+        val threads = (0 until 16).map { i ->
+            Thread {
+                start.await()
+                writes.add(repo.update { it.withError("N$i", Step.RECOVER, "erreur") })
+            }
+        }
+        threads.forEach { it.start() }; start.countDown(); threads.forEach { it.join() }
+        writes.forEach { it.await().getOrThrow() }
+        val result = repo.updateDurably { it.copy(transcriptionTasks = listOf(sampleTask())) }
+        assertEquals((0 until 16).map { "N$it" }.toSet(), result.errors.keys)
+        assertEquals(result, LocalStateStore(file()).load())
+    }
+
+    @Test fun `lecture migre en memoire sans toucher au fichier`() {
+        val store = LocalStateStore(file())
+        val valid = sampleTask()
+        store.save(LocalState(deviceName = "boitier", transcriptionTasks = listOf(valid, valid.copy(localId = "ancien"))))
+        val old = org.json.JSONObject(file().readText())
+        val secret = "synthetic-legacy-secret"
+        val invalid = "https://user:$secret@example.invalid/v1?key=$secret"
+        old.put("transcriptionSettings", org.json.JSONObject().put("baseUrl", invalid)
+            .put("language", "en").put("model", "old-model").put("credentialRef", "kept-ref"))
+        old.getJSONArray("transcriptionTasks").getJSONObject(1).put("serverAddress", invalid)
+        file().writeText(old.toString())
+        val before = file().readBytes()
+        val loaded = store.load()
+        assertTrue(before.contentEquals(file().readBytes()))
+        assertFalse(File(tmp.root, "state.json.tmp").exists())
+        assertFalse(File(tmp.root, "state.json.bad").exists())
+        assertEquals("/v1", loaded.transcriptionSettings.baseUrl)
+        assertEquals("en", loaded.transcriptionSettings.language)
+        assertEquals("old-model", loaded.transcriptionSettings.model)
+        assertEquals("kept-ref", loaded.transcriptionSettings.credentialRef)
+        assertTrue(loaded.transcriptionAddressNeedsReview)
+        assertEquals(valid, loaded.transcriptionTasks.first())
+        val blocked = loaded.transcriptionTasks.last()
+        assertEquals("", blocked.serverAddress)
+        assertTrue(blocked.suspended)
+        assertEquals(INVALID_TASK_ADDRESS_REASON, blocked.suspensionReason)
+        assertEquals(valid.encryptedKeyRef, blocked.encryptedKeyRef)
+        assertFalse(loaded.toString().contains(secret))
+        store.save(loaded.copy(theme = ThemeChoice.DARK))
+        assertFalse(file().readText().contains(secret))
+        assertEquals(loaded.copy(theme = ThemeChoice.DARK), store.load())
+    }
+
+    @Test fun `migration des adresses conserve les phases et les champs terminaux`() {
+        val store = LocalStateStore(file())
+        val phases = TranscriptionPhase.entries
+        val originals = phases.mapIndexed { index, phase ->
+            sampleTask().copy(localId = "phase-$index", phase = phase, serverId = "server-$index",
+                progress = 0.6, error = "erreur conservée", suspended = phase == TranscriptionPhase.FAILED,
+                suspensionReason = if (phase == TranscriptionPhase.FAILED) "ancien motif" else null)
+        }
+        store.save(LocalState(transcriptionTasks = originals))
+        val old = org.json.JSONObject(file().readText())
+        val secret = "synthetic-address-migration-secret"
+        val tasks = old.getJSONArray("transcriptionTasks")
+        phases.forEachIndexed { i, _ ->
+            tasks.getJSONObject(i).put("serverAddress", if (i % 2 == 0) "https://example.invalid" else "https://user:$secret@example.invalid/v1")
+        }
+        file().writeText(old.toString())
+        val before = file().readText()
+        val loaded = store.load()
+        assertEquals(before, file().readText())
+        val terminal = setOf(TranscriptionPhase.COMPLETED, TranscriptionPhase.FAILED, TranscriptionPhase.CANCELLED)
+        originals.zip(loaded.transcriptionTasks).forEach { (original, migrated) ->
+            val expected = if (original.phase in terminal) original.copy(serverAddress = "")
+                else original.copy(serverAddress = "", suspended = true, suspensionReason = INVALID_TASK_ADDRESS_REASON)
+            assertEquals(original.phase.name, expected, migrated)
+        }
+        assertFalse(loaded.toString().contains(secret))
+        val messages = transcriptionTaskSettingsMessages(loaded.transcriptionTasks)
+        assertEquals(phases.size - terminal.size, messages.size)
+        assertTrue(messages.all { it.contains("crée une nouvelle tâche") })
+        store.save(loaded.copy(theme = ThemeChoice.DARK))
+        assertFalse(file().readText().contains(secret))
+        assertEquals(loaded.copy(theme = ThemeChoice.DARK), store.load())
+    }
+
+    @Test fun `une ancienne suspension erronee de migration terminale est retiree`() {
+        val store = LocalStateStore(file())
+        val phases = listOf(TranscriptionPhase.COMPLETED, TranscriptionPhase.FAILED, TranscriptionPhase.CANCELLED)
+        val tasks = phases.map { sampleTask().copy(localId = it.name, phase = it) }
+        store.save(LocalState(transcriptionTasks = tasks))
+        val old = org.json.JSONObject(file().readText())
+        val array = old.getJSONArray("transcriptionTasks")
+        phases.forEachIndexed { i, _ ->
+            array.getJSONObject(i).put("serverAddress", "").put("suspended", true)
+                .put("suspensionReason", INVALID_TASK_ADDRESS_REASON)
+        }
+        file().writeText(old.toString())
+        val migrated = store.load()
+        assertEquals(tasks.map { it.copy(serverAddress = "") }, migrated.transcriptionTasks)
+        store.save(migrated)
+        assertEquals(migrated, store.load())
+    }
+
 }

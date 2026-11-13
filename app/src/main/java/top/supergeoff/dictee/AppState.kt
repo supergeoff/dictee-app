@@ -11,8 +11,10 @@ import androidx.core.net.toUri
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -38,6 +40,8 @@ import kotlin.coroutines.cancellation.CancellationException
 /** État affiché par les écrans : tout ce qu'ils lisent, réuni par [AppModel]. */
 data class UiState(
     val local: LocalState = LocalState(),
+    val initialized: Boolean = true,
+    val initializationError: String? = null,
     val recordings: List<Recording> = emptyList(),
     val link: LinkStatus = LinkStatus.NONE,
     val refreshing: Boolean = false,
@@ -45,6 +49,7 @@ data class UiState(
     val sending: Boolean = false,
     val recovery: Progress? = null,
     val send: Progress? = null,
+    val transcription: Progress? = null,
     val phoneFolder: String? = null,      // chemin affiché, null sans dossier
     val phoneFolderOk: Boolean = false,
     val drive: DriveListing? = null,      // null si Drive est désactivé ou illisible
@@ -58,6 +63,17 @@ data class UiState(
     val toSend: List<Recording>
         get() = if (local.driveEnabled) Recordings.toSend(recordings, drive, local.errors) else emptyList()
 }
+
+/** État à afficher avant que les écrans puissent lire l'état local. */
+internal fun initialUiState(local: LocalState?, initialization: LocalStateInitialization): UiState? =
+    when (initialization) {
+        LocalStateInitialization.Loading -> UiState(initialized = false)
+        is LocalStateInitialization.Failed -> UiState(
+            initialized = false,
+            initializationError = initialization.error.message ?: initialization.error.javaClass.simpleName,
+        )
+        LocalStateInitialization.Ready -> if (local == null) UiState(initialized = false) else null
+    }
 
 /** Demande faite à l'activité, qui seule parle au système ; la réponse revient par la méthode `on...` de [AppModel]. */
 sealed class UiRequest {
@@ -85,6 +101,7 @@ private data class Live(
 
 private val BLUETOOTH_PERMISSIONS = listOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
 private const val PHONE_FOLDER_LOST = "Dossier du téléphone inaccessible. Choisis-le de nouveau dans Réglages."
+private const val TRANSCRIPTION_POLL_MS = 5_000L
 private const val OUT_OF_RANGE = "Boîtier hors de portée."
 private const val NO_FOLDER = "Aucun dossier choisi"
 private const val WAIT_FOR_TRANSFER = "Attends la fin du transfert pour changer de dossier."
@@ -106,27 +123,72 @@ private fun reasonOf(e: Throwable): String = e.message ?: e.javaClass.simpleName
  * Les écrans appellent ses actions. Ce qui demande le système (permission, dossier, accord Google) sort par [requests] :
  * l'action en attente est gardée, puis reprise par la méthode `on...` qui reçoit la réponse, ou abandonnée avec un message.
  */
-class AppModel(private val app: Application) {
-    private val store = LocalStateStore(File(app.filesDir, "state.json"))
-    private val localFlow = MutableStateFlow(store.load())
+class AppModel(
+    private val app: Application,
+    repository: LocalStateRepository? = null,
+) {
     val journal = Journal(File(app.filesDir, "journal")) { LocalDateTime.now() }
-
-    init {
-        journal.purge()
-        journal.add(Source.APP, "dictee ${BuildConfig.VERSION_NAME} sur Android ${Build.VERSION.RELEASE}")
-        val leftovers = File(app.filesDir, "audio").listFiles { file -> file.isFile && file.name.endsWith(".mp3") }?.size ?: 0
-        if (leftovers > 0) journal.add(Source.APP, "$leftovers MP3 de la version 0.1.5 restent dans le stockage interne")
+    private val liveFlow = MutableStateFlow(Live())
+    private val refreshCoordinator = RefreshCoordinator { refreshing ->
+        liveFlow.update { it.copy(refreshing = refreshing) }
+    }
+    val localRepository = repository ?: LocalStateRepository(LocalStateStore(File(app.filesDir, "state.json"))) { e ->
+        val message = "Impossible d'enregistrer l'état local : ${reasonOf(e)}"
+        say(message)
+        journal.error(Source.FS, message)
+    }
+    private val localFlow: LocalState
+        get() = checkNotNull(localRepository.state.value) { "L'état local n'est pas encore chargé" }
+    private val appLocalState = AppLocalState(localRepository)
+    val recoverySafety = RecoverySafety(localRepository)
+    private val transcriptionCredentials = AndroidCredentialStore(app)
+    val transcriptionSettings = TranscriptionSettingsManager(localRepository, transcriptionCredentials)
+    internal val transcriptionCoordinator: TranscriptionCoordinator by lazy {
+        val scheduler = TranscriptionSchedule(androidx.work.WorkManager.getInstance(app))
+        val client = UrlTranscriptionClient(transcriptionCredentials, { task ->
+            PhoneFolder(app, task.folderUri.toUri()).open(task.mp3Name)
+        })
+        TranscriptionCoordinator(localRepository, client, transcriptionSettings, recoverySafety,
+            verifyAudio = { task -> withContext(Dispatchers.IO) {
+                TranscriptionAudio.matches(PhoneFolder(app, task.folderUri.toUri()), task)
+            } },
+            prepare = { names -> withContext(Dispatchers.IO) {
+                val state = localRepository.awaitInitialized()
+                val folder = state.phoneTreeUri ?: throw PhoneStoreException(PHONE_FOLDER_LOST)
+                TranscriptionPreparation.prepare(PhoneFolder(app, folder.toUri()), folder,
+                    state.transcriptionSettings, state.errors, names) { java.util.UUID.randomUUID().toString() }
+            } },
+            schedule = scheduler::enqueue,
+            saveVtt = { task, bytes -> withContext(Dispatchers.IO) {
+                val spool = java.io.File(app.cacheDir, "vtt-" + java.util.UUID.randomUUID())
+                try {
+                    spool.writeBytes(bytes)
+                    PhoneFolder(app, task.folderUri.toUri()).write(task.vttName, spool)
+                } catch (e: java.io.IOException) {
+                    throw PhoneStoreException("Écriture impossible dans le dossier du téléphone.", e)
+                } finally { spool.delete() }
+            } },
+            launch = { startWork() })
     }
 
     private val scope = CoroutineScope(
         SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, e -> journal.error(Source.APP, reasonOf(e)) },
     )
+
+    init {
+        scope.launch(Dispatchers.IO) {
+            journal.purge()
+            journal.add(Source.APP, "dictee ${BuildConfig.VERSION_NAME} sur Android ${Build.VERSION.RELEASE}")
+            val leftovers = File(app.filesDir, "audio").listFiles { file -> file.isFile && file.name.endsWith(".mp3") }?.size ?: 0
+            if (leftovers > 0) journal.add(Source.APP, "$leftovers MP3 de la version 0.1.5 restent dans le stockage interne")
+        }
+    }
+
     private val auth = GoogleAuth(app)
     private val box = BoxConnection(app, journal)
     private val saver = Dispatchers.IO.limitedParallelism(1)
     private val phoneFlow = MutableStateFlow(PhoneSnapshot())
     private val driveFlow = MutableStateFlow<DriveListing?>(null)
-    private val liveFlow = MutableStateFlow(Live())
     private val requestFlow = MutableSharedFlow<UiRequest>(extraBufferCapacity = 8)
     private val phoneMutex = Mutex()
     private val driveMutex = Mutex()
@@ -135,7 +197,7 @@ class AppModel(private val app: Application) {
     private val accountFailureNoted = AtomicBoolean(false)
     private val jobs = AtomicInteger(0)
 
-    @Volatile private var foreground = false
+    private val foregroundBoxGate = ForegroundBoxGate()
     @Volatile private var searching = false   // la feuille de recherche du boîtier est ouverte : le modèle ne rouvre pas la liaison
     @Volatile private var afterBluetooth: (() -> Unit)? = null
     @Volatile private var afterPhoneFolder: (() -> Unit)? = null
@@ -150,35 +212,62 @@ class AppModel(private val app: Application) {
     val activeJobs: Int
         get() = jobs.get()
 
-    val ui: StateFlow<UiState> = combine(localFlow, phoneFlow, driveFlow, box.status, liveFlow) { local, phone, drive, link, live ->
-        buildUi(local, phone, drive, link, live)
-    }.stateIn(scope, SharingStarted.Eagerly, buildUi(localFlow.value, phoneFlow.value, null, box.status.value, liveFlow.value))
+    private data class LocalSnapshot(val state: LocalState?, val initialization: LocalStateInitialization)
+
+    private val localSnapshot = combine(localRepository.state, localRepository.initialization) { state, initialization ->
+        LocalSnapshot(state, initialization)
+    }
+
+    val ui: StateFlow<UiState> = combine(
+        localSnapshot, phoneFlow, driveFlow, box.status, liveFlow,
+    ) { snapshot, phone, drive, link, live ->
+        initialUiState(snapshot.state, snapshot.initialization)
+            ?: buildUi(checkNotNull(snapshot.state), phone, drive, link, live)
+    }.stateIn(scope, SharingStarted.Eagerly, UiState(initialized = false))
+
+    fun retryLocalState() {
+        if (!localRepository.retryInitialization()) return
+        scope.launch {
+            try {
+                refreshAfterInitializationRetry(localRepository, { foregroundBoxGate.isForeground }, refreshCoordinator, ::readForRefresh)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // L'écran d'initialisation affiche l'échec de cette tentative.
+            }
+        }
+    }
 
     // --- Cycle de vie et rafraîchissement
 
     fun onForeground() {
-        foreground = true
-        refresh()
+        foregroundBoxGate.onForeground()
+        scope.launch { transcriptionCoordinator.reconcile() }
+        scope.launch { refreshWhenForeground(refreshCoordinator, { foregroundBoxGate.isForeground }, ::readForRefresh) }
     }
 
     fun onBackground() {
-        foreground = false
-        if (!liveFlow.value.recovering) scope.launch { box.close() }
+        foregroundBoxGate.onBackground()
+        scope.launch {
+            foregroundBoxGate.closeIfBackground { if (!liveFlow.value.recovering) box.close() }
+        }
     }
 
     /** Relit le dossier du téléphone, Drive et le boîtier. Ne demande rien au système. Un seul rafraîchissement à la fois. */
     fun refresh() {
-        scope.launch {
-            if (liveFlow.getAndUpdate { it.copy(refreshing = true) }.refreshing) return@launch
-            try {
-                coroutineScope {
-                    launch { readPhone() }
-                    launch { readDrive() }
-                    if (hasBluetooth()) launch { readBoxList() }
-                }
-            } finally {
-                liveFlow.update { it.copy(refreshing = false) }
-            }
+        scope.launch { runRefresh(waitForCurrent = false) }
+    }
+
+    private suspend fun runRefresh(waitForCurrent: Boolean) {
+        refreshCoordinator.run(waitForCurrent, ::readForRefresh)
+    }
+
+    private suspend fun readForRefresh() {
+        localRepository.awaitInitialized()
+        coroutineScope {
+            launch { readPhone() }
+            launch { readDrive() }
+            if (hasBluetooth()) launch { readBoxList() }
         }
     }
 
@@ -218,15 +307,16 @@ class AppModel(private val app: Application) {
      */
     fun associate(name: String, address: String) {
         endSearch()
-        val started = !liveFlow.getAndUpdate { it.copy(refreshing = true) }.refreshing
-        update { it.copy(deviceAddress = address, deviceName = name, boxList = emptyList()) }
-        note("Boîtier associé : $name ($address)")
+        val started = refreshCoordinator.tryStart()
+        val saved = update { it.copy(deviceAddress = address, deviceName = name, boxList = emptyList()) }
         scope.launch {
             try {
+                if (saved.await().isFailure) return@launch
+                note("Boîtier associé : $name ($address)")
                 box.close()
                 if (hasBluetooth()) readBoxList()
             } finally {
-                if (started) liveFlow.update { it.copy(refreshing = false) }
+                if (started) refreshCoordinator.finish()
             }
         }
     }
@@ -235,17 +325,24 @@ class AppModel(private val app: Application) {
 
     /** [names] nul : tout ce qui manque. */
     fun recover(names: List<String>?) {
+        scope.launch {
+            localRepository.awaitInitialized()
+            recoverReady(names)
+        }
+    }
+
+    private fun recoverReady(names: List<String>?) {
         if (liveFlow.value.recovering) return
         when {
             !hasBluetooth() -> askBluetooth { recover(names) }
-            localFlow.value.phoneTreeUri == null -> askPhoneFolder { recover(names) }
+            localFlow.phoneTreeUri == null -> askPhoneFolder { recover(names) }
             else -> scope.launch { recoverNow(names) }
         }
     }
 
     private suspend fun recoverNow(names: List<String>?) {
-        val uri = localFlow.value.phoneTreeUri?.toUri() ?: return
-        val address = localFlow.value.deviceAddress ?: return
+        val uri = localFlow.phoneTreeUri?.toUri() ?: return
+        val address = localFlow.deviceAddress ?: return
         if (!withContext(Dispatchers.IO) { PhoneFolder.hasAccess(app, uri) }) {
             say(PHONE_FOLDER_LOST)
             return
@@ -255,7 +352,7 @@ class AppModel(private val app: Application) {
         jobs.incrementAndGet()
         try {
             startWork()
-            runRecovery(address, uri, entries)
+            recoverySafety.withTransferLock { runRecovery(address, uri, entries) }
         } finally {
             jobs.decrementAndGet()
             liveFlow.update { it.copy(recovering = false, recovery = null, recoveryName = null) }
@@ -263,8 +360,11 @@ class AppModel(private val app: Application) {
     }
 
     private fun recoveryEntries(names: List<String>?): List<ListItem.Entry> {
-        val wanted = names?.toSet() ?: ui.value.toRecover.mapTo(mutableSetOf()) { it.name }
-        return localFlow.value.boxList.filter { it.name in wanted }
+        val wanted = names?.toSet() ?: buildUi(localFlow, phoneFlow.value, driveFlow.value, box.status.value, liveFlow.value)
+            .toRecover.mapTo(mutableSetOf()) { it.name }
+        // Un MP3 suivi par une transcription active ne doit pas être écrasé par une récupération.
+        val inUse = localFlow.transcriptionTasks.filter { !it.phase.isTerminal() }.mapTo(mutableSetOf()) { it.recordingName }
+        return localFlow.boxList.filter { it.name in wanted && it.name !in inUse }
     }
 
     /**
@@ -278,16 +378,20 @@ class AppModel(private val app: Application) {
                 box.withSession(address) { session ->
                     connected = true
                     RecoveryJob(session, PhoneFolder(app, uri), File(app.cacheDir, "recovery"), journal)
-                        .run(entries, ::publishRecovery, ::applyRecovery)
+                        .run(entries, ::publishRecovery, ::applyRecovery) { entry -> recoverySafety.begin(entry.name) }
                 }
             }
         }
         outcome.onSuccess { results -> if ((results.lastOrNull() as? RecoveryResult.Failed)?.stopsQueue == true) box.close() }
         outcome.onFailure { e ->
-            if (connected) markRecoveryFailed(e) else say(OUT_OF_RANGE)
+            if (e is RecoveryGuardException) {
+                val message = reasonOf(e)
+                say(message)
+                journal.error(Source.FS, message)
+            } else if (connected) markRecoveryFailed(e) else say(OUT_OF_RANGE)
         }
         readPhone()
-        if (!foreground) box.close()
+        if (!foregroundBoxGate.isForeground) box.close()
     }
 
     /** Publie l'avancement quand son libellé change : le boîtier notifie tous les 244 octets environ. */
@@ -297,16 +401,15 @@ class AppModel(private val app: Application) {
         liveFlow.update { it.copy(recovery = progress, recoveryName = name) }
     }
 
-    private fun applyRecovery(result: RecoveryResult) {
-        when (result) {
-            is RecoveryResult.Ok -> update { it.withoutError(result.name, Step.RECOVER) }
-            is RecoveryResult.Failed -> update { it.withError(result.name, Step.RECOVER, result.reason) }
-        }
-        scope.launch { readPhone() }
+    private suspend fun applyRecovery(result: RecoveryResult) {
+        recoverySafety.finish(result)
+        readPhone()
     }
 
-    private fun markRecoveryFailed(e: Throwable) {
-        liveFlow.value.recoveryName?.let { name -> update { it.withError(name, Step.RECOVER, reasonOf(e)) } }
+    private suspend fun markRecoveryFailed(e: Throwable) {
+        liveFlow.value.recoveryName?.let { name ->
+            recoverySafety.finish(RecoveryResult.Failed(name, reasonOf(e), true))
+        }
     }
 
     // --- Envoi vers Drive
@@ -316,8 +419,78 @@ class AppModel(private val app: Application) {
      * Sans envoi vers Drive activé, rien ne part.
      */
     fun send(names: List<String>?) {
-        if (!localFlow.value.driveEnabled || liveFlow.value.sending) return
-        scope.launch { sendNow(names) }
+        scope.launch {
+            localRepository.awaitInitialized()
+            if (localFlow.driveEnabled && !liveFlow.value.sending) sendNow(names)
+        }
+    }
+
+    @Volatile private var transcriptionLoop: Job? = null
+
+    /**
+     * Lance la transcription de [names] (null : tout ce qui est éligible). La planification WorkManager est confirmée avant
+     * la tâche durable et le service ; la boucle interactive suit ensuite les tâches jusqu'à leur fin ou leur suspension.
+     */
+    fun transcribe(names: Set<String>?) {
+        scope.launch {
+            jobs.incrementAndGet()
+            try {
+                announceExclusions(names)
+                val started = transcriptionCoordinator.start(names)
+                if (started.isNotEmpty()) {
+                    val loop = scope.launch { followTranscriptions() }
+                    transcriptionLoop = loop
+                    loop.join()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                journal.error(Source.APP, "transcription : ${reasonOf(e)}")
+                say(reasonOf(e))
+            } finally {
+                jobs.decrementAndGet()
+            }
+        }
+    }
+
+    /** Signale les éléments choisis qui ne seront pas transcrits : sans MP3 sur le téléphone ou en erreur de récupération. */
+    private suspend fun announceExclusions(names: Set<String>?) {
+        if (names == null) return
+        val state = localRepository.awaitInitialized()
+        val current = buildUi(state, phoneFlow.value, driveFlow.value, box.status.value, liveFlow.value)
+        val active = state.transcriptionTasks.filter { !it.phase.isTerminal() }.mapTo(mutableSetOf()) { it.recordingName }
+        val excluded = Recordings.toTranscribe(current.recordings, names, state.errors, active).excluded
+        val missing = excluded.filterValues { it == TranscriptionExclusion.MISSING_MP3 || it == TranscriptionExclusion.RECOVERY_FAILED }.keys
+        if (missing.isNotEmpty()) say("Sans MP3 exploitable sur le téléphone, non transcrit : ${missing.sorted().joinToString(", ")}.")
+    }
+
+    private suspend fun followTranscriptions() {
+        while (true) {
+            val next = localFlow.transcriptionTasks.filter { !it.phase.isTerminal() && !it.suspended }
+                .minByOrNull { it.recordingName } ?: return
+            if (transcriptionCoordinator.runBounded(next.localId) == RunOutcome.Resume) delay(TRANSCRIPTION_POLL_MS)
+        }
+    }
+
+    /** Demande l'annulation de la transcription de [name] ; l'intention est persistée avant tout appel au serveur. */
+    fun cancelTranscription(name: String) {
+        scope.launch {
+            val task = localRepository.awaitInitialized().transcriptionTasks
+                .firstOrNull { it.recordingName == name && !it.phase.isTerminal() } ?: return@launch
+            try {
+                transcriptionCoordinator.requestCancel(task.localId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                journal.error(Source.APP, "annulation de transcription : ${reasonOf(e)}")
+                say(reasonOf(e))
+            }
+        }
+    }
+
+    /** Cesse le suivi interactif (timeout du service) ; le travail périodique déjà programmé prend le relais. */
+    fun stopInteractiveTranscription() {
+        transcriptionLoop?.cancel()
     }
 
     private suspend fun sendNow(names: List<String>?) {
@@ -325,17 +498,19 @@ class AppModel(private val app: Application) {
         jobs.incrementAndGet()
         try {
             if (!authorizeOrAsk { send(names) }) return
-            val uri = localFlow.value.phoneTreeUri?.toUri() ?: return
-            val current = ui.value
-            val recordings = when {
-                names != null -> Recordings.sendable(current.recordings, current.local.errors).filter { it.name in names }
-                current.drive != null -> current.toSend
-                else -> Recordings.sendable(current.recordings, current.local.errors)
+            recoverySafety.withTransferLock {
+                val uri = localFlow.phoneTreeUri?.toUri() ?: return@withTransferLock
+                val current = buildUi(localFlow, phoneFlow.value, driveFlow.value, box.status.value, liveFlow.value)
+                val recordings = when {
+                    names != null -> Recordings.sendable(current.recordings, current.local.errors).filter { it.name in names }
+                    current.drive != null -> current.toSend
+                    else -> Recordings.sendable(current.recordings, current.local.errors)
+                }
+                if (recordings.isEmpty()) return@withTransferLock
+                startWork()
+                withContext(Dispatchers.IO) { sendRecordings(uri, recordings, explicit = names != null) }
+                readDrive()
             }
-            if (recordings.isEmpty()) return
-            startWork()
-            withContext(Dispatchers.IO) { sendRecordings(uri, recordings, explicit = names != null) }
-            readDrive()
         } finally {
             jobs.decrementAndGet()
             liveFlow.update { it.copy(sending = false, send = null, sendName = null) }
@@ -343,7 +518,7 @@ class AppModel(private val app: Application) {
     }
 
     /** Hors du fil principal. Le message d'un envoi arrêté vient de [SendJob], qui l'a déjà noté au journal. */
-    private fun sendRecordings(uri: Uri, recordings: List<Recording>, explicit: Boolean) {
+    private suspend fun sendRecordings(uri: Uri, recordings: List<Recording>, explicit: Boolean) {
         val drive = driveClient()
         val folder = resolveSendFolder(drive) ?: return
         val failed = mutableSetOf<String>()   // un fichier envoyé ensuite ne doit pas effacer l'échec d'un autre du même enregistrement
@@ -352,11 +527,10 @@ class AppModel(private val app: Application) {
         if (outcome is SendOutcome.Stopped) say(outcome.reason)
     }
 
-    private fun resolveSendFolder(drive: DriveClient): DriveFolder? =
+    private suspend fun resolveSendFolder(drive: DriveClient): DriveFolder? =
         try {
-            val (folder, resolved) = resolveFolder(localFlow.value, drive)
-            update { it.withFoldersOf(resolved) }
-            folder
+            val (folder, resolved) = resolveFolder(localFlow, drive)
+            if (update { it.withFoldersOf(resolved) }.await().isFailure) null else folder
         } catch (e: Exception) {
             val message = folderMessage(e)
             journal.error(Source.DRIVE, message)
@@ -381,10 +555,13 @@ class AppModel(private val app: Application) {
 
     /** Relance l'étape de l'erreur affichée, la première dans l'ordre de [Step]. */
     fun retry(name: String) {
-        val step = localFlow.value.errors[name]?.keys?.minByOrNull { it.ordinal }
-        when {
-            step == Step.RECOVER -> recover(listOf(name))
-            step == Step.SEND -> send(listOf(name))
+        scope.launch {
+            localRepository.awaitInitialized()
+            val step = localFlow.errors[name]?.keys?.minByOrNull { it.ordinal }
+            when {
+                step == Step.RECOVER -> recover(listOf(name))
+                step == Step.SEND -> send(listOf(name))
+            }
         }
     }
 
@@ -424,7 +601,8 @@ class AppModel(private val app: Application) {
 
     /** Retient le droit sur le nouveau dossier, puis relâche celui de l'ancien. Faux si le système refuse. Les fichiers de l'ancien dossier restent en place. */
     private suspend fun keepPhoneFolder(uri: Uri): Boolean {
-        val previous = localFlow.value.phoneTreeUri
+        localRepository.awaitInitialized()
+        val previous = localFlow.phoneTreeUri
         try {
             withContext(Dispatchers.IO) { PhoneFolder.keep(app, uri) }
         } catch (e: SecurityException) {
@@ -432,7 +610,10 @@ class AppModel(private val app: Application) {
             say(PHONE_FOLDER_LOST)
             return false
         }
-        update { it.copy(phoneTreeUri = uri.toString()) }
+        if (update { it.copy(phoneTreeUri = uri.toString()) }.await().isFailure) {
+            if (previous != uri.toString()) withContext(Dispatchers.IO) { releasePhoneFolder(uri.toString()) }
+            return false
+        }
         journal.add(Source.FS, "Dossier du téléphone : ${PhoneFolder.displayPath(uri)}")
         if (previous != null && previous != uri.toString()) {
             journal.add(Source.APP, "Dossier du téléphone changé : ${displayPathOf(previous)} vers ${PhoneFolder.displayPath(uri)}")
@@ -463,30 +644,32 @@ class AppModel(private val app: Application) {
 
     /** L'envoi n'est utile qu'avec l'accord Google : l'activer le demande tout de suite. */
     fun setDriveEnabled(on: Boolean) {
-        if (localFlow.value.driveEnabled != on) note(if (on) "Envoi vers Drive activé" else "Envoi vers Drive désactivé")
-        // Sans envoi, une erreur d'envoi n'a plus rien à réessayer : elle part avec l'interrupteur.
-        update { if (on) it.copy(driveEnabled = true) else it.copy(driveEnabled = false).withoutErrors(Step.SEND) }
-        if (!on) {
-            driveFlow.value = null
-            return
-        }
+        val saved = update { if (on) it.copy(driveEnabled = true) else it.copy(driveEnabled = false).withoutErrors(Step.SEND) }
         scope.launch {
+            if (saved.await().isFailure) return@launch
+            note(if (on) "Envoi vers Drive activé" else "Envoi vers Drive désactivé")
+            if (!on) {
+                driveFlow.value = null
+                return@launch
+            }
             if (!authorizeOrAsk { setDriveEnabled(true) }) return@launch
-            // Sans dossier choisi, readDrive ne demande rien à Google : l'adresse du compte se lit ici.
-            if (localFlow.value.chosenFolderId == null) rememberAccount()
+            if (localFlow.chosenFolderId == null) rememberAccount()
             readDrive()
         }
     }
 
     fun chooseFolder(id: String) {
-        update { it.copy(chosenFolderId = id) }
-        note("Dossier Drive choisi : ${localFlow.value.knownFolders.firstOrNull { it.id == id }?.name ?: id}")
-        folderChanged()
+        val saved = update { it.copy(chosenFolderId = id) }
+        scope.launch {
+            val state = saved.await().getOrNull() ?: return@launch
+            note("Dossier Drive choisi : ${state.knownFolders.firstOrNull { it.id == id }?.name ?: id}")
+            folderChanged()
+        }
     }
 
     fun useDefaultFolder() {
         driveFolderAction({ useDefaultFolder() }, ::folderMessage) { drive ->
-            resolveFolder(localFlow.value.copy(chosenFolderId = null), drive).second
+            resolveFolder(localFlow.copy(chosenFolderId = null), drive).second
         }
     }
 
@@ -495,8 +678,8 @@ class AppModel(private val app: Application) {
         if (clean.isEmpty()) return
         driveFolderAction({ createFolder(name) }, ::folderMessage) { drive ->
             val folder = drive.createFolder(clean)
-            val known = localFlow.value.knownFolders.filter { it.id != folder.id } + KnownFolder(folder.id, folder.name, FolderOrigin.CREATED)
-            localFlow.value.copy(knownFolders = known, chosenFolderId = folder.id)
+            val known = localFlow.knownFolders.filter { it.id != folder.id } + KnownFolder(folder.id, folder.name, FolderOrigin.CREATED)
+            localFlow.copy(knownFolders = known, chosenFolderId = folder.id)
         }
     }
 
@@ -517,13 +700,14 @@ class AppModel(private val app: Application) {
             return
         }
         driveFolderAction({ onPickerResult(data) }, { "Dossier refusé : ${reasonOf(it)}" }) { drive ->
-            resolveFolder(localFlow.value.copy(chosenFolderId = id), drive).second
+            resolveFolder(localFlow.copy(chosenFolderId = id), drive).second
         }
     }
 
     /** Dossier connu → accessible. Sans accord Google, aucun ne l'est. */
     suspend fun folderAccess(): Map<String, Boolean> = withContext(Dispatchers.IO) {
-        val folders = localFlow.value.knownFolders
+        localRepository.awaitInitialized()
+        val folders = localFlow.knownFolders
         if (folders.isEmpty()) return@withContext emptyMap()
         val drive = driveClient()
         folders.associate { it.id to attempt { drive.checkFolder(it.id) }.isSuccess }
@@ -536,32 +720,54 @@ class AppModel(private val app: Application) {
      */
     fun disconnectGoogle() {
         scope.launch {
-            val account = readAccount() ?: localFlow.value.driveAccount
+            localRepository.awaitInitialized()
+            val account = readAccount() ?: localFlow.driveAccount
             if (account == null) {
                 journal.add(Source.DRIVE, "Compte Google inconnu, accès non révoqué")
             } else {
                 attempt { auth.revoke(account) }.onFailure { journal.error(Source.DRIVE, "révocation : ${reasonOf(it)}") }
             }
-            update { it.copy(driveAccount = null, driveEnabled = false).withoutErrors(Step.SEND) }
-            driveFlow.value = null
+            if (update { it.copy(driveAccount = null, driveEnabled = false).withoutErrors(Step.SEND) }.await().isSuccess) {
+                driveFlow.value = null
+            }
         }
     }
 
     // --- Divers
 
-    fun setTheme(theme: ThemeChoice) = update { it.copy(theme = theme) }
+    fun setTheme(theme: ThemeChoice) { appLocalState.setTheme(theme) }
+
+    val transcriptionForm = TranscriptionSettingsForm(scope) { settings, secret ->
+        withContext(Dispatchers.IO) { transcriptionSettings.save(settings, secret) }
+    }
 
     /** Adresse du fichier dans le dossier du téléphone, null s'il est absent ou inaccessible. Lit le dossier : à appeler hors du fil principal. */
-    fun phoneUri(fileName: String): Uri? =
-        localFlow.value.phoneTreeUri?.let { PhoneFolder(app, it.toUri()).uriOf(fileName) }
+    suspend fun phoneUri(fileName: String): Uri? {
+        localRepository.awaitInitialized()
+        return localFlow.phoneTreeUri?.let { PhoneFolder(app, it.toUri()).uriOf(fileName) }
+    }
+
+    /** Segments du VTT affichés sur la fiche. Le fichier n'est jamais modifié ; échec : message lisible. À appeler hors du fil principal. */
+    suspend fun readTranscript(fileName: String): Result<List<VttCue>> {
+        localRepository.awaitInitialized()
+        val tree = localFlow.phoneTreeUri ?: return Result.failure(PhoneStoreException(PHONE_FOLDER_LOST))
+        return try {
+            Result.success(WebVtt.parse(PhoneFolder(app, tree.toUri()).open(fileName).use { it.readBytes() }))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 
     fun consumeMessage() = liveFlow.update { it.copy(message = null) }
 
     // --- Lectures
 
     private suspend fun readPhone() {
+        localRepository.awaitInitialized()
         phoneMutex.withLock {
-            val uri = localFlow.value.phoneTreeUri?.toUri()
+            val uri = localFlow.phoneTreeUri?.toUri()
             phoneFlow.value = if (uri == null) PhoneSnapshot() else withContext(Dispatchers.IO) { readFolder(uri, phoneFlow.value) }
         }
     }
@@ -580,25 +786,22 @@ class AppModel(private val app: Application) {
      * La liste du boîtier remplace `boxList` ; un échec garde la dernière, et [BoxConnection] l'a déjà noté au journal.
      * Faux si le boîtier n'a pas répondu ; vrai si la liste est lue, ou si rien n'est à lire (aucun boîtier, récupération ou recherche en cours).
      */
-    private suspend fun readBoxList(): Boolean {
-        val address = localFlow.value.deviceAddress ?: return true
-        if (liveFlow.value.recovering || searching) return true
-        return attempt { box.list(address) }
-            .onSuccess { list -> update { if (it.deviceAddress == address) it.copy(boxList = list) else it } }
-            .isSuccess
-    }
+    private suspend fun readBoxList(): Boolean = readBoxListForForeground(
+        foregroundBoxGate, localRepository, { liveFlow.value.recovering || searching },
+    ) { address -> attempt { box.list(address) } }
 
     /**
      * Sans accord Google, la liste reste nulle et une ligne DRIVE le note. Un échec de lecture garde la dernière liste.
      * Avec l'accord, l'adresse du compte est lue après la liste et hors du verrou : un Drive lent ne retient pas les autres lectures.
      */
     private suspend fun readDrive() {
+        localRepository.awaitInitialized()
         if (driveMutex.withLock { readDriveLocked() }) rememberAccount()
     }
 
     /** Lit la liste du dossier choisi sous le verrou de [readDrive]. Vrai si l'accord Google est donné. */
     private suspend fun readDriveLocked(): Boolean {
-        val state = localFlow.value
+        val state = localFlow
         val folderId = state.chosenFolderId
         if (!state.driveEnabled || folderId == null) {
             driveFlow.value = null
@@ -623,19 +826,17 @@ class AppModel(private val app: Application) {
 
     private suspend fun readListing(folderId: String) {
         attempt { withContext(Dispatchers.IO) { driveClient().listFiles(folderId) } }
-            .onSuccess { files -> if (localFlow.value.chosenFolderId == folderId) driveFlow.value = DriveListing(files) }
+            .onSuccess { files -> if (localFlow.chosenFolderId == folderId) driveFlow.value = DriveListing(files) }
             .onFailure { journal.error(Source.DRIVE, "lecture du dossier Drive : ${reasonOf(it)}") }
     }
 
     // --- Aides
 
     /**
-     * Applique [change] à l'état local, de façon atomique, puis l'écrit sur le disque si l'état a changé :
-     * les écritures s'enchaînent une à une et gardent la dernière valeur.
+     * Applique et enregistre [change] par le même dépôt que les futures écritures durables.
+     * Le dépôt publie l'état seulement après la réussite de l'écriture.
      */
-    private fun update(change: (LocalState) -> LocalState) {
-        if (localFlow.updateChanged(change)) scope.launch(saver) { store.save(localFlow.value) }
-    }
+    private fun update(change: (LocalState) -> LocalState) = localRepository.update(change)
 
     private fun say(message: String) = liveFlow.update { it.copy(message = message) }
 
@@ -694,10 +895,11 @@ class AppModel(private val app: Application) {
     /** Action sur les dossiers Drive : accord Google, puis [action] hors du fil principal, qui rend l'état dont les dossiers sont retenus. */
     private fun driveFolderAction(resume: () -> Unit, describe: (Throwable) -> String, action: (DriveClient) -> LocalState) {
         scope.launch {
+            localRepository.awaitInitialized()
             if (!authorizeOrAsk(resume)) return@launch
             attempt { withContext(Dispatchers.IO) { action(driveClient()) } }
                 .onSuccess { resolved ->
-                    update { it.withFoldersOf(resolved) }
+                    if (update { it.withFoldersOf(resolved) }.await().isFailure) return@launch
                     note("Dossier Drive choisi : ${resolved.knownFolders.firstOrNull { it.id == resolved.chosenFolderId }?.name ?: resolved.chosenFolderId}")
                     folderChanged()
                 }
@@ -724,8 +926,8 @@ class AppModel(private val app: Application) {
      * La lecture est lente : si l'envoi vers Drive a été désactivé entre-temps (par exemple par [disconnectGoogle]), l'adresse lue n'est pas gardée.
      */
     private suspend fun rememberAccount() {
-        if (localFlow.value.driveAccount != null) return
-        readAccount()?.let { email -> update { if (it.driveEnabled) it.copy(driveAccount = email) else it } }
+        if (localFlow.driveAccount != null) return
+        readAccount()?.let { email -> update { if (it.driveEnabled) it.copy(driveAccount = email) else it }.await() }
     }
 
     /**
@@ -756,7 +958,9 @@ class AppModel(private val app: Application) {
 
     private fun buildUi(local: LocalState, phone: PhoneSnapshot, drive: DriveListing?, link: LinkStatus, live: Live): UiState {
         val listing = drive.takeIf { local.driveEnabled }
-        val busy = Busy(live.recoveryName, live.recovery?.percent ?: 0, live.sendName)
+        val transcription = TranscriptionProgress.current(local.transcriptionTasks)
+        val busy = Busy(live.recoveryName, live.recovery?.percent ?: 0, live.sendName, transcription?.first,
+            transcription?.second?.percent?.takeIf { it != Progress.UNKNOWN })
         return UiState(
             local = local,
             recordings = Recordings.merge(local.boxList, phone.files, listing, local.errors, busy, ::noteUnknownFlag),
@@ -766,6 +970,7 @@ class AppModel(private val app: Application) {
             sending = live.sending,
             recovery = live.recovery,
             send = live.send,
+            transcription = transcription?.second,
             phoneFolder = local.phoneTreeUri?.let { runCatching { PhoneFolder.displayPath(it.toUri()) }.getOrDefault(it) },
             phoneFolderOk = phone.ok,
             drive = listing,

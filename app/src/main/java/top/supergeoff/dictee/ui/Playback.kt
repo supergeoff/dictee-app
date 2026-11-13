@@ -117,6 +117,32 @@ internal class Playback {
         }
     }
 
+    /** Position demandée avant que le lecteur soit prêt, appliquée dès la préparation. */
+    private var pendingStartMs: Int? = null
+
+    /** Se place à [positionMs] et lance la lecture, y compris si le lecteur est encore en préparation. */
+    fun playFrom(positionMs: Long) {
+        val target = positionMs.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
+        when (status) {
+            PlaybackStatus.FAILED -> Unit
+            PlaybackStatus.PREPARING -> pendingStartMs = target
+            PlaybackStatus.READY -> startAt(target)
+        }
+    }
+
+    private fun startAt(target: Int) {
+        val current = player ?: return
+        try {
+            val clamped = if (durationMs > 0) target.coerceAtMost(durationMs) else target
+            current.seekTo(clamped.toLong(), MediaPlayer.SEEK_CLOSEST)
+            this.positionMs = clamped
+            if (!current.isPlaying) current.start()
+            playing = current.isPlaying
+        } catch (e: IllegalStateException) {
+            fail(e.message ?: e.javaClass.simpleName)
+        }
+    }
+
     /** Se place à la [fraction] de la durée, entre 0 et 1. */
     fun seekTo(fraction: Float) {
         val current = player ?: return
@@ -152,6 +178,7 @@ internal class Playback {
         if (prepared !== player) return
         durationMs = prepared.duration.coerceAtLeast(0)
         status = PlaybackStatus.READY
+        pendingStartMs?.let { pendingStartMs = null; startAt(it) }
     }
 
     private fun onCompleted() {
@@ -182,7 +209,10 @@ internal fun rememberPlayback(model: AppModel, fileName: String, size: Long): Pl
         // Toute l'étape est NonCancellable : si l'écran se ferme pendant l'ouverture, un withContext annulé abandonnerait le descripteur
         // déjà ouvert. Ici il arrive toujours à open, qui le referme.
         withContext(NonCancellable) {
-            playback.open(withContext(Dispatchers.IO) { openDescriptor(appContext) { model.phoneUri(fileName) } })
+            playback.open(withContext(Dispatchers.IO) {
+                val uri = model.phoneUri(fileName)
+                openDescriptor(appContext) { uri }
+            })
         }
     }
     DisposableEffect(playback) { onDispose { playback.release() } }
