@@ -10,7 +10,7 @@ L'application réunit les enregistrements du boîtier, du téléphone et de Driv
 
 ## État
 
-La version actuelle est la 0.2.x. La récupération par Bluetooth, le stockage dans un dossier du téléphone, l'envoi vers Google Drive, l'écoute et le journal sont disponibles. La transcription et la synthèse sont prévues dans les prochaines versions. [docs/specification.md](docs/specification.md) décrit la version livrée.
+La version actuelle est la 0.3.x. La récupération par Bluetooth, le stockage dans un dossier du téléphone, l'envoi vers Google Drive, l'écoute, le journal et la transcription en VTT en arrière-plan sont disponibles. La synthèse est prévue dans une prochaine version. [docs/specification.md](docs/specification.md) décrit la version livrée.
 
 ## Matériel
 
@@ -18,7 +18,7 @@ L'application est testée avec un MECHEN V05. Elle demande Android 12 (API 31) o
 
 ## Vie privée
 
-L'application n'a pas de serveur à elle. Les fichiers restent sur le téléphone et dans le Google Drive de l'utilisateur. Les fonctions de transcription prévues enverront l'audio au seul endpoint que l'utilisateur choisit. L'envoi vers Drive utilise le droit `drive.file`, qui limite l'application aux fichiers et aux dossiers qu'elle a créés ou que l'utilisateur a ouverts avec elle.
+L'application n'a pas de serveur à elle. Les fichiers restent sur le téléphone et dans le Google Drive de l'utilisateur. La transcription envoie l'audio au seul endpoint que l'utilisateur choisit dans Réglages. L'envoi vers Drive utilise le droit `drive.file`, qui limite l'application aux fichiers et aux dossiers qu'elle a créés ou que l'utilisateur a ouverts avec elle.
 
 ## Installer
 
