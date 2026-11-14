@@ -477,9 +477,17 @@ private inline fun <reified T : Enum<T>> String?.toEnumOr(default: T): T =
 class RecoverySafety(private val repository: LocalStateRepository) {
     private val transferMutex = kotlinx.coroutines.sync.Mutex()
 
-    suspend fun <T> withTransferLock(block: suspend () -> T): T {
+    suspend fun <T> withTransferLock(block: suspend () -> T): T = locked(block)
+
+    /** [onWaited] est appelé quand l'attente du verrou dépasse [waitThresholdMs], avant l'exécution de [block]. */
+    suspend fun <T> withTransferLock(waitThresholdMs: Long, onWaited: () -> Unit, block: suspend () -> T): T =
+        locked(block, waitThresholdMs, onWaited)
+
+    private suspend fun <T> locked(block: suspend () -> T, waitThresholdMs: Long? = null, onWaited: (() -> Unit)? = null): T {
         repository.awaitInitialized()
+        val started = System.currentTimeMillis()
         transferMutex.lock()
+        if (waitThresholdMs != null && System.currentTimeMillis() - started > waitThresholdMs) onWaited?.invoke()
         try { return block() } finally { transferMutex.unlock() }
     }
 

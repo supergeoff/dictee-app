@@ -60,11 +60,25 @@ internal class TranscriptionInteractiveRunner(
 ) {
     suspend fun run(): InteractiveRun {
         while (true) {
-            val next = repository.awaitInitialized().transcriptionTasks.filter { !it.phase.isTerminal() && !it.suspended }
-                .minByOrNull { it.recordingName } ?: return InteractiveRun.QueueEmpty
-            val outcome = withTimeoutOrNull(timeoutMs) { coordinator.runBounded(next.localId) } ?: return InteractiveRun.Handoff
-            worker.retireIfTerminal(next.localId)
-            val current = repository.awaitInitialized().transcriptionTasks.firstOrNull { it.localId == next.localId }
+            val active = repository.awaitInitialized().transcriptionTasks.filter { !it.phase.isTerminal() && !it.suspended }
+            // L'annulation en attente est traitée en premier, puis la file reprend dans le même tour.
+            val cancel = active.filter { it.phase == TranscriptionPhase.CANCEL_REQUESTED }.minByOrNull { it.recordingName }
+            val next = active.filter { it.phase != TranscriptionPhase.CANCEL_REQUESTED }.minByOrNull { it.recordingName }
+            if (cancel != null) {
+                withTimeoutOrNull(timeoutMs) { coordinator.runBounded(cancel.localId) } ?: return InteractiveRun.Handoff
+                worker.retireIfTerminal(cancel.localId)
+                if (next == null) {
+                    val current = repository.awaitInitialized().transcriptionTasks.firstOrNull { it.localId == cancel.localId }
+                    if (current == null || current.phase != TranscriptionPhase.CANCEL_REQUESTED) continue
+                    // Seule en file, l'annulation est reprise sur un rythme borné plutôt qu'en boucle serrée.
+                    wait(current, TRANSCRIPTION_POLL_MS)
+                    continue
+                }
+            }
+            val task = next ?: return InteractiveRun.QueueEmpty
+            val outcome = withTimeoutOrNull(timeoutMs) { coordinator.runBounded(task.localId) } ?: return InteractiveRun.Handoff
+            worker.retireIfTerminal(task.localId)
+            val current = repository.awaitInitialized().transcriptionTasks.firstOrNull { it.localId == task.localId }
             if (outcome == RunOutcome.Suspended && current != null && !current.suspended) return InteractiveRun.Handoff
             if (outcome == RunOutcome.Resume && current != null && !current.phase.isTerminal() && !current.suspended) {
                 val deadline = current.synthesis?.nextAttemptAtMillis.takeIf {

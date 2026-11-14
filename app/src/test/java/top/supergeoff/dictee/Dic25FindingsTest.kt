@@ -77,7 +77,12 @@ class Dic25FindingsTest {
             files["Note-20261111120000.mp3"] = "audio".toByteArray()
             files["Note-20261111120000.vtt"] = vtt
         }
-        val coordinator = baseCoordinator(repository, FakeStt(), RecoverySafety(repository), md = md, phone = phone)
+        val coordinator = TranscriptionCoordinator(repository, FakeStt(), TranscriptionSettingsManager(repository, FakeCredentials()),
+            RecoverySafety(repository), verifyAudio = { true }, schedule = {},
+            synthesisClient = md, synthesisStorage = SynthesisStorage(File(tmp.root, "stage")),
+            phoneStore = { phone }, synthesisCredentialAccessible = { true },
+            prepareRequested = { names, request, active -> TranscriptionPreparation.prepare(phone, "content://folder",
+                sttSettings, emptyMap(), names, mdSettings, request, active) { "id-b" } })
         val running = async(Dispatchers.Default) { coordinator.runBounded("syn-20261111090000") }
         entered.await()
         val started = withTimeoutOrNull(1_000) { coordinator.start(setOf("20261111120000"), RequestedWork.MISSING) }

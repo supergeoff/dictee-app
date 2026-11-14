@@ -46,6 +46,8 @@ class TranscriptionCoordinator(
     private val onFilesPromoted: suspend (String) -> Unit = {},
 ) {
     private val mutex = Mutex()
+    // Sérialise les interventions d'une même tâche sans retenir la file pendant les appels réseau (DIC-25).
+    private val taskMutexes = java.util.concurrent.ConcurrentHashMap<String, Mutex>()
     // Accès protégé par promotionGuard : l'enregistrement ne peut manquer une annulation durable.
     private val synthesisCalls = mutableMapOf<String, Deferred<ByteArray>>()
 
@@ -77,39 +79,44 @@ class TranscriptionCoordinator(
     }
 
     suspend fun start(names: Set<String>?, request: RequestedWork = RequestedWork.MISSING): List<String> {
-        val waitStart = clock()
-        if (!mutex.tryLock()) {
-            mutex.lock()
-            if (clock() - waitStart > LOCK_WAIT_LOG_MS)
-                journal(if (request == RequestedWork.REDO_MD) Source.LLM else Source.STT, null, "en attente d'une transcription en cours")
-        }
-        try {
-            val transferWait = clock()
-            return recoverySafety.withTransferLock {
-                if (clock() - transferWait > LOCK_WAIT_LOG_MS)
-                    journal(if (request == RequestedWork.REDO_MD) Source.LLM else Source.STT, null, "en attente d'un transfert en cours")
-                startLocked(names, request)
+        val source = if (request == RequestedWork.REDO_MD) Source.LLM else Source.STT
+        val existing = withMutexJournal(source, null) { repository.awaitInitialized().transcriptionTasks }
+        val active = existing.filterNot { it.phase.isTerminal() }.map { it.recordingName }.toSet()
+        // La préparation relit le dossier : elle ne tient aucun verrou, un appui ne doit pas attendre un appel réseau.
+        val prepared = prepareRequested(names, request, active).filter { it.recordingName !in active }.sortedBy { it.recordingName }
+        if (prepared.isEmpty()) return emptyList()
+        // Un plan qui lit ou écrit un MP3 passe par le verrou de transfert ; une synthèse seule n'en a pas besoin.
+        return if (prepared.any { it.mp3Sha256.isNotBlank() }) {
+            recoverySafety.withTransferLock(LOCK_WAIT_LOG_MS, { journal(source, null, "en attente d'un transfert en cours") }) {
+                commitPrepared(prepared)
             }
-        } finally {
-            mutex.unlock()
-        }
+        } else commitPrepared(prepared)
     }
 
-    private suspend fun startLocked(names: Set<String>?, request: RequestedWork): List<String> {
-        val existing = repository.awaitInitialized().transcriptionTasks
-        val active = existing.filterNot { it.phase.isTerminal() }.map { it.recordingName }.toSet()
-        val tasks = prepareRequested(names, request, active).filter { it.recordingName !in active }.sortedBy { it.recordingName }
-        for (task in tasks) schedule(task.localId)
-        if (tasks.isNotEmpty()) {
-            repository.updateDurably { it.copy(transcriptionTasks = it.transcriptionTasks + tasks) }
-            val ranked = (existing.filterNot { it.phase.isTerminal() } + tasks).sortedBy { it.recordingName }
-            for (task in tasks) {
+    /** Verrou court de file : lecture et écriture durable, jamais d'appel réseau. */
+    private suspend fun <T> withMutexJournal(source: Source, task: TranscriptionTask?, block: suspend () -> T): T {
+        val started = clock()
+        if (!mutex.tryLock()) {
+            mutex.lock()
+            if (clock() - started > LOCK_WAIT_LOG_MS) journal(source, task, "en attente d'une transcription en cours")
+        }
+        try { return block() } finally { mutex.unlock() }
+    }
+
+    private suspend fun commitPrepared(tasks: List<TranscriptionTask>): List<String> = withMutexJournal(Source.STT, null) {
+        val activeNow = repository.awaitInitialized().transcriptionTasks.filterNot { it.phase.isTerminal() }
+        val kept = tasks.filter { task -> activeNow.none { it.recordingName == task.recordingName } }
+        for (task in kept) schedule(task.localId)
+        if (kept.isNotEmpty()) {
+            repository.updateDurably { it.copy(transcriptionTasks = it.transcriptionTasks + kept) }
+            val ranked = (activeNow + kept).sortedBy { it.recordingName }
+            for (task in kept) {
                 val rank = ranked.indexOfFirst { it.localId == task.localId } + 1
                 journal(sourceOf(task), task, "tâche créée, ${rank}e dans la file")
             }
             launch()
         }
-        return tasks.map { it.localId }
+        kept.map { it.localId }
     }
 
     /**
@@ -143,7 +150,9 @@ class TranscriptionCoordinator(
         } else null
         } }
         call?.cancel()
-        mutex.withLock { recoverySafety.withTransferLock { runLocked(localId) } }
+        // Attend la fin d'une éventuelle intervention en cours sur la tâche, puis traite l'annulation persistée.
+        val taskLock = taskMutexes.getOrPut(localId) { Mutex() }
+        taskLock.withLock { runLocked(localId) }
     }
 
     suspend fun retrySynthesis(localId: String) = mutex.withLock {
@@ -164,23 +173,17 @@ class TranscriptionCoordinator(
     }
 
     suspend fun runBounded(localId: String): RunOutcome {
-        val waitStart = clock()
-        if (!mutex.tryLock()) {
-            mutex.lock()
-            val task = repository.awaitInitialized().transcriptionTasks.firstOrNull { it.localId == localId }
-            if (clock() - waitStart > LOCK_WAIT_LOG_MS)
-                journal(task?.let(::sourceOf) ?: Source.STT, task, "en attente d'une transcription en cours")
-        }
+        // Une intervention par tâche : les appels réseau se font hors de tout verrou de file.
+        val taskLock = taskMutexes.getOrPut(localId) { Mutex() }
+        if (!taskLock.tryLock()) return RunOutcome.Resume
         try {
-            val transferWait = clock()
-            return recoverySafety.withTransferLock {
-                val current = repository.awaitInitialized().transcriptionTasks.firstOrNull { it.localId == localId }
-                if (clock() - transferWait > LOCK_WAIT_LOG_MS)
-                    journal(current?.let(::sourceOf) ?: Source.STT, current, "en attente d'un transfert en cours")
-                runLocked(localId)
-            }
+            val current = repository.awaitInitialized().transcriptionTasks.firstOrNull { it.localId == localId }
+                ?: return RunOutcome.Resume
+            if (current.phase.isTerminal()) return RunOutcome.Finished
+            if (current.suspended) return RunOutcome.Suspended
+            return runLocked(localId)
         } finally {
-            mutex.unlock()
+            taskLock.unlock()
         }
     }
 
@@ -209,7 +212,14 @@ class TranscriptionCoordinator(
         return if (task.phase == TranscriptionPhase.PENDING) submit(task) else track(task)
     }
 
-    private suspend fun submit(task: TranscriptionTask): RunOutcome {
+    private suspend fun submit(task: TranscriptionTask): RunOutcome =
+        // L'envoi lit le MP3 : le verrou de transfert couvre la vérification et la requête.
+        recoverySafety.withTransferLock(LOCK_WAIT_LOG_MS,
+            { journal(Source.STT, task, "en attente d'un transfert en cours") }) {
+            submitLocked(task)
+        }
+
+    private suspend fun submitLocked(task: TranscriptionTask): RunOutcome {
         val verified = try { verifyAudio(task) } catch (e: CancellationException) { throw e } catch (_: Exception) { false }
         if (!verified) {
             update(task.localId) { it.copy(suspended = true,
