@@ -1,5 +1,7 @@
 package top.supergeoff.dictee.ui
 
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -75,7 +77,10 @@ fun SettingsScreen(
     onDriveFolders: () -> Unit,
     onJournal: () -> Unit,
     onPrompt: () -> Unit,
+    scrollToSynthesis: Boolean = false,
 ) {
+    val synthesisBringIntoView = androidx.compose.runtime.remember { androidx.compose.foundation.relocation.BringIntoViewRequester() }
+    LaunchedEffect(scrollToSynthesis) { if (scrollToSynthesis) synthesisBringIntoView.bringIntoView() }
     Column(modifier = Modifier.fillMaxSize().background(Dictee.colors.background)) {
         TopBar("Réglages", onBack)
         Column(
@@ -90,7 +95,9 @@ fun SettingsScreen(
             StorageSection(ui.phoneFolder, busy = ui.recovering || ui.sending, onChange = model::choosePhoneFolder)
             DriveSection(ui.local, model, onDriveFolders)
             TranscriptionSection(ui.local, model.transcriptionForm)
-            SynthesisSection(ui.local.synthesisSettings, model.synthesisForm, onPrompt)
+            androidx.compose.foundation.layout.Box(Modifier.bringIntoViewRequester(synthesisBringIntoView)) {
+                SynthesisSection(ui.local.synthesisSettings, model.synthesisForm, onPrompt)
+            }
             AppearanceSection(ui.local.theme, model::setTheme)
             AboutSection(onJournal)
         }

@@ -51,6 +51,7 @@ data class UiState(
     val phoneFolderOk: Boolean = false,
     val phoneRevision: Long = 0,
     val drive: DriveListing? = null,      // null si Drive est désactivé ou illisible
+    val busy: Busy = Busy(),
     val message: String? = null,
 ) {
     /** Enregistrements du boîtier à récupérer. */
@@ -1080,6 +1081,7 @@ class AppModel(
             phoneFolderOk = phone.ok,
             phoneRevision = phone.revision,
             drive = listing,
+            busy = busy,
             message = live.message,
         )
     }
