@@ -39,6 +39,8 @@ internal class TranscriptionWorkerRunner(
 internal const val TRANSCRIPTION_TIMEOUT_MS = 9 * 60 * 1000L
 private const val TRANSCRIPTION_POLL_MS = 5_000L
 
+internal enum class InteractiveRun { QueueEmpty, Handoff }
+
 /** Suit la même file durable que le worker ; une modification de la file peut interrompre l'attente. */
 internal class TranscriptionInteractiveRunner(
     private val repository: LocalStateRepository,
@@ -56,14 +58,14 @@ internal class TranscriptionInteractiveRunner(
         Unit
     },
 ) {
-    suspend fun run() {
+    suspend fun run(): InteractiveRun {
         while (true) {
             val next = repository.awaitInitialized().transcriptionTasks.filter { !it.phase.isTerminal() && !it.suspended }
-                .minByOrNull { it.recordingName } ?: return
-            val outcome = withTimeoutOrNull(timeoutMs) { coordinator.runBounded(next.localId) } ?: return
+                .minByOrNull { it.recordingName } ?: return InteractiveRun.QueueEmpty
+            val outcome = withTimeoutOrNull(timeoutMs) { coordinator.runBounded(next.localId) } ?: return InteractiveRun.Handoff
             worker.retireIfTerminal(next.localId)
             val current = repository.awaitInitialized().transcriptionTasks.firstOrNull { it.localId == next.localId }
-            if (outcome == RunOutcome.Suspended && current != null && !current.suspended) return
+            if (outcome == RunOutcome.Suspended && current != null && !current.suspended) return InteractiveRun.Handoff
             if (outcome == RunOutcome.Resume && current != null && !current.phase.isTerminal() && !current.suspended) {
                 val deadline = current.synthesis?.nextAttemptAtMillis.takeIf {
                     current.phase == TranscriptionPhase.SYNTHESIZING && current.synthesis?.phase == SynthesisPhase.READY

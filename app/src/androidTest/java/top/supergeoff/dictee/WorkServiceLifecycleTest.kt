@@ -43,9 +43,12 @@ class WorkServiceLifecycleTest {
         }
         schedule.enqueue(id)
         val entered = CompletableDeferred<Unit>()
+        val allowTimeout = CompletableDeferred<Unit>()
         val work = async {
             jobs.track {
-                withTimeoutOrNull(5_000) { entered.complete(Unit); CompletableDeferred<Unit>().await() }
+                entered.complete(Unit)
+                allowTimeout.await()
+                withTimeoutOrNull(1) { CompletableDeferred<Unit>().await() }
             }
         }
         try {
@@ -54,6 +57,7 @@ class WorkServiceLifecycleTest {
             withTimeout(5_000) {
                 while (!running() || notifications.activeNotifications.none { it.id == 1 }) delay(10)
             }
+            allowTimeout.complete(Unit)
             withTimeout(10_000) { work.await() }
             withTimeout(5_000) {
                 while (running() || notifications.activeNotifications.any { it.id == 1 }) delay(10)

@@ -462,10 +462,10 @@ class AppModel(
         if (missing.isNotEmpty()) say("Sans MP3 exploitable sur le téléphone, non transcrit : ${missing.sorted().joinToString(", ")}.")
     }
 
-    private suspend fun followTranscriptions() {
+    private suspend fun followTranscriptions(): InteractiveRun {
         val scheduler = TranscriptionSchedule(androidx.work.WorkManager.getInstance(app))
         val runner = TranscriptionWorkerRunner(localRepository, transcriptionCoordinator, scheduler::cancel)
-        TranscriptionInteractiveRunner(localRepository, transcriptionCoordinator, runner).run()
+        return TranscriptionInteractiveRunner(localRepository, transcriptionCoordinator, runner).run()
     }
 
     /** Demande l'annulation de la transcription de [name] ; l'intention est persistée avant tout appel au serveur. */

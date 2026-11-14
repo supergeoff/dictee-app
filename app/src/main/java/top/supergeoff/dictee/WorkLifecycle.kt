@@ -28,10 +28,10 @@ internal suspend fun <T> observeServiceWork(ui: StateFlow<T>, jobs: ActiveWork, 
     combine(ui, jobs.changes) { _, _ -> Unit }.collect { onUpdate(ui.value, jobs.value) }
 }
 
-/** Une demande arrivée pendant la sortie impose une nouvelle lecture de la file. */
+/** Une demande arrivée avant la sortie sur file vide impose une nouvelle lecture de la file. */
 internal class InteractiveTranscriptionLifecycle(
     private val scope: CoroutineScope,
-    private val follow: suspend () -> Unit,
+    private val follow: suspend () -> InteractiveRun,
 ) {
     private val lock = Any()
     private var generation = 0L
@@ -44,9 +44,9 @@ internal class InteractiveTranscriptionLifecycle(
             try {
                 while (true) {
                     val observed = synchronized(lock) { generation }
-                    follow()
+                    val outcome = follow()
                     val done = synchronized(lock) {
-                        if (generation != observed) false else {
+                        if (outcome == InteractiveRun.QueueEmpty && generation != observed) false else {
                             if (loop === self) loop = null
                             true
                         }

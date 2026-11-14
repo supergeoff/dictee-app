@@ -4,6 +4,11 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.TestCoroutineScheduler
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
@@ -45,6 +50,7 @@ class TranscriptionWorkerRunnerTest {
         return TranscriptionWorkerRunner(repository, coordinator, cancelScheduled = { removed += it })
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     @Test fun `interactive timeout notifies service without a UI change and preserves schedule`() = runBlocking {
         disk.save(LocalState(transcriptionTasks = listOf(synthesisTask())))
         val entered = CompletableDeferred<Unit>()
@@ -59,14 +65,62 @@ class TranscriptionWorkerRunnerTest {
         val stopped = CompletableDeferred<Unit>()
         jobs.begin()
         val service = launch { observeServiceWork(ui, jobs) { _, active -> if (active == 0) stopped.complete(Unit) } }
-        val lifecycle = InteractiveTranscriptionLifecycle(this) { runner.run() }
+        val scheduler = TestCoroutineScheduler()
+        val interactiveScope = kotlinx.coroutines.CoroutineScope(coroutineContext + UnconfinedTestDispatcher(scheduler))
+        val lifecycle = InteractiveTranscriptionLifecycle(interactiveScope) { runner.run() }
         val interactive = launch { try { lifecycle.request().join() } finally { jobs.end() } }
-        withTimeout(5_000) { entered.await(); interactive.join() }
+        withTimeout(5_000) { entered.await() }
+        scheduler.advanceTimeBy(100)
+        scheduler.runCurrent()
+        withTimeout(5_000) { interactive.join() }
         assertEquals(0, jobs.value)
         withTimeout(1_000) { stopped.await() }
         service.cancelAndJoin()
         assertEquals(SynthesisPhase.CALLING, disk.load().transcriptionTasks.single().synthesis!!.phase)
         assertEquals(1, disk.load().transcriptionTasks.single().synthesis!!.attempts)
+        assertTrue(removed.isEmpty())
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun `request during wait does not restart interactive runner after timeout`() = runBlocking {
+        disk.save(LocalState(transcriptionTasks = listOf(synthesisTask())))
+        var now = 1_000L
+        var calls = 0
+        val waiting = CompletableDeferred<Unit>()
+        val releaseWait = CompletableDeferred<Unit>()
+        val entered = CompletableDeferred<Unit>()
+        val client = synthesisClient {
+            calls++
+            when (calls) {
+                1 -> throw SynthesisClientException(SynthesisFailureKind.TRANSIENT)
+                2 -> { entered.complete(Unit); CompletableDeferred<Unit>().await(); byteArrayOf() }
+                else -> "# Synthèse".toByteArray()
+            }
+        }
+        val repo = LocalStateRepository(disk)
+        val coordinator = synthesisCoordinator(repo, client) { now }
+        val removed = mutableListOf<String>()
+        val worker = TranscriptionWorkerRunner(repo, coordinator, { removed += it })
+        val runner = TranscriptionInteractiveRunner(repo, coordinator, worker, clock = { now }, timeoutMs = 100,
+            wait = { _, millis ->
+                if (!waiting.isCompleted) { waiting.complete(Unit); releaseWait.await() }
+                now += millis
+            })
+        val scheduler = TestCoroutineScheduler()
+        val interactiveScope = kotlinx.coroutines.CoroutineScope(coroutineContext + UnconfinedTestDispatcher(scheduler))
+        val lifecycle = InteractiveTranscriptionLifecycle(interactiveScope) { runner.run() }
+        val first = lifecycle.request()
+        withTimeout(5_000) { waiting.await() }
+        val second = lifecycle.request()
+        releaseWait.complete(Unit)
+        withTimeout(5_000) { entered.await() }
+        scheduler.advanceTimeBy(100)
+        scheduler.runCurrent()
+        withTimeout(5_000) { first.join(); second.join() }
+        assertEquals(2, calls)
+        val saved = disk.load().transcriptionTasks.single().synthesis!!
+        assertEquals(SynthesisPhase.CALLING, saved.phase)
+        assertEquals(2, saved.attempts)
         assertTrue(removed.isEmpty())
     }
 
@@ -87,8 +141,9 @@ class TranscriptionWorkerRunnerTest {
         val allowExit = CompletableDeferred<Unit>()
         var runs = 0
         val lifecycle = InteractiveTranscriptionLifecycle(this) {
-            TranscriptionInteractiveRunner(repo, coordinator, worker).run()
+            val outcome = TranscriptionInteractiveRunner(repo, coordinator, worker).run()
             if (++runs == 1) { emptyRead.complete(Unit); allowExit.await() }
+            outcome
         }
         val first = lifecycle.request()
         withTimeout(5_000) { emptyRead.await() }
