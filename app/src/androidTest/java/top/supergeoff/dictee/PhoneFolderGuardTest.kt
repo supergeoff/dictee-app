@@ -37,7 +37,7 @@ class PhoneFolderGuardTest {
         })
         resolver.addProvider(FakeDocumentsProvider.AUTHORITY, provider)
         folder = PhoneFolder(wrapped, tree)
-        source = File.createTempFile("synthetic-md-", ".tmp", context.cacheDir).apply { writeText("new synthetic content") }
+        source = File.createTempFile("synthetic-md-", ".tmp", InstrumentationRegistry.getInstrumentation().targetContext.cacheDir.apply { mkdirs() }).apply { writeText("new synthetic content") }
     }
     @After fun tearDown() { provider.reset(); source.delete() }
 

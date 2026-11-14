@@ -63,7 +63,7 @@ class FakeDocumentsProvider : DocumentsProvider() {
     }
     fun put(name: String, contents: String): String {
         val id = "doc${nextId++}"
-        val file = File.createTempFile("fake-saf-", ".bin", context!!.cacheDir).apply { writeText(contents) }
+        val file = File.createTempFile("fake-saf-", ".bin", androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext.cacheDir.apply { mkdirs() }).apply { writeText(contents) }
         entries[id] = Entry(name, file)
         return id
     }

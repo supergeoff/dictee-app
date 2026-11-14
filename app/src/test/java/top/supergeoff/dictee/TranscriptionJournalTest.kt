@@ -88,6 +88,7 @@ class TranscriptionJournalTest {
         assertEquals(listOf(
             "LLM Note-20261111120000 : tâche créée, 1e dans la file",
             "LLM Note-20261111120000 : appel envoyé, tentative 1/3",
+            "LLM Note-20261111120000 : réponse 200 en 0 s (9 o)",
             "LLM Note-20261111120000 : MD enregistré",
         ), log.lines)
     }
@@ -136,7 +137,7 @@ class TranscriptionJournalTest {
         assertFalse(log.lines.joinToString("\n").contains("synthetic-secret"))
     }
 
-    @Test fun `le client de synthese journalise sa reponse sans la cle ni le contenu`() = runBlocking {
+    @Test fun `le client de synthese ne journalise rien, la ligne de reponse porte le nom du fichier et vient du coordinateur`() = runBlocking {
         val log = ListLog()
         val body = org.json.JSONObject().put("choices", org.json.JSONArray().put(
             org.json.JSONObject().put("message", org.json.JSONObject().put("role", "assistant").put("content", "résumé"))))
@@ -145,10 +146,7 @@ class TranscriptionJournalTest {
         val context = SynthesisContext("https://example.invalid/v1", "ref", "model", "template",
             PromptMetadata("Note", "12/11/2026 12:00", "durée"), "prompt", "a".repeat(64))
         client.complete(context, vtt)
-        assertEquals(1, log.lines.size)
-        assertTrue(log.lines.single().startsWith("LLM Note 12/11/2026 12:00 : réponse 200 en "))
-        assertFalse(log.lines.single().contains("synthetic-secret"))
-        assertFalse(log.lines.single().contains("résumé"))
+        assertEquals(emptyList<String>(), log.lines)
     }
 
     @Test fun `les demandes recues et ecartees sont journalisees par enregistrement`() {

@@ -46,6 +46,8 @@ class TranscriptionCoordinator(
     private val onFilesPromoted: suspend (String) -> Unit = {},
 ) {
     private val mutex = Mutex()
+    /** Une seule tâche travaille à la fois : une tâche plus ancienne créée pendant un appel attend la fin de cet appel. */
+    private val runSlot = Mutex()
     // Sérialise les interventions d'une même tâche sans retenir la file pendant les appels réseau (DIC-25).
     private val taskMutexes = java.util.concurrent.ConcurrentHashMap<String, Mutex>()
     // Accès protégé par promotionGuard : l'enregistrement ne peut manquer une annulation durable.
@@ -181,7 +183,10 @@ class TranscriptionCoordinator(
                 ?: return RunOutcome.Resume
             if (current.phase.isTerminal()) return RunOutcome.Finished
             if (current.suspended) return RunOutcome.Suspended
-            return runLocked(localId)
+            // Une annulation ne prend pas le créneau : elle doit pouvoir passer pendant un appel long.
+            if (current.phase == TranscriptionPhase.CANCEL_REQUESTED) return runLocked(localId)
+            if (!runSlot.tryLock()) return RunOutcome.Resume
+            try { return runLocked(localId) } finally { runSlot.unlock() }
         } finally {
             taskLock.unlock()
         }
@@ -496,6 +501,7 @@ class TranscriptionCoordinator(
         }
         if (calling.phase != TranscriptionPhase.SYNTHESIZING) return RunOutcome.Finished
         journal(Source.LLM, task, "appel envoyé, tentative $attempt/3")
+        val callStartedMs = clock()
         val result = try {
             supervisorScope {
                 val call = async(start = CoroutineStart.LAZY) { checkNotNull(synthesisClient).complete(context, bytes) }
@@ -539,6 +545,7 @@ class TranscriptionCoordinator(
                 nextAttemptAtMillis = clock() + delayMs)) }
             return RunOutcome.Resume
         }
+        journal(Source.LLM, task, "réponse 200 en ${(clock() - callStartedMs) / 1_000} s (${result.size} o)")
         val staged = try { withContext(Dispatchers.IO) { promotionGuard.withLock {
             val current = runBlocking(Dispatchers.IO) { repository.awaitInitialized().transcriptionTasks.first { it.localId == task.localId } }
             if (current.phase != TranscriptionPhase.SYNTHESIZING) return@withLock false

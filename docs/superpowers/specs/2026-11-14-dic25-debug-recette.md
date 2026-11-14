@@ -218,3 +218,10 @@ Confirmés : 1, 2, 3, 4, 5, 6, 7 (règle voulue, non corrigée), 8, 9, 10, 11. A
 ### Vérifications
 
 `./gradlew testDebugUnitTest`, `./gradlew assembleDebug` et `./gradlew lint` au vert. APK de recette signé avec le trousseau de release et installé par-dessus la 0.4.0 sans perte de données (adb, débogage sans fil) ; logcat propre pendant la recette.
+
+### Recette ADB du 14 novembre 2026 (copie de recette isolée)
+
+- Scénarios 1, 2 et 6 réussis sur téléphone (écran et journal conformes). Scénario 5 : défaut nouveau, constat 12.
+- Constat 12, confirmé puis corrigé : une tâche plus ancienne créée pendant l'appel d'une tâche plus récente partait en parallèle, car la règle de tête de file ne regardait que les tâches non terminées. Le second appel a été coupé quand le premier s'est terminé, ce qui a consommé un essai sur trois (et pourrait être facturé). Correction : un créneau d'exécution unique dans `TranscriptionCoordinator.runBounded` ; une annulation n'en prend pas. Test : `Dic25FindingsTest`, constat 12.
+- Ligne de journal de réponse de synthèse : elle portait la date de l'enregistrement au lieu de son nom. Elle est maintenant écrite par le coordinateur, au nom du fichier ; le client de synthèse n'écrit plus au journal.
+- Tests instrumentés : 21 sur 21 après correction de trois défauts de test (dossier de cache du paquet de test absent, onglets recouverts par la carte dans un test Compose).

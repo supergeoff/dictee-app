@@ -45,15 +45,12 @@ class UrlSynthesisClient(
     private class Failure(val kind: SynthesisFailureKind) : Exception()
 
     override suspend fun complete(context: SynthesisContext, vtt: ByteArray): ByteArray = execute { resources ->
-        val started = nanoTime()
         val prompt = context.systemPrompt
         if (prompt.isNullOrBlank() || context.vttSha256.isNullOrBlank()) throw Failure(SynthesisFailureKind.PERMANENT)
         val content = decode(vtt, SynthesisFailureKind.PERMANENT)
         request(context.baseUrl, context.model, prompt, content, resources) {
             if (context.credentialRef.isBlank()) throw Failure(SynthesisFailureKind.CREDENTIAL)
             try { credentials.read(context.credentialRef) } catch (_: Exception) { throw Failure(SynthesisFailureKind.CREDENTIAL) }
-        }.also { response ->
-            log?.add(Source.LLM, "${labelOf(context)} : réponse 200 en ${(nanoTime() - started) / 1_000_000_000} s (${response.size} o)")
         }
     }
 
@@ -172,7 +169,6 @@ class UrlSynthesisClient(
         private val executor = Executors.newCachedThreadPool { runnable -> Thread(runnable, "synthesis-http").apply { isDaemon = true } }
 
         /** Le nom de fichier n'existe pas ici ; le type et la date du contexte identifient l'enregistrement. */
-        private fun labelOf(context: SynthesisContext): String = "${context.metadata.type} ${context.metadata.date}"
     }
 }
 

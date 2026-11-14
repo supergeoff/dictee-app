@@ -155,6 +155,33 @@ class Dic25FindingsTest {
         job.cancel()
     }
 
+    @Test fun `constat 12 une tache plus ancienne n ouvre pas un second appel pendant un appel en cours`() = runBlocking {
+        store.save(LocalState(transcriptionTasks = listOf(synthesisOnly("20261111090000"))))
+        val repository = LocalStateRepository(store)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val md = FakeMd { entered.complete(Unit); release.await(); "synthèse".toByteArray() }
+        val phone = MemoryStore().apply {
+            files["Note-20261111090000.vtt"] = vtt
+            files["Note-20261110090000.vtt"] = vtt
+        }
+        val coordinator = baseCoordinator(repository, FakeStt(), RecoverySafety(repository), md = md, phone = phone)
+        val running = async(Dispatchers.Default) { coordinator.runBounded("syn-20261111090000") }
+        try {
+            assertNotNull("l'appel de synthèse n'est jamais parti", withTimeoutOrNull(5_000) { entered.await() })
+            repository.updateDurably { it.copy(transcriptionTasks = it.transcriptionTasks + synthesisOnly("20261110090000")) }
+            val outcome = withTimeoutOrNull(1_000) { coordinator.runBounded("syn-20261110090000") }
+            assertEquals("un seul appel de synthèse à la fois", 1, md.calls)
+            assertEquals(RunOutcome.Resume, outcome)
+        } finally { release.complete(Unit) }
+        withTimeoutOrNull(5_000) { running.await() }
+        // Une fois l'appel terminé, la tâche plus ancienne passe à son tour sans avoir perdu d'essai.
+        withTimeoutOrNull(5_000) { coordinator.runBounded("syn-20261110090000") }
+        assertEquals(2, md.calls)
+        val older = repository.awaitInitialized().transcriptionTasks.first { it.localId == "syn-20261110090000" }
+        assertEquals(1, older.synthesis?.attempts)
+    }
+
     @Test fun `constat 8 corrige une synthese pas en tete annonce son attente`() {
         val waiting = synthesisOnly("20261111120000")
         val head = task("head", "20261111090000", TranscriptionPhase.TRACKING)

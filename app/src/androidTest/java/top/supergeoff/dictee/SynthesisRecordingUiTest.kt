@@ -84,7 +84,7 @@ class SynthesisRecordingUiTest {
         val context = SynthesisContext("https://example.invalid/v1", "ref", "model", "prompt", PromptMetadata("Note", "date", "durée"), "prompt résolu", "vtt-hash")
         val work = SynthesisWork(SynthesisPhase.SUSPENDED, "Note-20261101000000.md", true, context, 3, null, null, "Trois tentatives ont échoué.")
         val task = TranscriptionTask("id-synthétique", "20261101000000", "Note-20261101000000.mp3", "Note-20261101000000.vtt", "content://folder", "", "", "", "", "", TranscriptionPhase.SYNTHESIZING, suspended = true, synthesis = work)
-        compose.setContent { DicteeTheme(true) { SynthesisTaskNotice(task) { retried = it } } }
+        compose.setContent { DicteeTheme(true) { SynthesisTaskNotice(task, listOf(task)) { retried = it } } }
         compose.onNodeWithText("Trois tentatives ont échoué.").assertIsDisplayed()
         compose.onNodeWithText("Relancer le MD").performClick()
         compose.runOnIdle { assertEquals("id-synthétique", retried) }
@@ -94,7 +94,7 @@ class SynthesisRecordingUiTest {
         val work = SynthesisWork(SynthesisPhase.CALLING, "Note.md", false, null, 1, 60_000, null, null)
         val task = TranscriptionTask("id", "20261101000000", "Note.mp3", "Note.vtt", "content://folder", "", "", "", "", "", TranscriptionPhase.SYNTHESIZING, synthesis = work)
         val current = mutableStateOf(task)
-        compose.setContent { DicteeTheme(false) { SynthesisTaskNotice(current.value) {} } }
+        compose.setContent { DicteeTheme(false) { SynthesisTaskNotice(current.value, listOf(current.value)) {} } }
         compose.onNodeWithText("Synthèse en cours. Le MD sera enregistré dès réception.").assertIsDisplayed()
         compose.onNodeWithText("Relance automatique prévue. La tâche est conservée.").assertDoesNotExist()
         compose.runOnIdle { current.value = task.copy(synthesis = work.copy(phase = SynthesisPhase.READY)) }
@@ -106,8 +106,10 @@ class SynthesisRecordingUiTest {
     @Test fun renderedMarkdownShowsModelInLightTheme() {
         compose.setContent {
             DicteeTheme(false) {
+                androidx.compose.foundation.layout.Column() {
                 RecordingDocuments(markdown = "## Résumé\n\n- Élément synthétique", provenanceLabel = "Modèle utilisé : modèle-démo", canCreate = false, onCreate = {}) {
                     Text("Segment synthétique")
+                }
                 }
             }
         }
