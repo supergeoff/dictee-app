@@ -296,10 +296,15 @@ class TranscriptionCoordinator(
         if (task.phase != TranscriptionPhase.SAVING) return RunOutcome.Resume
         try {
             // En reprise serveur seulement, un VTT égal peut être celui déjà promu avant la panne.
-            val alreadySaved = known == null && task.synthesis != null && withContext(Dispatchers.IO) {
-                val phone = phoneStore(task.folderUri)
-                phone.list().any { it.fileName == task.vttName } &&
-                    TranscriptionAudio.sha256(phone, task.vttName) == TranscriptionAudio.sha256(bytes)
+            // Les tâches DIC-4 sans synthèse et avec remplacement gardent leur parcours d'origine.
+            val alreadySaved = known == null && (task.synthesis != null || !task.replaceVtt) && try {
+                withContext(Dispatchers.IO) {
+                    val phone = phoneStore(task.folderUri)
+                    phone.list().any { it.fileName == task.vttName } &&
+                        TranscriptionAudio.sha256(phone, task.vttName) == TranscriptionAudio.sha256(bytes)
+                }
+            } catch (e: java.io.IOException) {
+                throw PhoneStoreException("Le VTT ou le dossier est inaccessible. Vérifie le dossier avant de relancer.", e)
             }
             if (!alreadySaved) saveVtt(task, bytes)
         } catch (e: CancellationException) {

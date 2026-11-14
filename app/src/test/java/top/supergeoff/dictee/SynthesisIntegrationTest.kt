@@ -181,6 +181,145 @@ class SynthesisIntegrationTest {
         assertEquals(2, writes)
     }
 
+    private fun resumeClient() = object : TranscriptionClient {
+        override suspend fun get(task: TranscriptionTask) = ServerTask("server", ServerStatus.COMPLETED, 1.0, validVtt)
+        override suspend fun submit(task: TranscriptionTask): SubmitResult = error("unexpected")
+        override suspend fun cancel(task: TranscriptionTask): ServerTask = error("unexpected")
+        override suspend fun test(settings: TranscriptionSettings) = Unit
+    }
+
+    private fun missingSavingTask(phone: PhoneStore, hasMd: Boolean): TranscriptionTask {
+        val task = TranscriptionPreparation.prepare(phone, "content://folder", sttSettings, emptyMap(), null,
+            mdSettings, RequestedWork.MISSING) { "id" }.single()
+        assertEquals(!hasMd, task.synthesis != null)
+        assertFalse(task.replaceVtt)
+        return task.copy(phase = TranscriptionPhase.SAVING, serverId = "server")
+    }
+
+    @Test fun missingVttOnlyResumeRecognizesAlreadyPromotedVtt() = runBlocking {
+        val phone = MemoryStore().apply {
+            files["Note-20261111120000.mp3"] = "audio".toByteArray()
+            files["Note-20261111120000.md"] = "md existant".toByteArray()
+        }
+        val initial = missingSavingTask(phone, hasMd = true)
+        val store = LocalStateStore(File(tmp.root, "state.json"))
+        store.save(LocalState(transcriptionTasks = listOf(initial)))
+        var writes = 0
+        fun coordinator() = LocalStateRepository(store).let { repo ->
+            TranscriptionCoordinator(repo, resumeClient(), TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
+                verifyAudio = { true }, phoneStore = { phone }, saveVtt = { task, bytes ->
+                    writes++
+                    if (phone.files.containsKey(task.vttName)) throw PhoneStoreException("Le VTT existe déjà.")
+                    phone.files[task.vttName] = bytes
+                    throw java.io.IOException("interruption après promotion")
+                })
+        }
+        assertEquals(RunOutcome.Resume, coordinator().runBounded("id"))
+        assertEquals(TranscriptionPhase.SAVING, store.load().transcriptionTasks.single().phase)
+        assertArrayEquals(validVtt, phone.files[initial.vttName])
+        assertEquals(RunOutcome.Finished, coordinator().runBounded("id"))
+        val completed = store.load().transcriptionTasks.single()
+        assertEquals(TranscriptionPhase.COMPLETED, completed.phase)
+        assertFalse(completed.suspended)
+        assertNull(completed.synthesis)
+        assertEquals(1, writes)
+        assertEquals("md existant", phone.files["Note-20261111120000.md"]!!.toString(Charsets.UTF_8))
+    }
+
+    @Test fun missingVttOnlyResumePreservesDifferentVttAndSuspends() = runBlocking {
+        val phone = MemoryStore().apply {
+            files["Note-20261111120000.mp3"] = "audio".toByteArray()
+            files["Note-20261111120000.md"] = "md existant".toByteArray()
+        }
+        val initial = missingSavingTask(phone, hasMd = true)
+        val external = "vtt extérieur".toByteArray()
+        phone.files[initial.vttName] = external
+        val store = LocalStateStore(File(tmp.root, "state.json"))
+        store.save(LocalState(transcriptionTasks = listOf(initial)))
+        val repo = LocalStateRepository(store)
+        var promotions = 0
+        val coordinator = TranscriptionCoordinator(repo, resumeClient(), TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
+            verifyAudio = { true }, phoneStore = { phone }, saveVtt = { task, bytes ->
+                if (phone.files.containsKey(task.vttName) && !task.replaceVtt) throw PhoneStoreException("Le VTT existe déjà.")
+                promotions++; phone.files[task.vttName] = bytes
+            })
+        assertEquals(RunOutcome.Suspended, coordinator.runBounded("id"))
+        val suspended = store.load().transcriptionTasks.single()
+        assertEquals(TranscriptionPhase.SAVING, suspended.phase)
+        assertTrue(suspended.suspended)
+        assertTrue(suspended.suspensionReason!!.contains("VTT"))
+        assertArrayEquals(external, phone.files[initial.vttName])
+        assertEquals("md existant", phone.files["Note-20261111120000.md"]!!.toString(Charsets.UTF_8))
+        assertEquals(0, promotions)
+    }
+
+    private suspend fun assertReconciliationStreamFailure(hasMd: Boolean, failOnClose: Boolean) {
+        val memory = MemoryStore().apply {
+            files["Note-20261111120000.mp3"] = "audio".toByteArray()
+            if (hasMd) files["Note-20261111120000.md"] = "md existant".toByteArray()
+        }
+        val initial = missingSavingTask(memory, hasMd)
+        memory.files[initial.vttName] = validVtt
+        var opens = 0
+        val phone = object : PhoneStore by memory {
+            override fun open(fileName: String): java.io.InputStream {
+                if (fileName != initial.vttName) return memory.open(fileName)
+                opens++
+                return object : java.io.FilterInputStream(memory.open(fileName)) {
+                    override fun read(b: ByteArray, off: Int, len: Int): Int {
+                        if (!failOnClose) throw java.io.IOException("lecture synthétique")
+                        return super.read(b, off, len)
+                    }
+                    override fun close() {
+                        super.close()
+                        if (failOnClose) throw java.io.IOException("fermeture synthétique")
+                    }
+                }
+            }
+        }
+        val store = LocalStateStore(File(tmp.root, "state-$hasMd-$failOnClose.json"))
+        store.save(LocalState(transcriptionTasks = listOf(initial)))
+        val repo = LocalStateRepository(store)
+        var writes = 0
+        val coordinator = TranscriptionCoordinator(repo, resumeClient(), TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
+            verifyAudio = { true }, phoneStore = { phone }, saveVtt = { _, _ -> writes++ })
+        assertEquals(RunOutcome.Suspended, coordinator.runBounded("id"))
+        val suspended = store.load().transcriptionTasks.single()
+        assertEquals(TranscriptionPhase.SAVING, suspended.phase)
+        assertTrue(suspended.suspended)
+        assertTrue(suspended.suspensionReason!!.contains("VTT"))
+        assertTrue(suspended.suspensionReason!!.contains("inaccessible"))
+        assertEquals(RunOutcome.Suspended, coordinator.runBounded("id"))
+        assertEquals(1, opens)
+        assertEquals(0, writes)
+        assertArrayEquals(validVtt, memory.files[initial.vttName])
+        if (hasMd) assertEquals("md existant", memory.files["Note-20261111120000.md"]!!.toString(Charsets.UTF_8))
+    }
+
+    @Test fun synthesisVttReconciliationSuspendsOnReadFailure() = runBlocking { assertReconciliationStreamFailure(false, false) }
+    @Test fun synthesisVttReconciliationSuspendsOnCloseFailure() = runBlocking { assertReconciliationStreamFailure(false, true) }
+    @Test fun missingVttOnlyReconciliationSuspendsOnReadFailure() = runBlocking { assertReconciliationStreamFailure(true, false) }
+    @Test fun missingVttOnlyReconciliationSuspendsOnCloseFailure() = runBlocking { assertReconciliationStreamFailure(true, true) }
+
+    @Test fun historicalVttOnlyTaskWithoutReplaceFieldKeepsDic4SavePath() = runBlocking {
+        val phone = MemoryStore().apply { files["Note-20261111120000.mp3"] = "audio".toByteArray() }
+        val initial = missingSavingTask(phone, hasMd = false).copy(synthesis = null, replaceVtt = true)
+        val stateFile = File(tmp.root, "state.json")
+        val store = LocalStateStore(stateFile)
+        store.save(LocalState(transcriptionTasks = listOf(initial)))
+        val json = org.json.JSONObject(stateFile.readText())
+        json.getJSONArray("transcriptionTasks").getJSONObject(0).remove("replaceVtt")
+        stateFile.writeText(json.toString())
+        assertTrue(store.load().transcriptionTasks.single().replaceVtt)
+        val repo = LocalStateRepository(store)
+        var writes = 0
+        val coordinator = TranscriptionCoordinator(repo, resumeClient(), TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
+            verifyAudio = { true }, phoneStore = { error("DIC-4 ne consulte pas le dossier en reprise") }, saveVtt = { _, _ -> writes++ })
+        assertEquals(RunOutcome.Finished, coordinator.runBounded("id"))
+        assertEquals(1, writes)
+        assertEquals(TranscriptionPhase.COMPLETED, store.load().transcriptionTasks.single().phase)
+    }
+
     @Test fun activeSttExcludedBeforeValidationAllowsOtherMd() = runBlocking {
         val phone = MemoryStore().apply {
             files["Note-20261111120000.mp3"] = "audio".toByteArray()
