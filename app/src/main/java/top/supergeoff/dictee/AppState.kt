@@ -446,6 +446,7 @@ class AppModel(
                     if (request == RequestedWork.MISSING) announceExclusions(names)
                     logTranscriptionRequest(names, request)
                     val started = transcriptionCoordinator.start(names, request)
+                    if (started.isEmpty()) reportUnconfiguredSynthesis(names, request)
                     if (started.isNotEmpty()) transcriptionLifecycle.request().join()
                 } catch (e: CancellationException) {
                     throw e
@@ -466,6 +467,25 @@ class AppModel(
             val line = event.name?.let { "$it : ${event.message}" } ?: event.message
             journal.add(event.source, line)
         }
+    }
+
+    /**
+     * Rien n'est parti et un enregistrement n'attendait qu'un MD : la synthèse n'est pas configurée.
+     * Le message dit quoi régler et où ; une ligne LLM par enregistrement concerne le journal.
+     */
+    private suspend fun reportUnconfiguredSynthesis(names: Set<String>?, request: RequestedWork) {
+        if (request == RequestedWork.REDO_VTT_AND_MD) return
+        val state = localRepository.awaitInitialized()
+        val current = buildUi(state, phoneFlow.value, driveFlow.value, box.status.value, liveFlow.value)
+        val active = state.transcriptionTasks.filter { !it.phase.isTerminal() }.mapTo(mutableSetOf()) { it.recordingName }
+        val (plans, _) = SynthesisSelection.plan(current.recordings, names, state.errors, active, request)
+        val waiting = plans.filter { !it.makeVtt && it.makeMd }.map { it.recording }
+        if (waiting.isEmpty()) return
+        for (recording in waiting) {
+            val base = recording.phoneFiles[FileKind.MP3]?.fileName?.removeSuffix(".mp3") ?: recording.name
+            journal.add(Source.LLM, "$base : réglages de synthèse à compléter")
+        }
+        say("Réglages de synthèse à compléter. Ouvre Réglages, rubrique Synthèse.")
     }
 
     /** Signale les éléments choisis qui ne seront pas transcrits : sans MP3 sur le téléphone ou en erreur de récupération. */

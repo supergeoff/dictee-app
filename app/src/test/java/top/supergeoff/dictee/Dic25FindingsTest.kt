@@ -115,20 +115,17 @@ class Dic25FindingsTest {
         assertEquals(listOf("id"), started)
     }
 
-    @Test fun `constat 5 sans reglages de synthese la tache de MD seule nait terminee et suspendue`() {
+    @Test fun `constat 5 corrige aucune tache de MD seule sans reglages de synthese`() {
         val phone = MemoryStore().apply {
             files["Note-20261111120000.mp3"] = "audio".toByteArray()
             files["Note-20261111120000.vtt"] = vtt
         }
         val tasks = TranscriptionPreparation.prepare(phone, "content://folder", sttSettings, emptyMap(),
             setOf("20261111120000"), SynthesisSettings(), RequestedWork.MISSING) { "id-1" }
-        val task = tasks.single()
-        assertEquals(TranscriptionPhase.COMPLETED, task.phase)
-        assertEquals(SynthesisPhase.SUSPENDED, task.synthesis!!.phase)
-        assertEquals("Configure la synthèse puis crée explicitement un travail MD.", task.synthesis.suspensionReason)
+        assertTrue("aucune tâche ne naît terminée : la demande est signalée à l'écran", tasks.isEmpty())
     }
 
-    @Test fun `constat 6 chaque nouvel appui ajoute une tache identique`() {
+    @Test fun `constat 6 corrige chaque appui sans reglage ne cumule aucune tache`() {
         val phone = MemoryStore().apply {
             files["Note-20261111120000.mp3"] = "audio".toByteArray()
             files["Note-20261111120000.vtt"] = vtt
@@ -137,8 +134,7 @@ class Dic25FindingsTest {
             setOf("20261111120000"), SynthesisSettings(), RequestedWork.MISSING) { "id-1" }
         val second = TranscriptionPreparation.prepare(phone, "content://folder", sttSettings, emptyMap(),
             setOf("20261111120000"), SynthesisSettings(), RequestedWork.MISSING) { "id-2" }
-        assertEquals(2, (first + second).size)
-        assertTrue(second.single().phase.isTerminal())
+        assertEquals(0, (first + second).size)
     }
 
     @Test fun `constat 7 la file traite la plus ancienne tache d abord`() = runBlocking {

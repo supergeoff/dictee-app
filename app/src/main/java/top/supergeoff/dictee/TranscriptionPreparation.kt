@@ -18,7 +18,8 @@ internal object TranscriptionPreparation {
     ): List<TranscriptionTask> {
         val recordings = Recordings.merge(emptyList(), phone.list(), null, errors, Busy())
         val (plans, _) = SynthesisSelection.plan(recordings, selectedNames, errors, activeNames, request)
-        return plans.map { plan ->
+        // Sans réglages de synthèse, une demande de MD seule ne crée aucune tâche : le message vient d'AppModel.
+        return plans.mapNotNull { plan ->
             prepare(plan, settings)
             val recording = plan.recording
             val mp3 = checkNotNull(recording.phoneFiles[FileKind.MP3]).fileName
@@ -41,7 +42,9 @@ internal object TranscriptionPreparation {
             val work = if (!plan.makeMd) null else SynthesisWork(
                 if (plan.makeVtt) SynthesisPhase.WAITING_VTT else if (ready != null) SynthesisPhase.READY else SynthesisPhase.SUSPENDED,
                 md, plan.replaceMd, ready, 0, null, null, reason)
-            TranscriptionTask(newId(recording.name), recording.name, mp3, vtt, folderUri,
+            // MD seul sans synthèse configurée : aucune tâche (le message vient d'AppModel), sinon la tâche naît décrite.
+            if (!plan.makeVtt && context == null) null else TranscriptionTask(
+                newId(recording.name), recording.name, mp3, vtt, folderUri,
                 if (plan.makeVtt) TranscriptionAudio.sha256(phone, mp3) else "",
                 if (plan.makeVtt) settings.baseUrl else "", if (plan.makeVtt) checkNotNull(settings.credentialRef) else "",
                 if (plan.makeVtt) settings.language else "", if (plan.makeVtt) settings.model else "",
