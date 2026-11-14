@@ -21,6 +21,7 @@ import kotlin.coroutines.resumeWithException
 
 interface SynthesisClient {
     suspend fun complete(context: SynthesisContext, vtt: ByteArray): ByteArray
+    suspend fun subject(context: SynthesisContext, vtt: ByteArray): String? = null
     suspend fun test(settings: SynthesisSettings, secret: String)
 }
 
@@ -52,6 +53,16 @@ class UrlSynthesisClient(
             if (context.credentialRef.isBlank()) throw Failure(SynthesisFailureKind.CREDENTIAL)
             try { credentials.read(context.credentialRef) } catch (_: Exception) { throw Failure(SynthesisFailureKind.CREDENTIAL) }
         }
+    }
+
+    override suspend fun subject(context: SynthesisContext, vtt: ByteArray): String? {
+        val response = execute(minOf(timeoutMs, 60_000L)) { resources ->
+            request(context.baseUrl, context.model, RecordingSubject.INSTRUCTION, RecordingSubject.input(vtt), resources) {
+                if (context.credentialRef.isBlank()) throw Failure(SynthesisFailureKind.CREDENTIAL)
+                try { credentials.read(context.credentialRef) } catch (_: Exception) { throw Failure(SynthesisFailureKind.CREDENTIAL) }
+            }
+        }
+        return RecordingSubject.clean(response.toString(Charsets.UTF_8))
     }
 
     override suspend fun test(settings: SynthesisSettings, secret: String) {
@@ -141,8 +152,8 @@ class UrlSynthesisClient(
         }
     }
 
-    private suspend fun <T : Any> execute(block: (Resources) -> T): T {
-        val result = withTimeoutOrNull(timeoutMs) {
+    private suspend fun <T : Any> execute(deadlineMs: Long = timeoutMs, block: (Resources) -> T): T {
+        val result = withTimeoutOrNull(deadlineMs) {
             suspendCancellableCoroutine { continuation ->
                 val resources = Resources()
                 val future = AtomicReference<Future<*>?>()

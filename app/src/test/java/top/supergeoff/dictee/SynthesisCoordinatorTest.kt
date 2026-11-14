@@ -34,7 +34,10 @@ class SynthesisCoordinatorTest {
     private var calls = 0
     private var accessible = true
     private var response: suspend () -> ByteArray = { "# Synthèse".toByteArray() }
+    private var subjectCalls = 0
+    private var subjectResponse: suspend () -> String? = { null }
     private val md = object : SynthesisClient {
+        override suspend fun subject(context: SynthesisContext, vtt: ByteArray): String? { subjectCalls++; return subjectResponse() }
         override suspend fun complete(context: SynthesisContext, vtt: ByteArray): ByteArray { calls++; return response() }
         override suspend fun test(settings: SynthesisSettings, secret: String) = Unit
     }
@@ -48,6 +51,32 @@ class SynthesisCoordinatorTest {
     private fun coordinator(repo: LocalStateRepository, guard: java.util.concurrent.locks.ReentrantLock = java.util.concurrent.locks.ReentrantLock()) = TranscriptionCoordinator(repo, stt, TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
         verifyAudio = { true }, schedule = {}, synthesisClient = md, synthesisStorage = SynthesisStorage(File(tmp.root, "stage")),
         phoneStore = { folder }, synthesisCredentialAccessible = { accessible }, clock = { now }, promotionGuard = guard)
+
+    @Test fun subjectFailureDoesNotBlockMdAndRestartDoesNotRepeat() = runBlocking {
+        store.save(LocalState(transcriptionTasks = listOf(task())))
+        subjectResponse = { throw IllegalStateException("synthetic") }
+        coordinator(LocalStateRepository(store)).runBounded("id")
+        assertEquals(1, subjectCalls)
+        assertTrue(store.load().transcriptionTasks.single().subjectAttempted)
+        assertEquals(TranscriptionPhase.COMPLETED, store.load().transcriptionTasks.single().phase)
+        assertTrue(store.load().recordingSubjects.isEmpty())
+        assertEquals(1, calls)
+    }
+
+    @Test fun existingSubjectSkipsMdOnlyRequest() = runBlocking {
+        store.save(LocalState(transcriptionTasks = listOf(task()), recordingSubjects = mapOf("20261111120000" to "Sujet existant")))
+        coordinator(LocalStateRepository(store)).runBounded("id")
+        assertEquals(0, subjectCalls)
+        assertEquals("Sujet existant", store.load().recordingSubjects["20261111120000"])
+    }
+
+    @Test fun subjectIsPersistedBeforeMd() = runBlocking {
+        store.save(LocalState(transcriptionTasks = listOf(task())))
+        subjectResponse = { "Sujet synthétique" }
+        response = { assertEquals("Sujet synthétique", store.load().recordingSubjects["20261111120000"]); "# MD".toByteArray() }
+        coordinator(LocalStateRepository(store)).runBounded("id")
+        assertEquals(1, subjectCalls)
+    }
 
     @Test fun attemptBudgetSurvivesRestart() = runBlocking {
         store.save(LocalState(transcriptionTasks = listOf(task())))

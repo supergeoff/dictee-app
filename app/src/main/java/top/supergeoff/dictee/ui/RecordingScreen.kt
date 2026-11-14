@@ -109,7 +109,7 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
                 )
             }
         }
-        RecordingBar(recording, canRecover, onBack, onRecover = { model.recover(listOf(name)) },
+        RecordingBar(recording, ui.local.recordingSubjects[name], canRecover, onBack, onRecover = { model.recover(listOf(name)) },
             canRedoVtt = canRedoVtt, canRedoMd = canRedoMd,
             onRedoVtt = { model.transcribe(setOf(name), RequestedWork.REDO_VTT_AND_MD) },
             onRedoMd = { model.transcribe(setOf(name), RequestedWork.REDO_MD) })
@@ -205,7 +205,7 @@ internal fun RecordingDocuments(
 /** En-tête : le retour, le titre, la durée avec l'état, puis le menu. */
 @Composable
 private fun RecordingBar(
-    recording: Recording, canRecover: Boolean, onBack: () -> Unit, onRecover: () -> Unit,
+    recording: Recording, subject: String?, canRecover: Boolean, onBack: () -> Unit, onRecover: () -> Unit,
     canRedoVtt: Boolean, canRedoMd: Boolean, onRedoVtt: () -> Unit, onRedoMd: () -> Unit,
 ) {
     val colors = Dictee.colors
@@ -220,14 +220,14 @@ private fun RecordingBar(
         IconAction(R.drawable.ic_back, "Retour", onBack)
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
-                text = RecordName.detailTitle(recording.type, recording.name),
+                text = subject ?: RecordName.detailTitle(recording.type, recording.name),
                 style = Dictee.type.titleItem,
                 color = colors.text,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(text = duration(recording), style = Dictee.type.caption, color = colors.textSecondary, maxLines = 1)
+                Text(text = (subject?.let { "${RecordName.detailTitle(recording.type, recording.name)} · " } ?: "") + duration(recording), style = Dictee.type.caption, color = colors.textSecondary, maxLines = 1)
                 StateBadge(recording.state)
             }
         }

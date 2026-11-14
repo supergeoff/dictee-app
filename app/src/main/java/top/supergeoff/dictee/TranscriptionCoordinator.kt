@@ -51,7 +51,7 @@ class TranscriptionCoordinator(
     // Sérialise les interventions d'une même tâche sans retenir la file pendant les appels réseau (DIC-25).
     private val taskMutexes = java.util.concurrent.ConcurrentHashMap<String, Mutex>()
     // Accès protégé par promotionGuard : l'enregistrement ne peut manquer une annulation durable.
-    private val synthesisCalls = mutableMapOf<String, Deferred<ByteArray>>()
+    private val synthesisCalls = mutableMapOf<String, Deferred<*>>()
 
     /** Une ligne d'observabilité ; le préfixe est le nom de base du fichier quand il existe. Aucune clé ni aucun contenu n'y entre. */
     private fun journal(source: Source, task: TranscriptionTask?, message: String) {
@@ -420,6 +420,7 @@ class TranscriptionCoordinator(
             return RunOutcome.Resume
         }
         journal(Source.STT, task, "VTT enregistré")
+        if (task.replaceVtt) repository.updateDurably { state -> state.copy(recordingSubjects = state.recordingSubjects - task.recordingName) }
         val work = task.synthesis
         val resolved = work?.context?.let { context ->
             val speakers = WebVtt.parse(bytes).mapNotNull { it.speaker }.distinct().joinToString(", ").ifEmpty { "Non disponible" }
@@ -489,6 +490,9 @@ class TranscriptionCoordinator(
         }
         if (context.vttSha256 != hash || context.systemPrompt.isNullOrBlank())
             return suspendSynthesis(task.localId, "Le VTT a changé ou le contexte est invalide. Crée une nouvelle synthèse.")
+        requestSubject(task, context, bytes)
+        val latest = repository.awaitInitialized().transcriptionTasks.first { it.localId == task.localId }
+        if (latest.phase != TranscriptionPhase.SYNTHESIZING) return RunOutcome.Finished
         val accessible = try { withContext(Dispatchers.IO) { synthesisCredentialAccessible(context.credentialRef) } }
             catch (e: CancellationException) { throw e } catch (_: Exception) { false }
         if (!accessible) return suspendSynthesis(task.localId, "Clé de synthèse inaccessible. Vérifie les réglages.")
@@ -559,6 +563,40 @@ class TranscriptionCoordinator(
           catch (_: Exception) { return suspendSynthesis(task.localId, "Impossible d'enregistrer la synthèse temporaire.") }
         if (!staged) return RunOutcome.Finished
         return saveSynthesis(repository.awaitInitialized().transcriptionTasks.first { it.localId == task.localId })
+    }
+
+    private suspend fun requestSubject(task: TranscriptionTask, context: SynthesisContext, bytes: ByteArray) {
+        val state = repository.awaitInitialized()
+        val current = state.transcriptionTasks.firstOrNull { it.localId == task.localId } ?: return
+        if (current.subjectAttempted || state.recordingSubjects.containsKey(task.recordingName)) return
+        val marked = update(task.localId) { if (it.phase == TranscriptionPhase.SYNTHESIZING) it.copy(subjectAttempted = true) else it }
+        if (!marked.subjectAttempted || marked.phase != TranscriptionPhase.SYNTHESIZING) return
+        journal(Source.LLM, task, "sujet demandé")
+        val subject = try {
+            supervisorScope {
+                val call = async(start = CoroutineStart.LAZY) { synthesisClient?.subject(context, bytes) }
+                val registered = withContext(Dispatchers.IO) { promotionGuard.withLock {
+                    val latest = runBlocking(Dispatchers.IO) { repository.awaitInitialized().transcriptionTasks.first { it.localId == task.localId } }
+                    if (latest.phase != TranscriptionPhase.SYNTHESIZING) false else { synthesisCalls[task.localId] = call; true }
+                } }
+                if (!registered) { call.cancel(); return@supervisorScope null }
+                try { call.await() } finally {
+                    withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { promotionGuard.withLock {
+                        if (synthesisCalls[task.localId] === call) synthesisCalls.remove(task.localId)
+                    } }
+                }
+            }
+        } catch (e: CancellationException) {
+            currentCoroutineContext().ensureActive()
+            if (repository.awaitInitialized().transcriptionTasks.first { it.localId == task.localId }.phase == TranscriptionPhase.CANCELLED) return
+            throw e
+        } catch (_: Exception) { null }
+        if (subject == null) { journal(Source.LLM, task, "sujet indisponible"); return }
+        repository.updateDurably { latest ->
+            if (latest.transcriptionTasks.any { it.localId == task.localId && it.phase == TranscriptionPhase.SYNTHESIZING })
+                latest.copy(recordingSubjects = latest.recordingSubjects + (task.recordingName to subject)) else latest
+        }
+        journal(Source.LLM, task, "sujet enregistré")
     }
 
     private suspend fun suspendSynthesis(localId: String, reason: String): RunOutcome {

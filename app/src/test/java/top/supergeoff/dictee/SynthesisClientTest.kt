@@ -56,6 +56,18 @@ class SynthesisClientTest {
         try { block(); fail("expected $kind") } catch (e: SynthesisClientException) { assertEquals(kind, e.kind); assertSafe(e) }
     }
 
+    @Test fun subjectUsesFrozenContextAndStripsVttTimestamps() = runBlocking {
+        reply(body = response("« Projet de test. »"))
+        val client = client()
+        assertEquals("Projet de test", client.subject(context, vtt))
+        val request = JSONObject(connections.single().written.toString(Charsets.UTF_8.name()))
+        assertEquals("frozen-model", request.getString("model"))
+        assertEquals(RecordingSubject.INSTRUCTION, request.getJSONArray("messages").getJSONObject(0).getString("content"))
+        assertEquals("Éléphant synthétique", request.getJSONArray("messages").getJSONObject(1).getString("content"))
+        reply(body = response("deux\nlignes"))
+        assertNull(client.subject(context, vtt))
+    }
+
     @Test fun chatSendsFrozenSystemAndCompleteVtt() = runBlocking {
         reply()
         val client = client()

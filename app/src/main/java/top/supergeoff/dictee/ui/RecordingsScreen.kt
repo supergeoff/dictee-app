@@ -247,6 +247,7 @@ private fun DayGroup(
                 RecordingRow(
                     recording = recording,
                     presentation = recordingListPresentation(recording, ui),
+                    subject = ui.local.recordingSubjects[recording.name],
                     checked = checked?.let { recording.name in it },
                     onClick = { onClick(recording.name) },
                     onLongClick = { onLongClick(recording.name) },
@@ -258,7 +259,7 @@ private fun DayGroup(
 
 /** Ligne d'enregistrement. [checked] est `null` hors sélection : le pictogramme du type laisse alors la place à la case. */
 @Composable
-private fun RecordingRow(recording: Recording, presentation: PipelinePresentation, checked: Boolean?, onClick: () -> Unit, onLongClick: () -> Unit) {
+private fun RecordingRow(recording: Recording, presentation: PipelinePresentation, subject: String?, checked: Boolean?, onClick: () -> Unit, onLongClick: () -> Unit) {
     val colors = Dictee.colors
     Row(
         modifier = Modifier
@@ -276,14 +277,15 @@ private fun RecordingRow(recording: Recording, presentation: PipelinePresentatio
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = RecordName.rowTitle(recording.type, recording.name),
+                text = subject ?: RecordName.rowTitle(recording.type, recording.name),
                 style = Dictee.type.rowTitle,
                 color = colors.text,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             val rank = presentation.queueRank?.takeIf { presentation.badge == "En attente" }
-            Text(text = details(recording) + (rank?.let { " · ${it}e dans la file" } ?: ""), style = Dictee.type.caption, color = colors.textSecondary, maxLines = 1)
+            val date = if (subject == null) "" else "${RecordName.detailTitle(recording.type, recording.name)} · "
+            Text(text = date + details(recording) + (rank?.let { " · ${it}e dans la file" } ?: ""), style = Dictee.type.caption, color = colors.textSecondary, maxLines = 1)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(presentation.badge, style = Dictee.type.captionStrong,
                     color = when (presentation.badge) { "Erreur" -> colors.destructive; "Sur Drive" -> colors.success; else -> colors.textSecondary })
