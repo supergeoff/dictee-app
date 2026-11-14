@@ -111,7 +111,7 @@ class TranscriptionCoordinator(
         for (task in kept) schedule(task.localId)
         if (kept.isNotEmpty()) {
             repository.updateDurably { it.copy(transcriptionTasks = it.transcriptionTasks + kept) }
-            val ranked = (activeNow + kept).sortedBy { it.recordingName }
+            val ranked = (activeNow + kept).sortedWith(queueOrder)
             for (task in kept) {
                 val rank = ranked.indexOfFirst { it.localId == task.localId } + 1
                 journal(sourceOf(task), task, "tâche créée, ${rank}e dans la file")

@@ -191,6 +191,14 @@ class Dic25FindingsTest {
         assertEquals("Synthèse en cours. Le MD sera enregistré dès réception.", synthesisProgressMessage(waiting, listOf(waiting)))
     }
 
+    @Test fun `constat 13 une tache en appel garde la tete de file devant une tache plus ancienne`() {
+        val calling = synthesisOnly("20261111090000").let { it.copy(synthesis = it.synthesis!!.copy(phase = SynthesisPhase.CALLING, attempts = 1)) }
+        val older = synthesisOnly("20261110090000")
+        val tasks = listOf(older, calling)
+        assertEquals("En attente : 2e dans la file. Aucun appel n'est parti.", synthesisProgressMessage(older, tasks))
+        assertEquals("Synthèse en cours. Le MD sera enregistré dès réception.", synthesisProgressMessage(calling, tasks))
+    }
+
     @Test fun `constat 9 une annulation non confirmee ne bloque pas la tache suivante`() = runBlocking {
         store.save(LocalState(transcriptionTasks = listOf(
             task("cancelled", "20261111090000", TranscriptionPhase.CANCEL_REQUESTED).copy(serverId = "server-1"),
