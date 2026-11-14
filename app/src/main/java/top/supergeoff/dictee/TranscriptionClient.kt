@@ -52,8 +52,13 @@ class UrlTranscriptionClient(
     private val openMp3: (TranscriptionTask) -> InputStream,
     private val openConnection: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection },
     private val totalTimeoutMs: Long = 7_200_000,
+    private val log: Log? = null,
+    private val nanoTime: () -> Long = System::nanoTime,
 ) : TranscriptionClient {
     init { require(totalTimeoutMs > 0) }
+
+    /** Dernier pourcentage entier journalisé par identifiant serveur, pour n'écrire qu'au changement. */
+    private val lastLoggedPercent = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
     private enum class FailureKind { CREDENTIAL, PROTOCOL, HTTP }
     private class InternalFailure(val kind: FailureKind, val code: Int = 0) : Exception()
@@ -65,6 +70,7 @@ class UrlTranscriptionClient(
     }
 
     override suspend fun submit(task: TranscriptionTask): SubmitResult = execute { resources ->
+        val started = nanoTime()
         val connection = connection(task.serverAddress, task.encryptedKeyRef, "/audio/transcriptions", "POST", resources)
         val boundary = "dictee-" + UUID.randomUUID()
         connection.doOutput = true
@@ -86,13 +92,19 @@ class UrlTranscriptionClient(
             write("\r\n--$boundary--\r\n")
         }
         val bytes = response(connection)
+        log?.add(Source.STT, "${nameOf(task)} : MP3 envoyé, réponse ${connection.responseCode} en ${(nanoTime() - started) / 1_000_000_000} s")
         if (isVtt(bytes)) SubmitResult.DirectVtt(bytes) else SubmitResult.Accepted(parseTask(bytes))
     }
 
     override suspend fun get(task: TranscriptionTask): ServerTask = execute { resources ->
         val id = safeId(task.serverId)
         val c = connection(task.serverAddress, task.encryptedKeyRef, "/audio/transcriptions/$id?response_format=vtt", "GET", resources)
-        parseTask(response(c)).also { if (it.id != id) throw InternalFailure(FailureKind.PROTOCOL) }
+        parseTask(response(c)).also { server ->
+            if (server.id != id) throw InternalFailure(FailureKind.PROTOCOL)
+            val percent = server.progress?.let { (it * 100).toInt().coerceIn(0, 100) }
+            if (percent != null && lastLoggedPercent.put(id, percent) != percent)
+                log?.add(Source.STT, "${nameOf(task)} : serveur $percent %")
+        }
     }
 
     override suspend fun cancel(task: TranscriptionTask): ServerTask = execute { resources ->
@@ -218,5 +230,6 @@ class UrlTranscriptionClient(
 
     companion object {
         private val executor = Executors.newCachedThreadPool { runnable -> Thread(runnable, "transcription-http").apply { isDaemon = true } }
+        private fun nameOf(task: TranscriptionTask): String = task.mp3Name.removeSuffix(".mp3")
     }
 }

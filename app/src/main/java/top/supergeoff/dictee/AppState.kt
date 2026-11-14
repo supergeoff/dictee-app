@@ -144,12 +144,12 @@ class AppModel(
     val transcriptionSettings = TranscriptionSettingsManager(localRepository, transcriptionCredentials)
     private val synthesisCredentials = AndroidCredentialStore(app, "synthesis-credentials-v1", "synthesis-credentials")
     val synthesisSettings = SynthesisSettingsManager(localRepository, synthesisCredentials)
-    private val synthesisClient = UrlSynthesisClient(synthesisCredentials)
+    private val synthesisClient = UrlSynthesisClient(synthesisCredentials, log = journal)
     internal val transcriptionCoordinator: TranscriptionCoordinator by lazy {
         val scheduler = TranscriptionSchedule(androidx.work.WorkManager.getInstance(app))
         val client = UrlTranscriptionClient(transcriptionCredentials, { task ->
             PhoneFolder(app, task.folderUri.toUri()).open(task.mp3Name)
-        })
+        }, log = journal)
         TranscriptionCoordinator(localRepository, client, transcriptionSettings, recoverySafety,
             verifyAudio = { task -> withContext(Dispatchers.IO) {
                 TranscriptionAudio.matches(PhoneFolder(app, task.folderUri.toUri()), task)
@@ -165,6 +165,7 @@ class AppModel(
             phoneStore = { folder -> PhoneFolder(app, folder.toUri()) },
             synthesisCredentialAccessible = { ref -> runCatching { synthesisCredentials.read(ref).isNotBlank() }.getOrDefault(false) },
             schedule = scheduler::enqueue,
+            log = journal,
             saveVtt = { task, bytes, promote -> withContext(Dispatchers.IO) {
                 val spool = java.io.File(app.cacheDir, "vtt-" + java.util.UUID.randomUUID())
                 try {
@@ -443,6 +444,7 @@ class AppModel(
             jobs.track {
                 try {
                     if (request == RequestedWork.MISSING) announceExclusions(names)
+                    logTranscriptionRequest(names, request)
                     val started = transcriptionCoordinator.start(names, request)
                     if (started.isNotEmpty()) transcriptionLifecycle.request().join()
                 } catch (e: CancellationException) {
@@ -452,6 +454,17 @@ class AppModel(
                     say(reasonOf(e))
                 }
             }
+        }
+    }
+
+    /** Chaque enregistrement concerné laisse une ligne « demande reçue » ou « demande écartée », en source STT ou LLM. */
+    private suspend fun logTranscriptionRequest(names: Set<String>?, request: RequestedWork) {
+        val state = localRepository.awaitInitialized()
+        val current = buildUi(state, phoneFlow.value, driveFlow.value, box.status.value, liveFlow.value)
+        val active = state.transcriptionTasks.filter { !it.phase.isTerminal() }.mapTo(mutableSetOf()) { it.recordingName }
+        for (event in requestJournalEvents(current.recordings, names, state.errors, active, request)) {
+            val line = event.name?.let { "$it : ${event.message}" } ?: event.message
+            journal.add(event.source, line)
         }
     }
 

@@ -5,6 +5,44 @@ enum class RequestedWork { MISSING, REDO_VTT_AND_MD, REDO_MD }
 internal fun synthesisDocumentRequest(mdPresent: Boolean): RequestedWork =
     if (mdPresent) RequestedWork.REDO_MD else RequestedWork.MISSING
 
+/** Ligne de journal calculée hors d'Android : [name] est le nom de base du fichier quand il est connu. */
+internal data class JournalEvent(val source: Source, val name: String?, val message: String)
+
+/**
+ * Événements « demande reçue » et « demande écartée » d'une demande de transcription ou de synthèse.
+ * La source est LLM quand l'enregistrement a déjà son VTT (le travail restant est la synthèse), STT sinon.
+ */
+internal fun requestJournalEvents(
+    recordings: List<Recording>, names: Set<String>?, errors: Map<String, Map<Step, String>>,
+    activeNames: Set<String>, request: RequestedWork,
+): List<JournalEvent> {
+    val (plans, excluded) = SynthesisSelection.plan(recordings, names, errors, activeNames, request)
+    val planned = plans.map { it.recording.name }.toSet()
+    val byName = recordings.associateBy { it.name }
+    fun sourceOf(name: String): Source = if (byName[name]?.phoneFiles?.let { FileKind.VTT in it } == true) Source.LLM else Source.STT
+    fun baseOf(name: String): String = byName[name]?.phoneFiles?.let { files ->
+        listOf(FileKind.MP3, FileKind.VTT, FileKind.MD).firstNotNullOfOrNull { files[it]?.fileName?.substringBeforeLast('.') }
+    } ?: name
+    val label = when (request) {
+        RequestedWork.MISSING -> "demande reçue (fichiers manquants)"
+        RequestedWork.REDO_MD -> "demande reçue (MD à refaire)"
+        RequestedWork.REDO_VTT_AND_MD -> "demande reçue (VTT et MD à refaire)"
+    }
+    val reasonOf = { reason: TranscriptionExclusion ->
+        when (reason) {
+            TranscriptionExclusion.MISSING_MP3 -> "MP3 absent sur le téléphone"
+            TranscriptionExclusion.RECOVERY_FAILED -> "récupération en échec"
+            TranscriptionExclusion.ALREADY_ACTIVE -> "tâche déjà active"
+            TranscriptionExclusion.MISSING_VTT -> "VTT absent"
+        }
+    }
+    return (planned + excluded.keys).sorted().map { name ->
+        val reason = excluded[name]
+        if (reason == null) JournalEvent(sourceOf(name), baseOf(name), label)
+        else JournalEvent(sourceOf(name), baseOf(name), "demande écartée, ${reasonOf(reason)}")
+    }
+}
+
 internal fun synthesisProgressMessage(task: TranscriptionTask): String? {
     if (task.phase != TranscriptionPhase.SYNTHESIZING) return null
     val work = task.synthesis ?: return null

@@ -40,6 +40,7 @@ class TranscriptionCoordinator(
     private val phoneStore: (String) -> PhoneStore = { error("Dossier indisponible") },
     private val synthesisCredentialAccessible: (String) -> Boolean = { false },
     private val clock: () -> Long = System::currentTimeMillis,
+    private val log: Log? = null,
     private val promotionGuard: ReentrantLock = ReentrantLock(),
     private val prepareRequested: suspend (Set<String>?, RequestedWork, Set<String>) -> List<TranscriptionTask> = { names, _, _ -> prepare(names) },
     private val onFilesPromoted: suspend (String) -> Unit = {},
@@ -47,6 +48,22 @@ class TranscriptionCoordinator(
     private val mutex = Mutex()
     // Accès protégé par promotionGuard : l'enregistrement ne peut manquer une annulation durable.
     private val synthesisCalls = mutableMapOf<String, Deferred<ByteArray>>()
+
+    /** Une ligne d'observabilité ; le préfixe est le nom de base du fichier quand il existe. Aucune clé ni aucun contenu n'y entre. */
+    private fun journal(source: Source, task: TranscriptionTask?, message: String) {
+        val target = log ?: return
+        val name = task?.mp3Name?.removeSuffix(".mp3")?.takeIf { it.isNotBlank() }
+        target.add(source, if (name != null) "$name : $message" else message)
+    }
+
+    private fun journalError(source: Source, task: TranscriptionTask?, message: String) {
+        val target = log ?: return
+        val name = task?.mp3Name?.removeSuffix(".mp3")?.takeIf { it.isNotBlank() }
+        target.error(source, if (name != null) "$name : $message" else message)
+    }
+
+    /** Une tâche qui ne touche pas au MP3 est un travail de synthèse : ses lignes vont en source LLM. */
+    private fun sourceOf(task: TranscriptionTask) = if (task.mp3Sha256.isBlank()) Source.LLM else Source.STT
 
     /** Rétablit la programmation durable sans effectuer de requête au serveur. */
     suspend fun reconcile() = mutex.withLock {
@@ -59,18 +76,40 @@ class TranscriptionCoordinator(
         for (task in all.filterNot { it.phase.isTerminal() }) schedule(task.localId)
     }
 
-    suspend fun start(names: Set<String>?, request: RequestedWork = RequestedWork.MISSING): List<String> = mutex.withLock {
-        recoverySafety.withTransferLock {
-            val existing = repository.awaitInitialized().transcriptionTasks
-            val active = existing.filterNot { it.phase.isTerminal() }.map { it.recordingName }.toSet()
-            val tasks = prepareRequested(names, request, active).filter { it.recordingName !in active }.sortedBy { it.recordingName }
-            for (task in tasks) schedule(task.localId)
-            if (tasks.isNotEmpty()) {
-                repository.updateDurably { it.copy(transcriptionTasks = it.transcriptionTasks + tasks) }
-                launch()
-            }
-            tasks.map { it.localId }
+    suspend fun start(names: Set<String>?, request: RequestedWork = RequestedWork.MISSING): List<String> {
+        val waitStart = clock()
+        if (!mutex.tryLock()) {
+            mutex.lock()
+            if (clock() - waitStart > LOCK_WAIT_LOG_MS)
+                journal(if (request == RequestedWork.REDO_MD) Source.LLM else Source.STT, null, "en attente d'une transcription en cours")
         }
+        try {
+            val transferWait = clock()
+            return recoverySafety.withTransferLock {
+                if (clock() - transferWait > LOCK_WAIT_LOG_MS)
+                    journal(if (request == RequestedWork.REDO_MD) Source.LLM else Source.STT, null, "en attente d'un transfert en cours")
+                startLocked(names, request)
+            }
+        } finally {
+            mutex.unlock()
+        }
+    }
+
+    private suspend fun startLocked(names: Set<String>?, request: RequestedWork): List<String> {
+        val existing = repository.awaitInitialized().transcriptionTasks
+        val active = existing.filterNot { it.phase.isTerminal() }.map { it.recordingName }.toSet()
+        val tasks = prepareRequested(names, request, active).filter { it.recordingName !in active }.sortedBy { it.recordingName }
+        for (task in tasks) schedule(task.localId)
+        if (tasks.isNotEmpty()) {
+            repository.updateDurably { it.copy(transcriptionTasks = it.transcriptionTasks + tasks) }
+            val ranked = (existing.filterNot { it.phase.isTerminal() } + tasks).sortedBy { it.recordingName }
+            for (task in tasks) {
+                val rank = ranked.indexOfFirst { it.localId == task.localId } + 1
+                journal(sourceOf(task), task, "tâche créée, ${rank}e dans la file")
+            }
+            launch()
+        }
+        return tasks.map { it.localId }
     }
 
     /**
@@ -97,6 +136,7 @@ class TranscriptionCoordinator(
             })
         }.await().getOrThrow() }
         val task = runBlocking(Dispatchers.IO) { repository.awaitInitialized().transcriptionTasks.firstOrNull { it.localId == localId } }
+        if (task != null) journal(sourceOf(task), task, "annulation demandée")
         if (task?.phase == TranscriptionPhase.CANCELLED && task.synthesis?.phase == SynthesisPhase.CANCELLED) {
             try { synthesisStorage?.discard(localId) } catch (_: java.io.IOException) { }
             synthesisCalls[localId]
@@ -123,8 +163,25 @@ class TranscriptionCoordinator(
         launch()
     }
 
-    suspend fun runBounded(localId: String): RunOutcome = mutex.withLock {
-        recoverySafety.withTransferLock { runLocked(localId) }
+    suspend fun runBounded(localId: String): RunOutcome {
+        val waitStart = clock()
+        if (!mutex.tryLock()) {
+            mutex.lock()
+            val task = repository.awaitInitialized().transcriptionTasks.firstOrNull { it.localId == localId }
+            if (clock() - waitStart > LOCK_WAIT_LOG_MS)
+                journal(task?.let(::sourceOf) ?: Source.STT, task, "en attente d'une transcription en cours")
+        }
+        try {
+            val transferWait = clock()
+            return recoverySafety.withTransferLock {
+                val current = repository.awaitInitialized().transcriptionTasks.firstOrNull { it.localId == localId }
+                if (clock() - transferWait > LOCK_WAIT_LOG_MS)
+                    journal(current?.let(::sourceOf) ?: Source.STT, current, "en attente d'un transfert en cours")
+                runLocked(localId)
+            }
+        } finally {
+            mutex.unlock()
+        }
     }
 
     private suspend fun runLocked(localId: String): RunOutcome {
@@ -330,6 +387,7 @@ class TranscriptionCoordinator(
         } catch (_: java.io.IOException) {
             return RunOutcome.Resume
         }
+        journal(Source.STT, task, "VTT enregistré")
         val work = task.synthesis
         val resolved = work?.context?.let { context ->
             val speakers = WebVtt.parse(bytes).mapNotNull { it.speaker }.distinct().joinToString(", ").ifEmpty { "Non disponible" }
@@ -373,8 +431,10 @@ class TranscriptionCoordinator(
                 return saveSynthesis(saved)
             }
             if (work.attempts >= 3) return suspendSynthesis(task.localId, "Trois tentatives ont échoué. Relance manuellement la synthèse.")
+            val delayMs = if (work.attempts == 1) 60_000 else 120_000
+            journal(Source.LLM, task, "nouvelle tentative dans ${delayMs / 1_000} s")
             update(task.localId) { current -> current.copy(synthesis = current.synthesis?.copy(
-                phase = SynthesisPhase.READY, nextAttemptAtMillis = clock() + if (work.attempts == 1) 60_000 else 120_000)) }
+                phase = SynthesisPhase.READY, nextAttemptAtMillis = clock() + delayMs)) }
             return RunOutcome.Resume
         }
         if (work.phase == SynthesisPhase.WAITING_VTT && work.attempts != 0)
@@ -408,6 +468,7 @@ class TranscriptionCoordinator(
                 nextAttemptAtMillis = clock() + if (attempt == 1) 60_000 else 120_000))
         }
         if (calling.phase != TranscriptionPhase.SYNTHESIZING) return RunOutcome.Finished
+        journal(Source.LLM, task, "appel envoyé, tentative $attempt/3")
         val result = try {
             supervisorScope {
                 val call = async(start = CoroutineStart.LAZY) { checkNotNull(synthesisClient).complete(context, bytes) }
@@ -438,13 +499,17 @@ class TranscriptionCoordinator(
             }
             if (e.kind != SynthesisFailureKind.TRANSIENT || attempt >= 3)
                 return suspendSynthesis(task.localId, e.message ?: "Synthèse impossible.")
+            val delayMs = if (attempt == 1) 60_000 else 120_000
+            journal(Source.LLM, task, "nouvelle tentative dans ${delayMs / 1_000} s")
             update(task.localId) { current -> current.copy(synthesis = current.synthesis?.copy(phase = SynthesisPhase.READY,
-                nextAttemptAtMillis = clock() + if (attempt == 1) 60_000 else 120_000)) }
+                nextAttemptAtMillis = clock() + delayMs)) }
             return RunOutcome.Resume
         } catch (_: Exception) {
             if (attempt >= 3) return suspendSynthesis(task.localId, "Trois tentatives ont échoué. Relance manuellement la synthèse.")
+            val delayMs = if (attempt == 1) 60_000 else 120_000
+            journal(Source.LLM, task, "nouvelle tentative dans ${delayMs / 1_000} s")
             update(task.localId) { current -> current.copy(synthesis = current.synthesis?.copy(phase = SynthesisPhase.READY,
-                nextAttemptAtMillis = clock() + if (attempt == 1) 60_000 else 120_000)) }
+                nextAttemptAtMillis = clock() + delayMs)) }
             return RunOutcome.Resume
         }
         val staged = try { withContext(Dispatchers.IO) { promotionGuard.withLock {
@@ -527,6 +592,7 @@ class TranscriptionCoordinator(
             if (!refreshCompleted) notifyFilesPromoted(task.folderUri)
         } catch (e: CancellationException) { throw e }
           catch (_: Exception) { return suspendSynthesis(task.localId, "Écriture de la synthèse impossible ou fichier modifié. Vérifie le dossier.") }
+        journal(Source.LLM, task, "MD enregistré")
         return RunOutcome.Finished
     }
 
@@ -542,19 +608,36 @@ class TranscriptionCoordinator(
                 if (it.localId != localId) return@map it
                 val next = change(it)
                 // Une annulation persistée ne doit pas être écrasée par une réponse tardive.
-                when {
+                val kept = when {
                     it.phase == TranscriptionPhase.CANCELLED -> it
                     it.phase == TranscriptionPhase.CANCEL_REQUESTED && !next.phase.isTerminal() -> next.copy(phase = TranscriptionPhase.CANCEL_REQUESTED)
                     else -> next
                 }
+                logTransition(it, kept)
+                kept
             })
         }
         return state.transcriptionTasks.first { it.localId == localId }
     }
 
+    /** Phase, suspension et échec sont journalisés à chaque transition durable. */
+    private fun logTransition(previous: TranscriptionTask, next: TranscriptionTask) {
+        val source = sourceOf(previous)
+        when {
+            previous.phase != next.phase && next.phase == TranscriptionPhase.FAILED ->
+                journalError(source, previous, "échec${next.error?.let { ", $it" } ?: ""}")
+            previous.phase != next.phase ->
+                journal(source, previous, "phase ${next.phase}")
+            !previous.suspended && next.suspended ->
+                journalError(source, previous, "suspendue${next.suspensionReason?.let { ", $it" } ?: ""}")
+            else -> Unit
+        }
+    }
+
     private companion object {
         fun sha256(bytes: ByteArray): String = TranscriptionAudio.sha256(bytes)
         val MAYBE_SENT = setOf(TranscriptionPhase.SUBMITTING, TranscriptionPhase.UNKNOWN_SUBMISSION)
+        const val LOCK_WAIT_LOG_MS = 2_000L
         const val CANNOT_CONFIRM = "L'arrêt côté serveur ne peut pas être confirmé : l'envoi n'a pas reçu d'identifiant."
     }
 }
