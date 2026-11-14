@@ -1,6 +1,6 @@
 # Dictée : spécification du produit
 
-Statut : ce document décrit le comportement implémenté dans la branche pour la version 0.4.0 (`versionCode` 13), y compris la transcription DIC-4 et la synthèse DIC-19. La 0.4.0 n'est pas annoncée comme livrée : le lint passe sans erreur avec 18 avertissements ouverts, et la vérification sur appareil, l'essai de capacité du fournisseur, la réunion réelle et la vérification de l'APK signé restent ouverts.
+Statut : ce document décrit le comportement implémenté sur la branche DIC-26, basée sur la version 0.4.1. La recette sur appareil, la réunion réelle et la vérification de l'APK signé restent à faire.
 
 Le protocole Bluetooth du MECHEN V05 est décrit dans [`protocole-v05.md`](protocole-v05.md).
 

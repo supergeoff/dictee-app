@@ -63,6 +63,27 @@ class SynthesisCoordinatorTest {
         assertEquals(1, calls)
     }
 
+    @Test fun processRestartDoesNotRepeatSubjectAttempt() = runBlocking {
+        store.save(LocalState(transcriptionTasks = listOf(task().copy(subjectAttempted = true))))
+        coordinator(LocalStateRepository(store)).runBounded("id")
+        assertEquals(0, subjectCalls)
+        assertEquals(TranscriptionPhase.COMPLETED, store.load().transcriptionTasks.single().phase)
+    }
+
+    @Test fun subjectCancellationPreventsMdAndDoesNotRepeat() = runBlocking {
+        store.save(LocalState(transcriptionTasks = listOf(task())))
+        val entered = CompletableDeferred<Unit>()
+        subjectResponse = { entered.complete(Unit); CompletableDeferred<String?>().await() }
+        val coordinator = coordinator(LocalStateRepository(store))
+        val run = async(Dispatchers.Default) { coordinator.runBounded("id") }
+        entered.await()
+        coordinator.requestCancel("id")
+        run.await()
+        assertEquals(TranscriptionPhase.CANCELLED, store.load().transcriptionTasks.single().phase)
+        assertTrue(store.load().transcriptionTasks.single().subjectAttempted)
+        assertEquals(0, calls)
+    }
+
     @Test fun existingSubjectSkipsMdOnlyRequest() = runBlocking {
         store.save(LocalState(transcriptionTasks = listOf(task()), recordingSubjects = mapOf("20261111120000" to "Sujet existant")))
         coordinator(LocalStateRepository(store)).runBounded("id")
