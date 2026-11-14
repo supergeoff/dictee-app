@@ -52,6 +52,7 @@ class SynthesisSettingsUiTest {
         compose.onNodeWithTag("synthesis-address").performTextInput("https://new.example.invalid/v1")
         compose.onNodeWithTag("synthesis-model").performScrollTo().performTextClearance()
         compose.onNodeWithTag("synthesis-model").performTextInput("new-model")
+        compose.onNodeWithText("••••••••").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("synthesis-secret").assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
             .assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Password))
         compose.onNodeWithTag("synthesis-secret").performScrollTo().performTextInput("synthetic-key")

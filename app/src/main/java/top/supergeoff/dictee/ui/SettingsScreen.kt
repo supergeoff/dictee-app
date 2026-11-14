@@ -221,8 +221,8 @@ private fun TranscriptionSection(local: LocalState, form: TranscriptionSettingsF
                 Text("L’ancienne adresse de transcription était invalide. Saisis une adresse de serveur et enregistre les réglages.", color = Dictee.colors.textSecondary)
             }
             OutlinedTextField(draft.baseUrl, form::setBaseUrl, enabled = draft.initialized && !draft.saving, label = { Text("Adresse du serveur (/v1)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(draft.secret, form::setSecret, enabled = draft.initialized && !draft.saving, label = { Text("Nouvelle clé") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
-            Text(if (settings.credentialRef == null) "Aucune clé enregistrée" else "Une clé est enregistrée. Laisse ce champ vide pour la conserver.", color = Dictee.colors.textSecondary)
+            OutlinedTextField(draft.secret, form::setSecret, enabled = draft.initialized && !draft.saving, label = { Text("Clé") }, placeholder = { if (settings.credentialRef != null) Text("••••••••") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+            Text(if (settings.credentialRef == null) "Aucune clé enregistrée" else "Une clé est enregistrée. Saisis une nouvelle clé pour la remplacer.", color = Dictee.colors.textSecondary)
             OutlinedTextField(draft.language, form::setLanguage, enabled = draft.initialized && !draft.saving, label = { Text("Langue") }, supportingText = { Text("auto : détection automatique (français et anglais).") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(draft.model, form::setModel, enabled = draft.initialized && !draft.saving, label = { Text("Modèle") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             Button(onClick = { form.submit() }, enabled = draft.initialized && !draft.saving) { Text(if (draft.saving) "Enregistrement…" else "Enregistrer") }
@@ -245,9 +245,9 @@ internal fun SynthesisSection(settings: SynthesisSettings, form: SynthesisSettin
             Text("Service compatible OpenAI. Le VTT et le prompt sont envoyés au service que tu configures.", style = Dictee.type.caption, color = Dictee.colors.textSecondary)
             Text("Adresse du serveur (/v1)", style = Dictee.type.label, color = Dictee.colors.text)
             DicteeTextField(draft.baseUrl, form::setBaseUrl, enabled = enabled, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.fillMaxWidth().testTag("synthesis-address").semantics { contentDescription = "Adresse du serveur (/v1)" })
-            Text("Nouvelle clé", style = Dictee.type.label, color = Dictee.colors.text)
-            DicteeTextField(draft.secret, form::setSecret, enabled = enabled, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth().testTag("synthesis-secret").semantics { contentDescription = "Nouvelle clé" })
-            Text(if (settings.credentialRef == null) "Aucune clé enregistrée. La clé est protégée par Android Keystore." else "Une clé est enregistrée. Laisse ce champ vide pour la conserver. La clé est protégée par Android Keystore.", style = Dictee.type.caption, color = Dictee.colors.textSecondary)
+            Text("Clé", style = Dictee.type.label, color = Dictee.colors.text)
+            DicteeTextField(draft.secret, form::setSecret, enabled = enabled, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), visualTransformation = PasswordVisualTransformation(), placeholder = if (settings.credentialRef != null) "••••••••" else null, modifier = Modifier.fillMaxWidth().testTag("synthesis-secret").semantics { contentDescription = "Clé" })
+            Text(if (settings.credentialRef == null) "Aucune clé enregistrée. La clé est protégée par Android Keystore." else "Une clé est enregistrée. Saisis une nouvelle clé pour la remplacer.", style = Dictee.type.caption, color = Dictee.colors.textSecondary)
             Text("Modèle", style = Dictee.type.label, color = Dictee.colors.text)
             DicteeTextField(draft.model, form::setModel, enabled = enabled, modifier = Modifier.fillMaxWidth().testTag("synthesis-model").semantics { contentDescription = "Modèle" })
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

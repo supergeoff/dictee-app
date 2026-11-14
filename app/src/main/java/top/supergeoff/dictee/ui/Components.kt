@@ -422,6 +422,7 @@ internal fun DicteeTextField(
     keyboardActions: KeyboardActions = KeyboardActions.Default,
     enabled: Boolean = true,
     visualTransformation: VisualTransformation = VisualTransformation.None,
+    placeholder: String? = null,
 ) {
     val colors = Dictee.colors
     val source = remember { MutableInteractionSource() }
@@ -437,7 +438,10 @@ internal fun DicteeTextField(
         keyboardActions = keyboardActions,
         visualTransformation = visualTransformation,
         interactionSource = source,
-        decorationBox = { field -> DicteeFieldDecoration(source, enabled, Tokens.BUTTON_HEIGHT_DP.dp, Alignment.CenterStart, field) },
+        decorationBox = { field -> DicteeFieldDecoration(source, enabled, Tokens.BUTTON_HEIGHT_DP.dp, Alignment.CenterStart) {
+            if (value.isEmpty() && placeholder != null) Text(placeholder, style = Dictee.type.body, color = colors.textSecondary)
+            field()
+        } },
     )
 }
 
