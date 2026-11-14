@@ -6,6 +6,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.io.InputStreamReader
+import java.io.Reader
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.ByteBuffer
@@ -82,18 +84,11 @@ class UrlSynthesisClient(
         val code = c.responseCode
         if (code !in 200..299) {
             val contextTooLong = if (code == 429 || code in 500..599) try {
-                val bytes = c.errorStream?.use { input ->
-                    val out = ByteArrayOutputStream()
-                    val buffer = ByteArray(1024)
-                    while (out.size() < 16 * 1024) {
-                        val count = input.read(buffer, 0, minOf(buffer.size, 16 * 1024 - out.size()))
-                        if (count <= 0) break
-                        out.write(buffer, 0, count)
-                    }
-                    out.toByteArray()
-                } ?: ByteArray(0)
-                JSONObject(decode(bytes, SynthesisFailureKind.INVALID_RESPONSE))
-                    .optJSONObject("error")?.opt("code") == "context_length_exceeded"
+                c.errorStream?.use { input ->
+                    val decoder = Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    ErrorCodeReader(InputStreamReader(input, decoder).buffered()).isContextTooLong()
+                } ?: false
             } catch (_: Exception) { false } else false
             val kind = if (contextTooLong) SynthesisFailureKind.PERMANENT else when (code) {
                 429, in 500..599 -> SynthesisFailureKind.TRANSIENT
@@ -167,5 +162,124 @@ class UrlSynthesisClient(
 
     companion object {
         private val executor = Executors.newCachedThreadPool { runnable -> Thread(runnable, "synthesis-http").apply { isDaemon = true } }
+    }
+}
+
+/** Lit l'erreur JSON sans conserver les chaînes fournisseur, potentiellement très longues. */
+private class ErrorCodeReader(private val input: Reader) {
+    private var next = input.read()
+
+    fun isContextTooLong(): Boolean {
+        whitespace()
+        val result = objectValue(0, root = true)
+        whitespace()
+        require(next == -1)
+        return result
+    }
+
+    private fun advance(): Int = next.also { next = input.read() }
+    private fun whitespace() { while (next == 32 || next == 9 || next == 10 || next == 13) advance() }
+    private fun take(char: Char) { require(next == char.code); advance(); whitespace() }
+
+    private fun objectValue(depth: Int, root: Boolean = false, error: Boolean = false): Boolean {
+        require(depth < 64)
+        take('{')
+        var result = false
+        if (next != '}'.code) while (true) {
+            val key = string(if (root) "error" else if (error) "code" else "")
+            whitespace()
+            take(':')
+            if (root && key) {
+                result = if (next == '{'.code) objectValue(depth + 1, error = true) else { value(depth + 1); false }
+            } else if (error && key) {
+                result = if (next == '"'.code) string("context_length_exceeded") else { value(depth + 1); false }
+            } else value(depth + 1)
+            whitespace()
+            if (next != ','.code) break
+            take(',')
+        }
+        take('}')
+        return result
+    }
+
+    private fun value(depth: Int) {
+        require(depth < 64)
+        when (next) {
+            '{'.code -> objectValue(depth)
+            '['.code -> {
+                take('[')
+                if (next != ']'.code) while (true) {
+                    value(depth + 1)
+                    whitespace()
+                    if (next != ','.code) break
+                    take(',')
+                }
+                take(']')
+            }
+            '"'.code -> string("")
+            't'.code -> literal("true")
+            'f'.code -> literal("false")
+            'n'.code -> literal("null")
+            else -> number()
+        }
+    }
+
+    private fun literal(expected: String) { for (char in expected) { require(next == char.code); advance() } }
+
+    private fun number() {
+        if (next == '-'.code) advance()
+        if (next == '0'.code) advance() else {
+            require(next in '1'.code..'9'.code)
+            while (next in '0'.code..'9'.code) advance()
+        }
+        if (next == '.'.code) { advance(); digits() }
+        if (next == 'e'.code || next == 'E'.code) {
+            advance()
+            if (next == '+'.code || next == '-'.code) advance()
+            digits()
+        }
+    }
+
+    private fun digits() {
+        require(next in '0'.code..'9'.code)
+        while (next in '0'.code..'9'.code) advance()
+    }
+
+    private fun string(expected: String): Boolean {
+        require(advance() == '"'.code)
+        var index = 0
+        var matches = true
+        while (next != '"'.code) {
+            require(next >= 32)
+            val char = if (next == '\\'.code) {
+                advance()
+                when (val escape = advance()) {
+                    '"'.code, '\\'.code, '/'.code -> escape
+                    'b'.code -> 8
+                    'f'.code -> 12
+                    'n'.code -> 10
+                    'r'.code -> 13
+                    't'.code -> 9
+                    'u'.code -> {
+                        var code = 0
+                        repeat(4) {
+                            val digit = advance()
+                            code = code * 16 + when (digit) {
+                                in '0'.code..'9'.code -> digit - '0'.code
+                                in 'a'.code..'f'.code -> digit - 'a'.code + 10
+                                in 'A'.code..'F'.code -> digit - 'A'.code + 10
+                                else -> throw IllegalArgumentException()
+                            }
+                        }
+                        code
+                    }
+                    else -> throw IllegalArgumentException()
+                }
+            } else advance()
+            if (index >= expected.length || expected[index].code != char) matches = false
+            if (index < expected.length) index++
+        }
+        advance()
+        return matches && index == expected.length
     }
 }

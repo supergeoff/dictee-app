@@ -46,7 +46,6 @@ class SynthesisClientTest {
             assertTrue(cause.suppressed.isEmpty())
             cause = cause.cause
         }
-        assertTrue(connections.flatMap { it.log }.isEmpty())
     }
     private suspend fun expect(kind: SynthesisFailureKind, block: suspend () -> Unit) {
         try { block(); fail("expected $kind") } catch (e: SynthesisClientException) { assertEquals(kind, e.kind); assertSafe(e) }
@@ -71,7 +70,7 @@ class SynthesisClientTest {
         assertEquals("user", messages.getJSONObject(1).getString("role"))
         assertEquals(vtt.toString(Charsets.UTF_8), messages.getJSONObject(1).getString("content"))
         assertEquals(listOf("frozen-ref"), credentials.refs)
-        assertTrue(c.closed)
+        withTimeout(1000) { while (!c.closed) delay(5) }
         reply(500, "provider-sensitive synthetic-secret Éléphant synthétique")
         expect(SynthesisFailureKind.TRANSIENT) { client.complete(context, vtt) }
     }
@@ -96,6 +95,23 @@ class SynthesisClientTest {
         for (code in listOf(429, 500, 503)) { reply(code, "provider-sensitive"); expect(SynthesisFailureKind.TRANSIENT) { client.complete(context, vtt) } }
         for (code in listOf(400, 401, 403, 404, 413)) { reply(code, "{\"error\":{\"code\":\"context_length_exceeded\",\"message\":\"provider-sensitive\"}}"); expect(SynthesisFailureKind.PERMANENT) { client.complete(context, vtt) } }
         reply(429, "{\"error\":{\"code\":\"context_length_exceeded\",\"message\":\"provider-sensitive\"}}")
+        expect(SynthesisFailureKind.PERMANENT) { client.complete(context, vtt) }
+        for (code in listOf(429, 500, 503)) {
+            val longMessage = "x".repeat(17_000)
+            reply(code, "{\"error\":{\"message\":\"$longMessage\",\"code\":\"context_length_exceeded\"}}")
+            expect(SynthesisFailureKind.PERMANENT) { client.complete(context, vtt) }
+        }
+        val longMessage = "x".repeat(17_000)
+        for (body in listOf(
+            "{\"error\":{\"message\":\"$longMessage\",\"code\":\"context_length_exceeded\"",
+            "{\"error\":{\"message\":\"$longMessage\\\"code\\\":\\\"context_length_exceeded\"}}",
+            "{\"other\":{\"code\":\"context_length_exceeded\"},\"error\":{\"message\":\"$longMessage\"}}",
+            "{\"error\":{\"message\":\"$longMessage\",\"code\":\"context_length_exceeded\",\"code\":\"other\"}}",
+            "{\"error\":{\"code\":\"context_length_exceeded\"},\"error\":null}",
+            "{\"error\":{\"message\":\"$longMessage\",\"code\":\"context_length_exceeded-extra\"}}",
+            "{\"error\":{\"message\":\"$longMessage\",\"code\":12e+}}",
+        )) { reply(429, body); expect(SynthesisFailureKind.TRANSIENT) { client.complete(context, vtt) } }
+        reply(429, "{\"other\":[true,false,null,-12.5e+3,{\"nested\":[]}],\"error\":{\"message\":\"$longMessage\",\"co\\u0064e\":\"context_length_exceed\\u0065d\"}}")
         expect(SynthesisFailureKind.PERMANENT) { client.complete(context, vtt) }
         val broken = UrlSynthesisClient(credentials, { throw IOException("provider-sensitive synthetic-secret") })
         expect(SynthesisFailureKind.TRANSIENT) { broken.complete(context, vtt) }

@@ -38,7 +38,6 @@ internal class FakeCredentials : CredentialStore {
 }
 internal class FakeConnection(url: URL, val status: Int = 200, val body: ByteArray = ByteArray(0), val type: String = "application/json") : HttpURLConnection(url) {
     val written = ByteArrayOutputStream()
-    val log = mutableListOf<String>()
     @Volatile var closed = false
     var outputFactory: (() -> OutputStream)? = null
     override fun connect() {}
