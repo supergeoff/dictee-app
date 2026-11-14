@@ -61,8 +61,9 @@ L'app garde une seule activité. Le passage d'un écran à l'autre suit une pile
 
 ### Réglages
 
-- Les sections sont Boîtier, Stockage sur le téléphone, Google Drive, Apparence et À propos.
+- Les sections sont Boîtier, Stockage sur le téléphone, Google Drive, Transcription, Synthèse, Apparence et À propos.
 - La section Transcription règle l'adresse du serveur, la langue et la clé, protégée par Android Keystore, avec un test de connexion.
+- La section Synthèse règle séparément l'adresse, le modèle, la clé protégée par Android Keystore et le prompt. « Tester » envoie une courte requête pouvant être facturée ; il expire après 30 secondes et libère le formulaire. Cette limite ne s'applique pas aux synthèses complètes.
 - Stockage : « Changer » ouvre le sélecteur de dossiers. Le changement est refusé pendant un transfert, avec le message « Attends la fin du transfert pour changer de dossier. ».
 - Google Drive : l'interrupteur « Envoyer vers Drive » demande aussitôt l'accord de Google. Une fois activé, la section affiche le compte et l'entrée « Dossier ». « Déconnecter » révoque l'accès de l'app avec `AuthorizationClient.revokeAccess`, en utilisant l'adresse du compte lue par `about.get`, puis désactive l'envoi. Désactiver l'envoi efface les erreurs d'envoi.
 - Apparence : « Clair », « Sombre » ou « Système ».

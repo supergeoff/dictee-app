@@ -5,6 +5,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Brouillon uniquement en mémoire ; la clé ne figure jamais dans sa représentation textuelle. */
 data class SynthesisSettingsDraft(
@@ -52,6 +53,8 @@ class SynthesisSettingsForm(
 
     private enum class Operation { SERVICE, PROMPT, TEST }
 
+    private companion object { const val TEST_TIMEOUT_MS = 30_000L }
+
     private fun operate(operation: Operation): Boolean = synchronized(lock) {
         val testing = operation == Operation.TEST
         val draft = mutableState.value
@@ -69,7 +72,10 @@ class SynthesisSettingsForm(
         scope.launch {
             try {
                 when (operation) {
-                    Operation.TEST -> test(settings, draft.secret)
+                    Operation.TEST -> {
+                        val completed = withTimeoutOrNull(TEST_TIMEOUT_MS) { test(settings, draft.secret); true } ?: false
+                        if (!completed) throw SynthesisClientException(SynthesisFailureKind.TRANSIENT)
+                    }
                     Operation.SERVICE -> save(settings, draft.secret)
                     Operation.PROMPT -> savePrompt(settings.prompt)
                 }

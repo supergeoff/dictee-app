@@ -2,6 +2,8 @@ package top.supergeoff.dictee
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
@@ -119,6 +121,30 @@ class SynthesisSettingsFormTest {
         assertTrue(form.submit())
         runCurrent()
         assertEquals("Impossible d’enregistrer les réglages de synthèse. Réessaie.", form.state.value.message)
+    }
+
+    @Test fun unresponsiveTestTimesOutCancelsAndUnlocksForm() = runTest {
+        var cancelled = false
+        var saves = 0
+        val form = SynthesisSettingsForm(backgroundScope, { _, _ -> saves++ }, { _, _ ->
+            try { awaitCancellation() } finally { cancelled = true }
+        }, { _ -> })
+        form.initialize(SynthesisSettings(baseUrl = "https://example.invalid/v1", model = "model"))
+        form.setSecret("synthetic-key")
+        assertTrue(form.test())
+        runCurrent()
+        assertTrue(form.state.value.testing)
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertTrue(cancelled)
+        assertFalse(form.state.value.testing)
+        assertEquals("Test de synthèse échoué. La connexion au service de synthèse a échoué ou a expiré.", form.state.value.message)
+        assertEquals("synthetic-key", form.state.value.secret)
+        form.setModel("nouveau")
+        assertEquals("nouveau", form.state.value.model)
+        assertTrue(form.submit())
+        runCurrent()
+        assertEquals(1, saves)
     }
 
     @Test fun testingBlocksConcurrentOperationsUntilFinished() = runTest {

@@ -21,6 +21,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextInputSelection
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -51,7 +52,7 @@ class SynthesisSettingsUiTest {
         compose.onNodeWithTag("synthesis-address").performTextInput("https://new.example.invalid/v1")
         compose.onNodeWithTag("synthesis-model").performScrollTo().performTextClearance()
         compose.onNodeWithTag("synthesis-model").performTextInput("new-model")
-        compose.onNodeWithTag("synthesis-secret").assertTextContains("")
+        compose.onNodeWithTag("synthesis-secret").assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
             .assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Password))
         compose.onNodeWithTag("synthesis-secret").performScrollTo().performTextInput("synthetic-key")
         compose.onNodeWithText("Tester").performScrollTo().performClick()
@@ -84,6 +85,23 @@ class SynthesisSettingsUiTest {
         compose.onNodeWithText("Enregistrer le prompt").assertIsDisplayed()
         compose.onNodeWithContentDescription("Retour").performClick()
         compose.onNodeWithText("Tester").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun promptFeedbackStaysVisibleForLongPrompt() {
+        var fail = true
+        val form = SynthesisSettingsForm(scope, { _, _ -> }, { _, _ -> }, { _ ->
+            if (fail) error("synthetic provider error")
+        })
+        form.initialize(SynthesisSettings(prompt = "Long prompt\n".repeat(300)))
+        compose.setContent { DicteeTheme(false) { PromptScreen(form, {}) } }
+        compose.onNodeWithText("Enregistrer le prompt").performClick()
+        compose.onNodeWithText("Impossible d’enregistrer le prompt. Réessaie.").assertIsDisplayed()
+        compose.runOnIdle { fail = false }
+        compose.onNodeWithText("Enregistrer le prompt").performClick()
+        compose.onNodeWithText("Prompt enregistré pour les prochaines synthèses.").assertIsDisplayed()
+        compose.onNodeWithTag("prompt-text").performScrollTo().performTextClearance()
+        compose.onNodeWithText("Enregistrer le prompt").performClick()
+        compose.onNodeWithText("Le prompt ne peut pas être vide.").assertIsDisplayed()
     }
 
     @Test fun promptInsertsAtSelectionSavesAndRestoresDefaultInDarkTheme() {

@@ -1,6 +1,9 @@
 package top.supergeoff.dictee
 
 import kotlinx.coroutines.*
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -257,6 +260,43 @@ class SynthesisClientTest {
         } finally {
             stop.set(true)
         }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun stalledConnectionTestTimesOutAndUnlocksForm() = runTest {
+        val entered = CountDownLatch(1)
+        val disconnected = CountDownLatch(1)
+        var attempts = 0
+        val client = UrlSynthesisClient(credentials, { url ->
+            attempts++
+            object : HttpURLConnection(url) {
+                override fun connect() {}
+                override fun usingProxy() = false
+                override fun disconnect() { disconnected.countDown() }
+                override fun getOutputStream(): OutputStream = ByteArrayOutputStream()
+                override fun getResponseCode(): Int {
+                    entered.countDown()
+                    try { CountDownLatch(1).await() } catch (_: InterruptedException) { }
+                    throw IOException("provider-sensitive synthetic-secret")
+                }
+            }
+        })
+        val form = SynthesisSettingsForm(backgroundScope, { _, _ -> }, { settings, secret -> client.test(settings, secret) }, { _ -> })
+        form.initialize(SynthesisSettings("https://example.invalid/v1", "model"))
+        form.setSecret("synthetic-secret")
+        assertTrue(form.test())
+        runCurrent()
+        assertTrue(entered.await(2, TimeUnit.SECONDS))
+        assertTrue(form.state.value.testing)
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertFalse(form.state.value.testing)
+        assertEquals("Test de synthèse échoué. La connexion au service de synthèse a échoué ou a expiré.", form.state.value.message)
+        form.setModel("nouveau")
+        assertEquals("nouveau", form.state.value.model)
+        assertEquals("synthetic-secret", form.state.value.secret)
+        assertTrue(disconnected.await(2, TimeUnit.SECONDS))
+        assertEquals(1, attempts)
     }
 
     @Test fun cancellationAndTimeoutCloseConnectionWithoutRetry() = runBlocking {

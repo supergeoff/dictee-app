@@ -38,6 +38,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -234,10 +236,13 @@ internal fun SynthesisSection(settings: SynthesisSettings, form: SynthesisSettin
     Section("Synthèse") {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Service compatible OpenAI. Le VTT et le prompt sont envoyés au service que tu configures.", style = Dictee.type.caption, color = Dictee.colors.textSecondary)
-            OutlinedTextField(draft.baseUrl, form::setBaseUrl, enabled = enabled, label = { Text("Adresse du serveur (/v1)") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.fillMaxWidth().testTag("synthesis-address"), textStyle = Dictee.type.body)
-            OutlinedTextField(draft.secret, form::setSecret, enabled = enabled, label = { Text("Nouvelle clé") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth().testTag("synthesis-secret"), textStyle = Dictee.type.body)
+            Text("Adresse du serveur (/v1)", style = Dictee.type.label, color = Dictee.colors.text)
+            DicteeTextField(draft.baseUrl, form::setBaseUrl, enabled = enabled, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.fillMaxWidth().testTag("synthesis-address").semantics { contentDescription = "Adresse du serveur (/v1)" })
+            Text("Nouvelle clé", style = Dictee.type.label, color = Dictee.colors.text)
+            DicteeTextField(draft.secret, form::setSecret, enabled = enabled, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth().testTag("synthesis-secret").semantics { contentDescription = "Nouvelle clé" })
             Text(if (settings.credentialRef == null) "Aucune clé enregistrée. La clé est protégée par Android Keystore." else "Une clé est enregistrée. Laisse ce champ vide pour la conserver. La clé est protégée par Android Keystore.", style = Dictee.type.caption, color = Dictee.colors.textSecondary)
-            OutlinedTextField(draft.model, form::setModel, enabled = enabled, label = { Text("Modèle") }, singleLine = true, modifier = Modifier.fillMaxWidth().testTag("synthesis-model"), textStyle = Dictee.type.body)
+            Text("Modèle", style = Dictee.type.label, color = Dictee.colors.text)
+            DicteeTextField(draft.model, form::setModel, enabled = enabled, modifier = Modifier.fillMaxWidth().testTag("synthesis-model").semantics { contentDescription = "Modèle" })
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 SecondaryButton(if (draft.testing) "Test…" else "Tester", enabled = enabled, modifier = Modifier.weight(1f)) { form.test() }
                 PrimaryButton(if (draft.saving) "Enregistrement…" else "Enregistrer", enabled = enabled, modifier = Modifier.weight(1f).testTag("synthesis-save")) { form.submit() }

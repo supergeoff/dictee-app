@@ -42,6 +42,8 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -237,8 +239,8 @@ fun PrimaryButton(text: String, enabled: Boolean = true, modifier: Modifier = Mo
 
 /** Bouton secondaire : un aplat gris sans bordure. [icon] est un pictogramme de 18 dp devant le texte. */
 @Composable
-fun SecondaryButton(text: String, enabled: Boolean = true, modifier: Modifier = Modifier, icon: Int? = null, onClick: () -> Unit) =
-    ButtonBox(text, ButtonTone.Secondary, enabled, modifier, icon, compact = false, onClick)
+fun SecondaryButton(text: String, enabled: Boolean = true, modifier: Modifier = Modifier, icon: Int? = null, mono: Boolean = false, onClick: () -> Unit) =
+    ButtonBox(text, ButtonTone.Secondary, enabled, modifier, icon, compact = false, onClick, mono)
 
 /** Bouton d'une action qui supprime : texte `destructive` sur `destructive-surface`. */
 @Composable
@@ -263,6 +265,7 @@ private fun ButtonBox(
     icon: Int?,
     compact: Boolean,
     onClick: () -> Unit,
+    mono: Boolean = false,
 ) {
     val colors = Dictee.colors
     val (rest, pressedFill, content) = when (tone) {
@@ -293,7 +296,7 @@ private fun ButtonBox(
             if (icon != null) {
                 Icon(painter = painterResource(icon), contentDescription = null, modifier = Modifier.size(18.dp), tint = content)
             }
-            Text(text = text, style = if (compact) Dictee.type.controlSm else Dictee.type.control, color = content, maxLines = 1)
+            Text(text = text, style = if (mono) Dictee.type.mono else if (compact) Dictee.type.controlSm else Dictee.type.control, color = content, maxLines = 1)
         }
     }
 }
@@ -417,34 +420,66 @@ internal fun DicteeTextField(
     modifier: Modifier = Modifier,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     keyboardActions: KeyboardActions = KeyboardActions.Default,
+    enabled: Boolean = true,
+    visualTransformation: VisualTransformation = VisualTransformation.None,
 ) {
     val colors = Dictee.colors
     val source = remember { MutableInteractionSource() }
-    val focused by source.collectIsFocusedAsState()
-    val edge = if (focused) 2.dp else 1.dp
     BasicTextField(
         value = value,
         onValueChange = onValueChange,
         modifier = modifier,
+        enabled = enabled,
         textStyle = Dictee.type.body.copy(color = colors.text),
         singleLine = true,
         cursorBrush = SolidColor(colors.primary),
         keyboardOptions = keyboardOptions,
         keyboardActions = keyboardActions,
+        visualTransformation = visualTransformation,
         interactionSource = source,
-        decorationBox = { field ->
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = Tokens.BUTTON_HEIGHT_DP.dp)
-                    .clip(ControlShape)
-                    .background(if (focused) colors.fieldFocused else colors.field)
-                    .border(edge, if (focused) colors.primary else colors.input, ControlShape)
-                    .padding(horizontal = 15.dp - edge, vertical = 11.dp - edge),
-                contentAlignment = Alignment.CenterStart,
-            ) { field() }
-        },
+        decorationBox = { field -> DicteeFieldDecoration(source, enabled, Tokens.BUTTON_HEIGHT_DP.dp, Alignment.CenterStart, field) },
     )
+}
+
+/** Éditeur multiligne avec sélection conservée pour l'insertion des variables. */
+@Composable
+internal fun DicteeTextField(
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    minHeight: Dp = Tokens.BUTTON_HEIGHT_DP.dp,
+) {
+    val colors = Dictee.colors
+    val source = remember { MutableInteractionSource() }
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier,
+        enabled = enabled,
+        textStyle = Dictee.type.body.copy(color = colors.text),
+        cursorBrush = SolidColor(colors.primary),
+        interactionSource = source,
+        decorationBox = { field -> DicteeFieldDecoration(source, enabled, minHeight, Alignment.TopStart, field) },
+    )
+}
+
+@Composable
+private fun DicteeFieldDecoration(source: MutableInteractionSource, enabled: Boolean, minHeight: Dp, alignment: Alignment, field: @Composable () -> Unit) {
+    val colors = Dictee.colors
+    val focused by source.collectIsFocusedAsState()
+    val edge = if (focused) 2.dp else 1.dp
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .graphicsLayer { alpha = if (enabled) 1f else Tokens.DISABLED_ALPHA }
+            .heightIn(min = minHeight)
+            .clip(ControlShape)
+            .background(if (focused) colors.fieldFocused else colors.field)
+            .border(edge, if (focused) colors.primary else colors.input, ControlShape)
+            .padding(horizontal = 15.dp - edge, vertical = 11.dp - edge),
+        contentAlignment = alignment,
+    ) { field() }
 }
 
 /**
