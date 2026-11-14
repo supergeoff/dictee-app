@@ -10,8 +10,10 @@ object SynthesisPrompt {
     // Sans état statique : un initialiseur de classe a déjà fait échouer tout le parcours MD sous Android (DIC-25).
     private val dateFormat: DateTimeFormatter
         get() = DateTimeFormatter.ofPattern("dd/MM/uuuu HH:mm", Locale.FRENCH)
+    // Accolades fermantes échappées : le moteur ICU d'Android rejette un « } » nu (erreur de syntaxe),
+    // contrairement à OpenJDK des tests JVM — la forme échappée est valide partout.
     private val variablePattern: Regex
-        get() = Regex("\\{\\{(type|date|duree|intervenants)}}")
+        get() = Regex("""\{\{(type|date|duree|intervenants)\}\}""")
     private const val UNAVAILABLE = "Non disponible"
 
     fun variables(recording: Recording, vtt: ByteArray): PromptVariables {

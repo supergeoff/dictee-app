@@ -465,6 +465,8 @@ class AppModel(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
+                    // L'erreur est écrite dans la source de la demande (visible sous les filtres) et en APP.
+                    journal.error(if (request == RequestedWork.REDO_MD) Source.LLM else Source.STT, "demande : ${reasonOf(e)}")
                     journal.error(Source.APP, "transcription : ${reasonOf(e)}")
                     say(reasonOf(e))
                 }
@@ -544,6 +546,7 @@ class AppModel(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
+                    journal.error(Source.LLM, "reprise de synthèse : ${reasonOf(e)}")
                     say(reasonOf(e))
                 }
             }

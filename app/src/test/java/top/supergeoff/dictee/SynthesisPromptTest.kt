@@ -59,4 +59,13 @@ class SynthesisPromptTest {
         assertEquals("{{date}}/date/durée/{{type}} | {{date}}/date/durée/{{type}} | {{autre}}",
             SynthesisPrompt.render(template, values))
     }
+
+    @Test fun renderSubstitueLesQuatreVariablesColleesAuMarqueur() {
+        // Les accolades fermantes sont échappées : le moteur regex strict d'Android (ICU)
+        // rejette un « } » nu, et ce rejet a déjà tué tout le parcours MD (DIC-25).
+        val values = PromptVariables("Note", "30/10/2026 16:05", "2 min", "Élodie, A")
+        assertEquals("Note du 30/10/2026 16:05 (2 min) avec Élodie, A.",
+            SynthesisPrompt.render("{{type}} du {{date}} ({{duree}}) avec {{intervenants}}.", values))
+        assertEquals("Sans variable.", SynthesisPrompt.render("Sans variable.", values))
+    }
 }
