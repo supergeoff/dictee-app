@@ -193,3 +193,28 @@ L'utilisateur déroule chaque scénario, puis exporte le journal. Un scénario e
 ## Compte rendu attendu
 
 Le compte rendu va en commentaire de la carte DIC-25. Il donne, pour chaque symptôme, la cause prouvée et la preuve (test ou lignes de journal), la liste des constats confirmés et infirmés, les correctifs appliqués avec leurs tests, le résultat des trois commandes Gradle, et les scénarios de recette qui n'ont pas pu être vérifiés.
+
+## Compte rendu de clôture (14 novembre 2026)
+
+### Causes réelles des symptômes, prouvées
+
+1. « Créer le MD » et « Refaire le MD » sans effet : le motif regex de `SynthesisPrompt` (`\{\{...}}`) contenait un `}}` non échappé, rejeté par le moteur ICU d'Android (OpenJDK l'accepte, d'où des tests JVM toujours verts). Sous la 0.4.0 l'échec se produisait dans l'initialiseur statique et ressortait comme `ExceptionInInitializerError` sans message ; chaque demande mourait avant tout appel réseau. Preuve : lignes `APP erreur` du journal téléphone, puis `Syntax error in regexp pattern near index 35` une fois l'erreur déballée. Correction : accolades échappées (`\}\}`), objet rendu sans état statique, erreurs déballées dans le journal, forme binaire vérifiée dans l'APK.
+2. « Refaire le VTT et le MD » bloqué à 100 % : même cause, la tâche mourait en figeant le contexte de synthèse après la promotion du VTT, sans message.
+3. Journal vide côté Transcription/Synthèse : constat 1, corrigé par la journalisation STT/LLM (le journal exporté de recette la montre en place et filtrable).
+4. Échec des transcriptions longues quand un autre client utilise le serveur : confirmé côté serveur (logs dokploy), tâches de ~27 min tuées après ≈ 300 s (`error=upstream_error`, réponse 502 à 302 s). La correction du constat 10 (429/502/503/504 → trois tentatives espacées puis suspension avec message) rend ces cas réessayés et racontés au lieu d'un échec muet. La cause serveur fait l'objet d'une carte séparée.
+
+### Constats
+
+Confirmés : 1, 2, 3, 4, 5, 6, 7 (règle voulue, non corrigée), 8, 9, 10, 11. Aucun infirmé.
+
+### Recette sur téléphone (journal exporté le 14 novembre à 19 h 42)
+
+- Scénario 1 « Créer le MD » : réussi deux fois (lignes LLM complètes : demande reçue, tâche créée, appel envoyé tentative 1/3, réponse 200 en 5 s, MD enregistré).
+- Scénario 3 « Refaire le VTT et le MD » : réussi (lignes STT puis LLM, VTT enregistré puis MD enregistré).
+- Scénario 9 « Export lisible » : réussi (aucune clé, aucun contenu de fichier, codes et durées seulement).
+- Scénarios 2, 4, 5, 6, 7 : non rejoués individuellement en recette ; leurs mécanismes sont couverts par les tests JVM (`MdCreationFlowTest`, `Dic25FindingsTest`, `TranscriptionJournalTest`) et les scénarios 1 et 3 empruntent les mêmes chemins. L'utilisateur déclare la recette satisfaisante et demande la clôture.
+- L'observation « la barre dit Transcription pendant une synthèse » n'a pas été reproduite sur les runs propres : la barre décrit la tête de file (règle du constat 7, refonte DIC-26).
+
+### Vérifications
+
+`./gradlew testDebugUnitTest`, `./gradlew assembleDebug` et `./gradlew lint` au vert. APK de recette signé avec le trousseau de release et installé par-dessus la 0.4.0 sans perte de données (adb, débogage sans fil) ; logcat propre pendant la recette.
