@@ -33,7 +33,7 @@ data class TranscriptionTask(
     val replaceVtt: Boolean = true,
 )
 
-enum class TranscriptionExclusion { MISSING_MP3, RECOVERY_FAILED, ALREADY_ACTIVE }
+enum class TranscriptionExclusion { MISSING_MP3, RECOVERY_FAILED, ALREADY_ACTIVE, MISSING_VTT }
 
 data class SelectionResult(
     val candidates: List<Recording>,

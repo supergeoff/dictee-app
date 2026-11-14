@@ -115,8 +115,8 @@ class RecordingStateTest {
                 .map { PhoneFile(it, 100) }, null, emptyMap(), Busy())
         val errors = mapOf(d to mapOf(Step.RECOVER to "coupure"), b to mapOf(Step.SEND to "envoi"))
         val all = Recordings.toTranscribe(list, null, errors)
-        assertEquals(listOf(a, b), all.candidates.map { it.name })
-        assertEquals(mapOf(d to TranscriptionExclusion.RECOVERY_FAILED), all.excluded)
+        assertEquals(listOf(a, b, c), all.candidates.map { it.name })
+        assertEquals(mapOf(d to TranscriptionExclusion.RECOVERY_FAILED, e to TranscriptionExclusion.MISSING_MP3), all.excluded)
         val selected = Recordings.toTranscribe(list, setOf(c, d, e, a, "absent"), errors)
         assertEquals(listOf(a, c), selected.candidates.map { it.name })
         assertEquals(mapOf(d to TranscriptionExclusion.RECOVERY_FAILED, e to TranscriptionExclusion.MISSING_MP3,
