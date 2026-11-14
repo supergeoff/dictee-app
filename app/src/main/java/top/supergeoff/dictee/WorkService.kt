@@ -21,8 +21,8 @@ import android.app.Notification as AndroidNotification
 
 /**
  * Service de premier plan qui garde la récupération et l'envoi en vie, écran éteint.
- * Sa notification reprend l'avancement de [AppModel.ui]. Il s'arrête dès que [AppModel.activeJobs] tombe à zéro, lu à chaque
- * démarrage et à chaque changement de [AppModel.ui] : un travail déjà fini quand le service démarre l'arrête aussitôt.
+ * Sa notification reprend l'avancement de [AppModel.ui]. Il observe aussi [AppModel.activeJobs] et s'arrête dès qu'il tombe
+ * à zéro : un travail déjà fini quand le service démarre l'arrête aussitôt.
  * Un verrou partiel d'une heure au plus garde le processeur éveillé.
  */
 class WorkService : Service() {
@@ -40,7 +40,7 @@ class WorkService : Service() {
         wakeLock = getSystemService(PowerManager::class.java)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "dictee:work")
             .apply { acquire(WAKE_LOCK_MS) }
-        scope.launch { model().ui.collect { onUi(it) } }
+        scope.launch { observeServiceWork(model().ui, model().jobs) { ui, jobs -> onUi(ui, jobs) } }
     }
 
     /**
@@ -51,7 +51,7 @@ class WorkService : Service() {
         lastStartId = startId
         stopping = false
         enterForeground(shownText.ifEmpty { PREPARING })
-        onUi(model().ui.value)
+        onUi(model().ui.value, model().activeJobs)
         return START_NOT_STICKY
     }
 
@@ -73,9 +73,9 @@ class WorkService : Service() {
 
     private fun model(): AppModel = (application as DicteeApp).model
 
-    private fun onUi(ui: UiState) {
+    private fun onUi(ui: UiState, jobs: Int) {
         if (stopping) return
-        if (model().activeJobs == 0) {
+        if (jobs == 0) {
             stopping = true
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf(lastStartId)

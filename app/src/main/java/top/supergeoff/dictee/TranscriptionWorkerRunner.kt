@@ -45,6 +45,7 @@ internal class TranscriptionInteractiveRunner(
     private val coordinator: TranscriptionCoordinator,
     private val worker: TranscriptionWorkerRunner,
     private val clock: () -> Long = System::currentTimeMillis,
+    private val timeoutMs: Long = TRANSCRIPTION_TIMEOUT_MS,
     private val wait: suspend (TranscriptionTask, Long) -> Unit = { task, millis ->
         withTimeoutOrNull(millis) {
             repository.state.filterNotNull().first { state ->
@@ -59,7 +60,7 @@ internal class TranscriptionInteractiveRunner(
         while (true) {
             val next = repository.awaitInitialized().transcriptionTasks.filter { !it.phase.isTerminal() && !it.suspended }
                 .minByOrNull { it.recordingName } ?: return
-            val outcome = withTimeoutOrNull(TRANSCRIPTION_TIMEOUT_MS) { coordinator.runBounded(next.localId) } ?: return
+            val outcome = withTimeoutOrNull(timeoutMs) { coordinator.runBounded(next.localId) } ?: return
             worker.retireIfTerminal(next.localId)
             val current = repository.awaitInitialized().transcriptionTasks.firstOrNull { it.localId == next.localId }
             if (outcome == RunOutcome.Suspended && current != null && !current.suspended) return

@@ -10,9 +10,7 @@ import android.os.Build
 import androidx.core.net.toUri
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -34,7 +32,6 @@ import java.time.LocalDateTime
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.cancellation.CancellationException
 
 /** État affiché par les écrans : tout ce qu'ils lisent, réuni par [AppModel]. */
@@ -201,7 +198,7 @@ class AppModel(
     private val loggedFlags = ConcurrentHashMap.newKeySet<String>()
     private val notificationAsked = AtomicBoolean(false)
     private val accountFailureNoted = AtomicBoolean(false)
-    private val jobs = AtomicInteger(0)
+    internal val jobs = ActiveWork()
 
     private val foregroundBoxGate = ForegroundBoxGate()
     @Volatile private var searching = false   // la feuille de recherche du boîtier est ouverte : le modèle ne rouvre pas la liaison
@@ -212,11 +209,11 @@ class AppModel(
     val requests: SharedFlow<UiRequest> = requestFlow.asSharedFlow()
 
     /**
-     * Récupérations et envois lancés et pas finis, lu par [WorkService]. Contrairement à [ui], qui arrive plus tard,
-     * ce compte est exact à tout instant : il monte avant le démarrage du service et redescend avant que [ui] annonce la fin.
+     * Travaux interactifs lancés et pas finis, lus par [WorkService]. Ce compte observable monte avant le démarrage
+     * du service et redescend même lorsqu'aucune modification de [ui] ne signale la fin.
      */
     val activeJobs: Int
-        get() = jobs.get()
+        get() = jobs.value
 
     private data class LocalSnapshot(val state: LocalState?, val initialization: LocalStateInitialization)
 
@@ -355,12 +352,12 @@ class AppModel(
         }
         val entries = recoveryEntries(names)
         if (entries.isEmpty() || liveFlow.getAndUpdate { it.copy(recovering = true) }.recovering) return
-        jobs.incrementAndGet()
+        jobs.begin()
         try {
             startWork()
             recoverySafety.withTransferLock { runRecovery(address, uri, entries) }
         } finally {
-            jobs.decrementAndGet()
+            jobs.end()
             liveFlow.update { it.copy(recovering = false, recovery = null, recoveryName = null) }
         }
     }
@@ -431,8 +428,7 @@ class AppModel(
         }
     }
 
-    private val transcriptionLoopLock = Any()
-    @Volatile private var transcriptionLoop: Job? = null
+    private val transcriptionLifecycle = InteractiveTranscriptionLifecycle(scope, ::followTranscriptions)
 
     /**
      * Lance la transcription de [names] (null : tout ce qui est éligible). La planification WorkManager est confirmée avant
@@ -440,25 +436,17 @@ class AppModel(
      */
     fun transcribe(names: Set<String>?, request: RequestedWork = RequestedWork.MISSING) {
         scope.launch {
-            jobs.incrementAndGet()
-            try {
-                announceExclusions(names)
-                val started = transcriptionCoordinator.start(names, request)
-                if (started.isNotEmpty()) {
-                    val loop = synchronized(transcriptionLoopLock) {
-                        transcriptionLoop?.takeIf { it.isActive } ?: scope.launch(start = CoroutineStart.LAZY) {
-                            followTranscriptions()
-                        }.also { transcriptionLoop = it; it.start() }
-                    }
-                    loop.join()
+            jobs.track {
+                try {
+                    announceExclusions(names)
+                    val started = transcriptionCoordinator.start(names, request)
+                    if (started.isNotEmpty()) transcriptionLifecycle.request().join()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    journal.error(Source.APP, "transcription : ${reasonOf(e)}")
+                    say(reasonOf(e))
                 }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                journal.error(Source.APP, "transcription : ${reasonOf(e)}")
-                say(reasonOf(e))
-            } finally {
-                jobs.decrementAndGet()
             }
         }
     }
@@ -500,12 +488,12 @@ class AppModel(
 
     /** Cesse le suivi interactif (timeout du service) ; le travail périodique déjà programmé prend le relais. */
     fun stopInteractiveTranscription() {
-        transcriptionLoop?.cancel()
+        transcriptionLifecycle.stop()
     }
 
     private suspend fun sendNow(names: List<String>?) {
         if (liveFlow.getAndUpdate { it.copy(sending = true) }.sending) return
-        jobs.incrementAndGet()
+        jobs.begin()
         try {
             if (!authorizeOrAsk { send(names) }) return
             recoverySafety.withTransferLock {
@@ -522,7 +510,7 @@ class AppModel(
                 readDrive()
             }
         } finally {
-            jobs.decrementAndGet()
+            jobs.end()
             liveFlow.update { it.copy(sending = false, send = null, sendName = null) }
         }
     }

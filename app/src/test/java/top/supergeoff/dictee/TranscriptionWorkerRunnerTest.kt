@@ -8,6 +8,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -42,6 +43,81 @@ class TranscriptionWorkerRunnerTest {
         val coordinator = TranscriptionCoordinator(repository, client, TranscriptionSettingsManager(repository, credentials),
             RecoverySafety(repository), verifyAudio = { true })
         return TranscriptionWorkerRunner(repository, coordinator, cancelScheduled = { removed += it })
+    }
+
+    @Test fun `interactive timeout notifies service without a UI change and preserves schedule`() = runBlocking {
+        disk.save(LocalState(transcriptionTasks = listOf(synthesisTask())))
+        val entered = CompletableDeferred<Unit>()
+        val client = synthesisClient { entered.complete(Unit); CompletableDeferred<Unit>().await(); byteArrayOf() }
+        val repo = LocalStateRepository(disk)
+        val coordinator = synthesisCoordinator(repo, client) { 1_000L }
+        val removed = mutableListOf<String>()
+        val worker = TranscriptionWorkerRunner(repo, coordinator, { removed += it })
+        val runner = TranscriptionInteractiveRunner(repo, coordinator, worker, timeoutMs = 100)
+        val jobs = ActiveWork()
+        val ui = MutableStateFlow("inchangé")
+        val stopped = CompletableDeferred<Unit>()
+        jobs.begin()
+        val service = launch { observeServiceWork(ui, jobs) { _, active -> if (active == 0) stopped.complete(Unit) } }
+        val lifecycle = InteractiveTranscriptionLifecycle(this) { runner.run() }
+        val interactive = launch { try { lifecycle.request().join() } finally { jobs.end() } }
+        withTimeout(5_000) { entered.await(); interactive.join() }
+        assertEquals(0, jobs.value)
+        withTimeout(1_000) { stopped.await() }
+        service.cancelAndJoin()
+        assertEquals(SynthesisPhase.CALLING, disk.load().transcriptionTasks.single().synthesis!!.phase)
+        assertEquals(1, disk.load().transcriptionTasks.single().synthesis!!.attempts)
+        assertTrue(removed.isEmpty())
+    }
+
+    @Test fun `new durable task between empty queue read and loop exit is followed`() = runBlocking {
+        disk.save(LocalState())
+        val repo = LocalStateRepository(disk)
+        val calls = mutableListOf<String>()
+        val scheduled = mutableListOf<String>()
+        val phone = MemoryStore().apply { files["audio.vtt"] = vtt }
+        val coordinator = TranscriptionCoordinator(repo, Client(), TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
+            verifyAudio = { true }, prepareRequested = { _, _, _ -> listOf(synthesisTask()) }, schedule = { scheduled += it },
+            synthesisClient = synthesisClient { calls += "md"; "# Synthèse".toByteArray() },
+            synthesisStorage = SynthesisStorage(File(tmp.root, "stage")), phoneStore = { phone },
+            synthesisCredentialAccessible = { true }, clock = { 1_000L })
+        val removed = mutableListOf<String>()
+        val worker = TranscriptionWorkerRunner(repo, coordinator, { removed += it })
+        val emptyRead = CompletableDeferred<Unit>()
+        val allowExit = CompletableDeferred<Unit>()
+        var runs = 0
+        val lifecycle = InteractiveTranscriptionLifecycle(this) {
+            TranscriptionInteractiveRunner(repo, coordinator, worker).run()
+            if (++runs == 1) { emptyRead.complete(Unit); allowExit.await() }
+        }
+        val first = lifecycle.request()
+        withTimeout(5_000) { emptyRead.await() }
+        assertEquals(listOf("local-1"), coordinator.start(setOf("20261111120000")))
+        val second = lifecycle.request()
+        allowExit.complete(Unit)
+        withTimeout(5_000) { first.join(); second.join() }
+        assertEquals(listOf("md"), calls)
+        assertEquals(listOf("local-1"), scheduled)
+        assertEquals(TranscriptionPhase.COMPLETED, disk.load().transcriptionTasks.single().phase)
+        assertEquals(listOf("local-1"), removed)
+    }
+
+    @Test fun `stopping interactive lifecycle leaves scheduled synthesis to worker`() = runBlocking {
+        disk.save(LocalState(transcriptionTasks = listOf(synthesisTask())))
+        val entered = CompletableDeferred<Unit>()
+        val repo = LocalStateRepository(disk)
+        val coordinator = synthesisCoordinator(repo, synthesisClient { entered.complete(Unit); CompletableDeferred<Unit>().await(); byteArrayOf() }) { 1_000L }
+        val removed = mutableListOf<String>()
+        val worker = TranscriptionWorkerRunner(repo, coordinator, { removed += it })
+        val jobs = ActiveWork()
+        val lifecycle = InteractiveTranscriptionLifecycle(this) { TranscriptionInteractiveRunner(repo, coordinator, worker).run() }
+        val action = launch { jobs.track { lifecycle.request().join() } }
+        withTimeout(5_000) { entered.await() }
+        lifecycle.stop()
+        withTimeout(5_000) { action.join() }
+        assertEquals(0, jobs.value)
+        assertEquals(SynthesisPhase.CALLING, disk.load().transcriptionTasks.single().synthesis!!.phase)
+        assertTrue(removed.isEmpty())
     }
 
     @Test fun `worker timeout leaves interrupted submission suspended on next run`() = runBlocking {
