@@ -41,6 +41,53 @@ class SynthesisStorageTest {
         assertArrayEquals(byteArrayOf(2), storage.staged("task-2", hash).readBytes())
     }
 
+    @Test fun reopeningAndDiscardRemoveOnlyTheTasksInterruptedTemporaryFiles() {
+        val dir = tmp.newFolder()
+        val storage = SynthesisStorage(dir)
+        val hash = storage.stage("task-1", "complete".toByteArray())
+        val otherHash = storage.stage("task-1-extra", "other".toByteArray())
+        val leftover = dir.resolve("synthesis-task-1.interrupted.tmp").apply { writeText("partial") }
+        val otherLeftover = dir.resolve("synthesis-task-1-extra.interrupted.tmp").apply { writeText("other partial") }
+
+        val reopened = SynthesisStorage(dir)
+        assertEquals("complete", reopened.staged("task-1", hash).readText())
+        assertFalse(leftover.exists())
+        assertTrue(otherLeftover.exists())
+        leftover.writeText("interrupted again")
+        reopened.discard("task-1")
+        assertFalse(leftover.exists())
+        assertFalse(dir.resolve("synthesis-task-1.md").exists())
+        assertTrue(otherLeftover.exists())
+        assertEquals("other", reopened.staged("task-1-extra", otherHash).readText())
+        assertFalse(otherLeftover.exists())
+    }
+
+    @Test fun restagingCleansOnlyTheSameTasksInterruptedTemporaryFiles() {
+        val dir = tmp.newFolder()
+        val leftover = dir.resolve("synthesis-task-1.interrupted.tmp").apply { writeText("partial") }
+        val other = dir.resolve("synthesis-task-1-extra.interrupted.tmp").apply { writeText("other") }
+        val storage = SynthesisStorage(dir)
+        val hash = storage.stage("task-1", "new".toByteArray())
+        assertFalse(leftover.exists())
+        assertTrue(other.exists())
+        assertEquals("new", storage.staged("task-1", hash).readText())
+    }
+
+    @Test fun cleanupFailureIsReportedWithoutRemovingStagedResult() {
+        val dir = tmp.newFolder()
+        val storage = SynthesisStorage(dir)
+        val hash = storage.stage("task-1", "complete".toByteArray())
+        val leftover = dir.resolve("synthesis-task-1.interrupted.tmp").apply {
+            mkdir()
+            resolve("child").writeText("synthetic")
+        }
+        assertThrows(java.io.IOException::class.java) { storage.discard("task-1") }
+        assertThrows(java.io.IOException::class.java) { storage.staged("task-1", hash) }
+        assertThrows(java.io.IOException::class.java) { storage.stage("task-1", "new".toByteArray()) }
+        assertEquals("complete", dir.resolve("synthesis-task-1.md").readText())
+        assertTrue(leftover.exists())
+    }
+
     @Test fun provenanceRequiresFolderAndBothHashes() {
         val p = SynthesisProvenance("content://synthetic/tree", "note.md", "model", "a".repeat(64), "b".repeat(64))
         assertEquals(ProvenanceStatus.CURRENT, provenanceStatus(p, p.folderUri, p.vttSha256, p.mdSha256))

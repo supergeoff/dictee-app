@@ -12,7 +12,8 @@ class SynthesisStorage(private val privateDir: File) {
     fun stage(localId: String, bytes: ByteArray): String {
         val target = file(localId)
         if (!privateDir.isDirectory && !privateDir.mkdirs() && !privateDir.isDirectory) throw IOException("Stockage privé inaccessible")
-        val temp = File.createTempFile("synthesis-", ".tmp", privateDir)
+        clearTemporaryFiles(localId)
+        val temp = File.createTempFile("synthesis-$localId.", ".tmp", privateDir)
         try {
             FileOutputStream(temp).use { output ->
                 output.write(bytes)
@@ -28,13 +29,27 @@ class SynthesisStorage(private val privateDir: File) {
 
     fun staged(localId: String, expectedSha256: String): File {
         val target = file(localId)
+        clearTemporaryFiles(localId)
         if (!target.isFile || sha256(target) != expectedSha256) throw IOException("Synthèse privée absente ou corrompue")
         return target
     }
 
     fun discard(localId: String) {
         val target = file(localId)
+        clearTemporaryFiles(localId)
         if (target.exists() && !target.delete()) throw IOException("Suppression de la synthèse privée impossible")
+    }
+
+    /** Le point sépare l'ID sûr du suffixe aléatoire, même pour deux IDs ayant un préfixe commun. */
+    private fun clearTemporaryFiles(localId: String) {
+        if (!privateDir.exists()) return
+        val entries = privateDir.listFiles() ?: throw IOException("Stockage privé inaccessible")
+        val prefix = "synthesis-$localId."
+        for (entry in entries) {
+            if (entry.name.startsWith(prefix) && entry.name.endsWith(".tmp") && !entry.delete()) {
+                throw IOException("Suppression de la synthèse privée temporaire impossible")
+            }
+        }
     }
 
     private fun file(localId: String): File {

@@ -88,7 +88,7 @@ Le résultat reçu est accompagné, dans l'état local durable, de l'identifiant
 
 Pour un MD créé par l'application, la fiche compare l'empreinte du VTT courant à celle enregistrée avec le MD : identique signifie à jour, différente signifie ancien. Une modification extérieure du VTT ou du MD invalide la correspondance. Pour un MD importé, préexistant, modifié à l'extérieur ou sans métadonnées fiables, le modèle et la correspondance sont indiqués **inconnus**, sans inventer de provenance ; le fichier reste lisible et le bouton « VTT + MD » ne l'écrase pas.
 
-Il existe une fenêtre inévitable avant la mise en attente durable du résultat : si le processus meurt après la réponse réseau mais avant sa sauvegarde locale, la réponse est perdue et une nouvelle tentative peut être facturée. Le stockage privé ne conserve pas durablement les réponses temporaires après leur promotion et la finalisation de leur provenance.
+Il existe une fenêtre inévitable avant la mise en attente durable du résultat : si le processus meurt après la réponse réseau mais avant sa sauvegarde locale, la réponse est perdue et une nouvelle tentative peut être facturée. Les fichiers temporaires privés portent l'identifiant sûr de la tâche ; leur nettoyage est repris lors d'un nouvel accès à cette tâche ou de sa suppression, sans toucher aux autres tâches. Le stockage privé ne conserve pas durablement les réponses temporaires après leur promotion et la finalisation de leur provenance.
 
 ## Vérifications et livraison
 
