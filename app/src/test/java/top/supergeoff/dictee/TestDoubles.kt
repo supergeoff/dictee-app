@@ -27,6 +27,24 @@ class MemoryStore(var failWrites: Boolean = false) : PhoneStore {
         files[fileName] = source.readBytes()
     }
 
+    override fun writeGuarded(fileName: String, source: File, replace: Boolean, promote: ((() -> Unit) -> Unit)) {
+        if (failWrites) throw PhoneStoreException("Dossier du téléphone inaccessible. Choisis-le de nouveau dans Réglages.")
+        val bytes = source.readBytes()
+        var called = false
+        var active = true
+        try {
+            promote {
+                check(active && !called)
+                called = true
+                if (!replace && fileName in files) throw PhoneStoreException("Le fichier existe déjà.")
+                files[fileName] = bytes
+            }
+        } finally {
+            active = false
+        }
+        if (!called) throw PhoneStoreException("Promotion de la synthèse refusée.")
+    }
+
     override fun open(fileName: String) = (files[fileName] ?: throw PhoneStoreException("$fileName absent")).inputStream()
 }
 

@@ -63,6 +63,7 @@ class RecoveryJobTest {
             override fun write(fileName: String, source: File) {
                 throw PhoneStoreException("Dossier du téléphone inaccessible.", FileNotFoundException("dossier illisible"))
             }
+            override fun writeGuarded(fileName: String, source: File, replace: Boolean, promote: ((() -> Unit) -> Unit)) { throw PhoneStoreException("Non utilisé") }
             override fun open(fileName: String): InputStream = throw PhoneStoreException("absent")
         }
         val log = ListLog()

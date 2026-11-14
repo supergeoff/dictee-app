@@ -54,6 +54,7 @@ class AppStateIntegrationTest {
                 files[fileName] = source.readBytes().copyOf(12)
                 throw PhoneStoreException("écriture interrompue")
             }
+            override fun writeGuarded(fileName: String, source: File, replace: Boolean, promote: ((() -> Unit) -> Unit)) { throw PhoneStoreException("Non utilisé") }
             override fun open(fileName: String): InputStream = files.getValue(fileName).inputStream()
         }
         val job = RecoveryJob(V05Session(link(), {}), phone, tmp.newFolder(), ListLog())

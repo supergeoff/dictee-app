@@ -164,6 +164,7 @@ class SendJobTest {
         val store = object : PhoneStore {
             override fun list() = emptyList<PhoneFile>()
             override fun write(fileName: String, source: File) {}
+            override fun writeGuarded(fileName: String, source: File, replace: Boolean, promote: ((() -> Unit) -> Unit)) { throw PhoneStoreException("Non utilisé") }
             override fun open(fileName: String): InputStream =
                 throw PhoneStoreException("Dossier du téléphone inaccessible.", FileNotFoundException("dossier illisible"))
         }

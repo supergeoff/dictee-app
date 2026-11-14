@@ -23,7 +23,10 @@ class PhoneFolder(context: Context, val treeUri: Uri) : PhoneStore {
         children().filter { RecordName.parse(it.name) != null }.map { PhoneFile(it.name, it.size) }
     }
 
-    override fun write(fileName: String, source: File) = guarded { writeDocument(fileName, source) }
+    override fun write(fileName: String, source: File) = guarded { writeDocument(fileName, source, true) { it() } }
+
+    override fun writeGuarded(fileName: String, source: File, replace: Boolean, promote: ((() -> Unit) -> Unit)) =
+        guarded { writeDocument(fileName, source, replace, promote) }
 
     override fun open(fileName: String): InputStream = guarded {
         val child = find(fileName) ?: throw PhoneStoreException("Fichier absent du dossier du téléphone : $fileName")
@@ -68,21 +71,37 @@ class PhoneFolder(context: Context, val treeUri: Uri) : PhoneStore {
      * un autre nom lu rend son nom à l'ancien document et lève une [PhoneStoreException] : le document renommé reste en place,
      * ce n'est plus le fichier attendu.
      */
-    private fun writeDocument(fileName: String, source: File) {
+    private fun writeDocument(fileName: String, source: File, replace: Boolean, promote: ((() -> Unit) -> Unit)) {
         clearLeftovers(fileName)
         var part: Uri? = null
         var aside: Uri? = null
-        val promoted = try {
+        var promoted: Uri? = null
+        var called = false
+        var active = true
+        try {
             part = createPart(fileName + PART_SUFFIX)
             checkRename(part)
             copy(source, part)
-            aside = moveAside(fileName)
-            DocumentsContract.renameDocument(resolver, part, fileName) ?: throw FileNotFoundException(fileName)
+            promote {
+                check(active && !called) { "Promotion hors de la garde ou déjà exécutée" }
+                called = true
+                if (!replace) requireAbsent(fileName)
+                if (replace) aside = moveAside(fileName)
+                if (!replace) requireAbsent(fileName)
+                promoted = DocumentsContract.renameDocument(resolver, part, fileName) ?: throw FileNotFoundException(fileName)
+            }
+            active = false
+            if (!called || promoted == null) throw PhoneStoreException("Promotion de la synthèse refusée.")
         } catch (e: Exception) {
-            undo(part, aside, fileName)
+            active = false
+            if (promoted == null) undo(part, aside, fileName) else deleteAside(aside)
             throw e
         }
         settle(promoted, aside, fileName)
+    }
+
+    private fun requireAbsent(fileName: String) {
+        if (find(fileName) != null) throw PhoneStoreException("Le fichier « $fileName » existe déjà dans le dossier du téléphone.")
     }
 
     /**
