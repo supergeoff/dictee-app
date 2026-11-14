@@ -1,0 +1,624 @@
+<!doctype html>
+<html lang="fr">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Maquette Dictée</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap">
+<style>
+/* Concept : une planche de cadres de téléphone, un cadre par écran, groupés par section.
+   Les jetons --a-* sont ceux de Tokens.kt (clair et sombre). Les jetons --pg-* ne servent qu'à la page autour des cadres. */
+:root {
+  --pg-bg: #ECECEA; --pg-fg: #0B0B0B; --pg-muted: #5C5C5C; --pg-line: #D6D6D3; --pg-card: #F6F6F4;
+  --a-bg: #FFFFFF; --a-surface: #FFFFFF; --a-text: #0B0B0B; --a-text2: #5C5C5C; --a-border: #E2E2E2;
+  --a-input: #E2E2E2; --a-muted: #F3F3F3; --a-accent: #ECECEC; --a-primary: #0B0B0B; --a-onprimary: #FFFFFF;
+  --a-primary-p: #2F2F2F; --a-secondary: #ECECEC; --a-field: #ECECEC; --a-switch-off: #8A8A8A;
+  --a-success: #05713A; --a-success-s: #DCF3E5; --a-warn: #7C4A00; --a-warn-s: #FFF1CC;
+  --a-destr: #B3130B; --a-destr-s: #FDE4E1; --a-focus: #1F5FE0; --a-overlay: rgba(11,11,11,.5);
+  --a-ring: rgba(92,92,92,.45); --a-shadow: 0 1px 2px rgba(11,11,11,.14), 0 1px 1px rgba(11,11,11,.08);
+  --a-shadow-pop: 0 8px 28px rgba(11,11,11,.22);
+  --f-text: "Figtree", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --pg-bg: #050505; --pg-fg: #ECECEC; --pg-muted: #A3A3A3; --pg-line: #232323; --pg-card: #0F0F0F;
+    --a-bg: #0B0B0B; --a-surface: #151515; --a-text: #ECECEC; --a-text2: #A3A3A3; --a-border: rgba(255,255,255,.12);
+    --a-input: rgba(255,255,255,.15); --a-muted: #1C1C1C; --a-accent: #2F2F2F; --a-primary: #F3F3F3; --a-onprimary: #0B0B0B;
+    --a-primary-p: #FFFFFF; --a-secondary: #242424; --a-field: #242424; --a-switch-off: #8A8A8A;
+    --a-success: #4CC38A; --a-success-s: rgba(76,195,138,.16); --a-warn: #F5B83D; --a-warn-s: rgba(245,184,61,.16);
+    --a-destr: #FF7B72; --a-destr-s: rgba(255,123,114,.16); --a-focus: #6C9BFF; --a-overlay: rgba(0,0,0,.72);
+    --a-ring: rgba(163,163,163,.5); --a-shadow: none; --a-shadow-pop: 0 8px 28px rgba(0,0,0,.6);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --pg-bg: #050505; --pg-fg: #ECECEC; --pg-muted: #A3A3A3; --pg-line: #232323; --pg-card: #0F0F0F;
+  --a-bg: #0B0B0B; --a-surface: #151515; --a-text: #ECECEC; --a-text2: #A3A3A3; --a-border: rgba(255,255,255,.12);
+  --a-input: rgba(255,255,255,.15); --a-muted: #1C1C1C; --a-accent: #2F2F2F; --a-primary: #F3F3F3; --a-onprimary: #0B0B0B;
+  --a-primary-p: #FFFFFF; --a-secondary: #242424; --a-field: #242424; --a-switch-off: #8A8A8A;
+  --a-success: #4CC38A; --a-success-s: rgba(76,195,138,.16); --a-warn: #F5B83D; --a-warn-s: rgba(245,184,61,.16);
+  --a-destr: #FF7B72; --a-destr-s: rgba(255,123,114,.16); --a-focus: #6C9BFF; --a-overlay: rgba(0,0,0,.72);
+  --a-ring: rgba(163,163,163,.5); --a-shadow: none; --a-shadow-pop: 0 8px 28px rgba(0,0,0,.6);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--pg-bg); color: var(--pg-fg); font-family: var(--f-text); font-size: 15px; line-height: 1.5; margin: 0;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 28px 64px; }
+.wrap { max-width: 1240px; margin: 0 auto; }
+h1 { font-size: clamp(28px, 5vw, 40px); line-height: 1.1; letter-spacing: -.02em; margin: 0 0 12px; font-weight: 700; text-wrap: balance; }
+h2 { font-size: 22px; letter-spacing: -.01em; margin: 56px 0 6px; font-weight: 700; text-wrap: balance; }
+.lead { max-width: 68ch; color: var(--pg-muted); margin: 0 0 20px; }
+.top { display: flex; flex-wrap: wrap; gap: 16px 32px; align-items: flex-start; justify-content: space-between; }
+.top > div { min-width: 0; }
+.legend { display: flex; flex-wrap: wrap; gap: 10px 22px; padding: 14px 16px; background: var(--pg-card); border: 1px solid var(--pg-line); border-radius: 12px; margin: 0 0 8px; }
+.legend span { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; }
+.legend-title { font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--pg-muted); margin: 18px 0 8px; }
+.toggle { font: inherit; font-weight: 600; font-size: 14px; color: var(--pg-fg); background: var(--pg-card); border: 1px solid var(--pg-line); border-radius: 10px; padding: 10px 16px; cursor: pointer; min-height: 44px; }
+.toggle:focus-visible { outline: 2px solid var(--a-focus); outline-offset: 2px; }
+.sec-note { max-width: 68ch; color: var(--pg-muted); margin: 0 0 22px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr)); gap: 44px 28px; justify-items: center; align-items: start; }
+.fig { width: min(360px, 100%); min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.fig-head { display: flex; align-items: baseline; gap: 10px; }
+.code { font-family: var(--f-mono); font-size: 13px; font-weight: 400; background: var(--pg-fg); color: var(--pg-bg); border-radius: 6px; padding: 2px 8px; flex: none; }
+.fig-title { font-weight: 700; font-size: 16px; min-width: 0; text-wrap: balance; }
+.fig-note { font-size: 14px; color: var(--pg-muted); margin: 0; line-height: 1.45; }
+.fig-note b { color: var(--pg-fg); font-weight: 600; }
+
+/* ---------- Cadre de téléphone ---------- */
+.phone { position: relative; width: min(360px, 100%); height: 760px; background: var(--a-bg); color: var(--a-text); border: 1px solid var(--pg-line);
+  border-radius: 36px; overflow: hidden; display: flex; flex-direction: column; font-family: var(--f-text); font-size: 15px; line-height: 1.5;
+  box-shadow: 0 10px 30px rgba(0,0,0,.10); }
+.sbar { flex: none; height: 30px; padding: 8px 22px 0; display: flex; justify-content: space-between; font-size: 12px; font-weight: 600; color: var(--a-text); }
+.sbar i { display: inline-block; width: 14px; height: 9px; border-radius: 2px; background: var(--a-text); margin-left: 5px; opacity: .85; }
+.sbar i + i { width: 18px; opacity: .55; }
+.scr { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: none; display: flex; flex-direction: column; }
+.scr::-webkit-scrollbar { display: none; }
+.scr > * { flex-shrink: 0; }
+.navbar { flex: none; height: 22px; display: flex; align-items: center; justify-content: center; background: var(--a-bg); }
+.navbar::after { content: ""; width: 110px; height: 4px; border-radius: 2px; background: var(--a-text); opacity: .35; }
+.navbar.on-surface { background: var(--a-surface); }
+.pad { padding: 0 16px; }
+.col { display: flex; flex-direction: column; }
+.gap12 { gap: 12px; } .gap8 { gap: 8px; } .gap14 { gap: 14px; }
+.min0 { min-width: 0; }
+svg.ic { flex: none; display: block; }
+
+/* typographie de l'app */
+.t-wm { font-size: 16px; line-height: 1.25; font-weight: 700; letter-spacing: .08em; }
+.t-item { font-size: 16px; line-height: 1.3; font-weight: 700; }
+.t-sec { font-size: 18px; line-height: 1.3; font-weight: 700; letter-spacing: -.01em; }
+.t-modal { font-size: 22px; line-height: 1.25; font-weight: 700; letter-spacing: -.01em; }
+.t-row { font-size: 15px; line-height: 1.3; font-weight: 500; }
+.t-body { font-size: 15px; line-height: 1.5; }
+.t-sm { font-size: 14px; line-height: 1.45; }
+.t-cap { font-size: 13px; line-height: 1.45; font-weight: 500; color: var(--a-text2); }
+.t-caps { font-size: 12px; line-height: 1.2; font-weight: 600; }
+.t-over { font-size: 12px; line-height: 1.2; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--a-text2); padding: 0 4px; }
+.t-lab { font-size: 14px; line-height: 1.4; font-weight: 600; }
+.t-ctl { font-size: 15px; line-height: 1.1; font-weight: 600; }
+.mono { font-family: var(--f-mono); font-size: 12px; line-height: 16px; }
+.sec2 { color: var(--a-text2); }
+.ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* en-têtes */
+.hdr { display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 16px; }
+.hdr .grow { flex: 1; }
+.brand { position: relative; width: 32px; height: 32px; flex: none; }
+.brand svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.iconbtn { width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; color: var(--a-text); flex: none; }
+.topbar { display: flex; align-items: center; gap: 4px; padding: 4px 8px 10px; }
+.topbar .ttl { flex: 1; min-width: 0; }
+
+/* pastilles */
+.badge { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 1.2; white-space: nowrap; background: var(--a-muted); color: var(--a-text2); max-width: 100%; }
+.badge.s { background: var(--a-success-s); color: var(--a-success); }
+.badge.w { background: var(--a-warn-s); color: var(--a-warn); }
+.badge.d { background: var(--a-destr-s); color: var(--a-destr); }
+.bdot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+.bdot.o { background: none; border: 1.5px solid currentColor; }
+
+/* boutons */
+.btn { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 10px 18px; border-radius: 10px; border: 0; background: var(--a-secondary); color: var(--a-text); font: 600 15px/1.1 var(--f-text); white-space: nowrap; width: 100%; }
+.btn.p { background: var(--a-primary); color: var(--a-onprimary); }
+.btn.dis { opacity: .4; }
+.btn.sm { min-height: 36px; padding: 6px 14px; font-size: 13px; width: auto; }
+.btn.fit { width: auto; }
+.focus-demo { outline: 2px solid var(--a-focus); outline-offset: 0; }
+
+/* cartes et lignes */
+.card { background: var(--a-surface); border: 1px solid var(--a-border); border-radius: 16px; box-shadow: var(--a-shadow); overflow: hidden; }
+.divider { height: 1px; background: var(--a-border); border: 0; margin: 0; flex: none; }
+.lrow { display: flex; align-items: center; gap: 12px; padding: 12px 14px; }
+.lrow.single { padding: 14px; }
+.lrow .tx { flex: 1; min-width: 0; }
+.tile { width: 36px; height: 36px; border-radius: 10px; background: var(--a-muted); display: grid; place-items: center; flex: none; }
+.tile.dash { background: none; border: 1.5px dashed var(--a-ring); }
+.chk { width: 22px; height: 22px; border-radius: 6px; border: 1.5px solid var(--a-ring); background: var(--a-surface); display: grid; place-items: center; flex: none; color: var(--a-onprimary); }
+.chk.on { background: var(--a-primary); border-color: var(--a-primary); }
+.pill { height: 36px; display: inline-flex; align-items: center; gap: 6px; padding: 0 14px; border-radius: 999px; background: var(--a-secondary); color: var(--a-text); font-size: 14px; font-weight: 600; white-space: nowrap; flex: none; }
+.pill.on { background: var(--a-primary); color: var(--a-onprimary); }
+.pill small { font-size: 14px; font-weight: 600; opacity: .7; }
+.filters { display: flex; gap: 8px; padding: 0 16px 14px; overflow: hidden; flex: none; }
+.notice { display: flex; gap: 12px; padding: 14px 16px; border-radius: 12px; background: var(--a-muted); font-size: 14px; line-height: 1.45; }
+.notice.d { background: var(--a-destr-s); border: 1px solid color-mix(in srgb, var(--a-destr) 28%, transparent); }
+.notice.w { background: var(--a-warn-s); }
+.notice svg { margin-top: 2px; color: var(--a-text2); }
+.notice.d svg { color: var(--a-destr); }
+.notice.w svg { color: var(--a-warn); }
+.switch { width: 44px; height: 24px; border-radius: 999px; background: var(--a-switch-off); position: relative; flex: none; }
+.switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; }
+.switch.on { background: var(--a-primary); }
+.switch.on::after { left: 23px; background: var(--a-onprimary); }
+.field { min-height: 44px; border-radius: 10px; background: var(--a-field); border: 1px solid var(--a-input); padding: 10px 14px; font-size: 15px; display: flex; align-items: center; min-width: 0; overflow: hidden; }
+.field.ta { align-items: flex-start; line-height: 1.5; }
+.seg { display: flex; padding: 4px; gap: 4px; border-radius: 12px; background: var(--a-muted); }
+.seg span { flex: 1; text-align: center; height: 36px; line-height: 36px; border-radius: 8px; font-weight: 600; font-size: 14px; color: var(--a-text2); }
+.seg span.on { background: var(--a-surface); color: var(--a-text); box-shadow: 0 1px 3px rgba(11,11,11,.18); }
+
+/* barres d'avancement de la liste */
+.pbars { padding: 0 16px 12px; display: flex; flex-direction: column; gap: 10px; flex: none; }
+.pline .bar { height: 2px; border-radius: 1px; background: var(--a-border); margin-top: 6px; overflow: hidden; }
+.pline .bar i { display: block; height: 100%; background: var(--a-primary); }
+.pline .bar i.ind { width: 30%; animation: slide 1.6s linear infinite; }
+@keyframes slide { from { margin-left: -30%; } to { margin-left: 100%; } }
+
+/* ---------- Parcours en quatre étapes ---------- */
+.g { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; flex: none; position: relative; }
+.g-done { background: var(--a-success-s); color: var(--a-success); }
+.g-err { background: var(--a-destr-s); color: var(--a-destr); }
+.g-wait { border: 1.5px dashed var(--a-text2); color: var(--a-text2); }
+.g-todo { border: 1.5px solid var(--a-ring); }
+.g-run { color: var(--a-primary); }
+.g-run svg { display: block; }
+.g-run svg.spin { animation: spin 1.2s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.steps { padding: 14px 12px 12px; }
+.srow { display: grid; grid-template-columns: repeat(4, 1fr); }
+.step { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 2px; min-width: 0; }
+.gw { position: relative; width: 100%; height: 24px; display: flex; justify-content: center; margin-bottom: 4px; }
+.gw .ln { position: absolute; top: 11px; height: 2px; border-radius: 1px; background: var(--a-border); }
+.gw .ln.l { left: 0; width: calc(50% - 18px); }
+.gw .ln.r { right: 0; width: calc(50% - 18px); }
+.gw .ln.ok { background: var(--a-success); opacity: .55; }
+.step .nm { font-size: 13px; line-height: 1.2; font-weight: 700; }
+.step .st { font-size: 12px; line-height: 1.25; font-weight: 500; color: var(--a-text2); }
+.step .st.ok { color: var(--a-success); }
+.step .st.run { color: var(--a-text); font-weight: 600; }
+.step .st.err { color: var(--a-destr); font-weight: 600; }
+.step .st.warn { color: var(--a-warn); font-weight: 600; }
+.reason { --c: 0; position: relative; margin-top: 14px; padding: 10px 12px; border-radius: 10px; background: var(--a-muted); font-size: 13px; line-height: 1.45; }
+.reason::before { content: ""; position: absolute; top: -5px; left: calc(var(--c) * 25% + 12.5%); width: 10px; height: 10px; margin-left: -5px; background: inherit; transform: rotate(45deg); border-radius: 2px; }
+.reason.d { background: var(--a-destr-s); color: var(--a-text); }
+.reason.w { background: var(--a-warn-s); }
+.reason b { font-weight: 700; }
+.reason.d b { color: var(--a-destr); }
+.reason.w b { color: var(--a-warn); }
+
+.dots { display: inline-flex; gap: 4px; align-items: center; }
+.dots i { width: 9px; height: 9px; border-radius: 50%; display: block; box-sizing: border-box; }
+.dots .done { background: var(--a-success); }
+.dots .run { border: 1.5px solid var(--a-primary); background: conic-gradient(var(--a-primary) 0 50%, transparent 0); }
+.dots .wait { border: 1.5px dashed var(--a-text2); }
+.dots .todo { border: 1.5px solid var(--a-ring); }
+.dots .err { background: var(--a-destr); }
+
+.rrow { display: flex; align-items: center; gap: 12px; padding: 12px 14px; }
+.rrow.sel { background: var(--a-accent); }
+.rrow .tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.rrow .meta { display: flex; align-items: center; gap: 8px; margin-top: 7px; min-width: 0; }
+.rrow .meta .t-cap { font-size: 12px; white-space: nowrap; }
+
+.actionbar { flex: none; background: var(--a-surface); border-top: 1px solid var(--a-border); padding: 12px 16px; display: flex; gap: 8px; }
+.actionbar .btn { flex: 1 1 0; min-width: 0; padding: 8px 4px; font-size: 13px; min-height: 44px; }
+
+/* fiche */
+.player { display: flex; align-items: center; gap: 12px; padding: 12px; }
+.play { width: 40px; height: 40px; border-radius: 50%; background: var(--a-primary); color: var(--a-onprimary); display: grid; place-items: center; flex: none; }
+.seek { position: relative; height: 24px; display: flex; align-items: center; }
+.seek .tr { width: 100%; height: 4px; border-radius: 2px; background: var(--a-border); overflow: hidden; }
+.seek .tr i { display: block; height: 100%; background: var(--a-primary); }
+.seek .kn { position: absolute; top: 6px; width: 12px; height: 12px; border-radius: 50%; background: var(--a-primary); margin-left: -6px; }
+.times { display: flex; justify-content: space-between; color: var(--a-text2); }
+.tabs { display: flex; border-bottom: 1px solid var(--a-border); }
+.tab { flex: 1; text-align: center; padding: 14px 0 12px; font-size: 15px; font-weight: 600; color: var(--a-text2); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tab.on { color: var(--a-text); border-bottom-color: var(--a-primary); }
+.md h3 { font-size: 16px; line-height: 1.3; margin: 0 0 4px; font-weight: 700; }
+.md h4 { font-size: 15px; line-height: 1.3; margin: 12px 0 4px; font-weight: 700; }
+.md p { margin: 0 0 4px; font-size: 15px; line-height: 1.5; }
+.md ul { margin: 0; padding-left: 20px; font-size: 15px; line-height: 1.5; }
+.cue { padding: 8px 12px; display: block; }
+.cue.now { background: var(--a-accent); }
+.menu { position: absolute; top: 74px; right: 10px; width: 232px; z-index: 4; background: var(--a-surface); border: 1px solid var(--a-border); border-radius: 12px; box-shadow: var(--a-shadow-pop); padding: 6px 0; }
+.menu div { padding: 13px 16px; font-size: 15px; font-weight: 500; line-height: 1.3; }
+.menu div.dis { opacity: .4; }
+.menu hr { border: 0; height: 1px; background: var(--a-border); margin: 4px 0; }
+.sheet-scrim { position: absolute; inset: 0; background: var(--a-overlay); z-index: 3; }
+.sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 4; background: var(--a-surface); border-radius: 16px 16px 0 0; padding: 12px 16px 38px; display: flex; flex-direction: column; gap: 14px; }
+.sheet .grab { width: 36px; height: 4px; border-radius: 2px; background: var(--a-ring); margin: 0 auto 2px; }
+.logcard { margin: 0 16px 16px; border: 1px solid var(--a-border); border-radius: 16px; background: var(--a-surface); box-shadow: var(--a-shadow); padding: 12px 0; overflow: hidden; }
+.dayh { padding: 12px 12px 8px; }
+.dayh.first { padding-top: 2px; }
+.logl { display: flex; padding: 3px 12px; font-family: var(--f-mono); font-size: 11.5px; line-height: 17px; }
+.logl .tm { width: 58px; flex: none; color: var(--a-text2); }
+.logl .sr { width: 44px; flex: none; color: var(--a-text2); }
+.logl .ms { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.logl.er { background: var(--a-destr-s); }
+.logl.er .tm, .logl.er .sr, .logl.er .ms { color: var(--a-destr); }
+.chip { font-family: var(--f-mono); font-size: 13px; padding: 6px 10px; border-radius: 8px; background: var(--a-secondary); }
+@media (prefers-reduced-motion: reduce) { .g-run svg.spin, .pline .bar i.ind { animation: none; } }
+</style>
+
+<div class="wrap">
+  <div class="top">
+    <div style="flex:1 1 420px">
+      <h1>Maquette Dictée</h1>
+      <p class="lead">Chaque enregistrement suit quatre étapes, toujours dans le même ordre : le MP3 arrive sur le téléphone, la transcription (VTT) est créée, la synthèse (MD) est créée à partir du VTT, puis les fichiers partent sur Drive. Chaque écran de cette planche montre où en est l'enregistrement dans ces quatre étapes, et la fiche propose une seule action principale, celle qui reprend à la première étape manquante.</p>
+    </div>
+    <button class="toggle" id="themeBtn" type="button" aria-pressed="false">Basculer en thème sombre</button>
+  </div>
+  <p class="legend-title">Les cinq états d'une étape</p>
+  <div class="legend" id="legend"></div>
+  <div id="app"></div>
+</div>
+
+<script>
+/* ============ icônes (tracés des vecteurs de res/drawable, viewBox 24) ============ */
+var IC = {
+  add: ['f', 'M19,13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z'],
+  back: ['f', 'M15.41,7.41L14,6l-6,6 6,6 1.41,-1.41L10.83,12z'],
+  check: ['f', 'M9,16.17L4.83,12l-1.42,1.41L9,19 21,7l-1.41,-1.41z'],
+  close: ['f', 'M19,6.41L17.59,5 12,10.59 6.41,5 5,6.41 10.59,12 5,17.59 6.41,19 12,13.41 17.59,19 19,17.59 13.41,12z'],
+  cloud: ['f', 'M19.35,10.04C18.67,6.59 15.64,4 12,4 9.11,4 6.6,5.64 5.35,8.04 2.34,8.36 0,10.91 0,14c0,3.31 2.69,6 6,6h13c2.76,0 5,-2.24 5,-5 0,-2.64 -2.05,-4.78 -4.65,-4.96z'],
+  folder: ['f', 'M10,4H4c-1.1,0 -1.99,0.9 -1.99,2L2,18c0,1.1 0.9,2 2,2h16c1.1,0 2,-0.9 2,-2V8c0,-1.1 -0.9,-2 -2,-2h-8l-2,-2z'],
+  info: ['f', 'M11,7h2v2h-2zM11,11h2v6h-2zM12,2C6.48,2 2,6.48 2,12s4.48,10 10,10 10,-4.48 10,-10S17.52,2 12,2zM12,20c-4.41,0 -8,-3.59 -8,-8s3.59,-8 8,-8 8,3.59 8,8 -3.59,8 -8,8z'],
+  more: ['f', 'M12,8c1.1,0 2,-0.9 2,-2s-0.9,-2 -2,-2 -2,0.9 -2,2 0.9,2 2,2zM12,10c-1.1,0 -2,0.9 -2,2s0.9,2 2,2 2,-0.9 2,-2 -0.9,-2 -2,-2zM12,16c-1.1,0 -2,0.9 -2,2s0.9,2 2,2 2,-0.9 2,-2 -0.9,-2 -2,-2z'],
+  note: ['f', 'M12,14c1.66,0 2.99,-1.34 2.99,-3L15,5c0,-1.66 -1.34,-3 -3,-3S9,3.34 9,5v6c0,1.66 1.34,3 3,3zM11.99,4c0.55,0 1.01,0.45 1.01,1L13,11c0,0.55 -0.45,1 -1,1s-1,-0.45 -1,-1L11,5c0,-0.55 0.45,-1 0.99,-1zM17.3,11c0,3 -2.54,5.1 -5.3,5.1S6.7,14 6.7,11L5,11c0,3.41 2.72,6.23 6,6.72L11,21h2v-3.28c3.28,-0.48 6,-3.3 6,-6.72h-1.7z'],
+  call: ['f', 'M6.62,10.79c1.44,2.83 3.76,5.14 6.59,6.59l2.2,-2.2c0.27,-0.27 0.67,-0.36 1.02,-0.24 1.12,0.37 2.33,0.57 3.57,0.57 0.55,0 1,0.45 1,1V20c0,0.55 -0.45,1 -1,1 -9.39,0 -17,-7.61 -17,-17 0,-0.55 0.45,-1 1,-1h3.5c0.55,0 1,0.45 1,1 0,1.25 0.2,2.45 0.57,3.57 0.11,0.35 0.03,0.74 -0.25,1.02l-2.2,2.2z'],
+  play: ['f', 'M8,5v14l11,-7z'],
+  pause: ['f', 'M6,19h4V5H6v14zM14,5v14h4V5h-4z'],
+  settings: ['f', 'M3,17v2h6v-2L3,17zM3,5v2h10L13,5L3,5zM13,21v-2h8v-2h-8v-2h-2v6h2zM7,9v2L3,11v2h4v2h2L9,9L7,9zM21,13v-2L11,11v2h10zM15,9h2L17,7h4L21,5h-4L17,3h-2v6z'],
+  chevron: ['s2', 'M9,6l6,6l-6,6'],
+  copy: ['s1.8', 'M11,9h7a2,2 0 0 1 2,2v7a2,2 0 0 1 -2,2h-7a2,2 0 0 1 -2,-2v-7a2,2 0 0 1 2,-2z M5,15V5a2,2 0 0 1 2,-2h8'],
+  download: ['s2', 'M12,4v11M7,10l5,5l5,-5M5,20h14'],
+  upload: ['s2', 'M12,16V5M7,10l5,-5l5,5M5,20h14'],
+  file: ['s1.8', 'M14,3H7a2,2 0 0 0 -2,2v14a2,2 0 0 0 2,2h10a2,2 0 0 0 2,-2V8z M14,3v5h5M9,13h6M9,17h4'],
+  open: ['s2', 'M14,4h6v6M20,4l-9,9M18,14v5a1,1 0 0 1 -1,1H5a1,1 0 0 1 -1,-1V7a1,1 0 0 1 1,-1h5'],
+  recorder: ['s1.8', 'M9,3H15A3,3 0 0 1 18,6V18A3,3 0 0 1 15,21H9A3,3 0 0 1 6,18V6A3,3 0 0 1 9,3z M12,13a2,2 0 1 0 0,4a2,2 0 1 0 0,-4z M10,7h4'],
+  search: ['s2', 'M11,4a7,7 0 1 0 0,14a7,7 0 1 0 0,-14z M20,20l-4,-4'],
+  trash: ['s1.8', 'M4,7h16M10,11v6M14,11v6M6,7l1,13h10l1,-13M9,7V4h6v3'],
+  excl: ['f', 'M11,5h2v9h-2zM11,16.5h2v2.5h-2z']
+};
+function ic(n, size, extra) {
+  size = size || 18; var d = IC[n]; var kind = d[0];
+  var a = kind === 'f' ? 'fill="currentColor"' : 'fill="none" stroke="currentColor" stroke-width="' + kind.slice(1) + '" stroke-linecap="round" stroke-linejoin="round"';
+  return '<svg class="ic" width="' + size + '" height="' + size + '" viewBox="0 0 24 24" ' + a + ' aria-hidden="true"' + (extra || '') + '><path d="' + d[1] + '"/></svg>';
+}
+function arc(size, pct) {
+  var r = 9, c = 2 * Math.PI * r; var len = pct == null ? c * 0.28 : c * pct / 100;
+  return '<svg class="' + (pct == null ? 'spin' : '') + '" width="' + size + '" height="' + size + '" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="' + r + '" fill="none" stroke="var(--a-border)" stroke-width="2.4"/><circle cx="12" cy="12" r="' + r + '" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-dasharray="' + len.toFixed(1) + ' ' + c.toFixed(1) + '" transform="rotate(-90 12 12)"/></svg>';
+}
+var BRAND = '<span class="brand"><svg viewBox="0 0 608 608" aria-hidden="true"><path fill="var(--a-text)" d="M110,0 H402 A110,110 0 0 1 512,110 V402 A110,110 0 0 1 402,512 H110 A110,110 0 0 1 0,402 V110 A110,110 0 0 1 110,0 Z" transform="translate(48 48) rotate(10 256 256)"/><path fill="var(--a-bg)" fill-rule="evenodd" d="M112,96 h128 a160,160 0 0 1 0,320 H112 z M176,176 h56 a80,80 0 0 1 0,160 h-56 z" transform="translate(48 48) rotate(10 256 256)"/><path fill="var(--a-bg)" d="M176,218 h74 v26 h-74 z M176,268 h100 v26 h-100 z" transform="translate(48 48) rotate(10 256 256)"/></svg></span>';
+
+/* ============ états d'une étape ============ */
+function glyph(s, pct) {
+  if (s === 'done') return '<span class="g g-done">' + ic('check', 14) + '</span>';
+  if (s === 'run') return '<span class="g g-run">' + arc(24, pct) + '</span>';
+  if (s === 'wait') return '<span class="g g-wait"></span>';
+  if (s === 'err') return '<span class="g g-err">' + ic('excl', 16) + '</span>';
+  return '<span class="g g-todo"></span>';
+}
+function dots(a) { return '<span class="dots" aria-hidden="true">' + a.map(function (s) { return '<i class="' + s + '"></i>'; }).join('') + '</span>'; }
+
+/* ============ pièces communes ============ */
+function sbar() { return '<div class="sbar"><span>09:41</span><span><i></i><i></i></span></div>'; }
+function phone(inner, o) {
+  o = o || {};
+  return '<div class="phone"' + (o.h ? ' style="height:' + o.h + 'px"' : '') + '>' + sbar() + inner + '<div class="navbar' + (o.navSurface ? ' on-surface' : '') + '"></div></div>';
+}
+function header(pillText, connected) {
+  return '<div class="hdr">' + BRAND + '<span class="t-wm">DICTÉE</span><span class="grow"></span>' +
+    '<span class="badge ' + (connected ? 's' : '') + '"><span class="bdot ' + (connected ? '' : 'o') + '"></span>' + pillText + '</span>' +
+    '<span class="iconbtn">' + ic('settings', 20) + '</span></div>';
+}
+function topbar(title, actions) {
+  return '<div class="topbar"><span class="iconbtn">' + ic('back', 20) + '</span><span class="t-sec ttl ell">' + title + '</span>' + (actions || '') + '</div>';
+}
+function btn(label, kind, icon, extra) {
+  return '<div class="btn ' + (kind || '') + (extra || '') + '">' + (icon ? ic(icon, 18) : '') + '<span>' + label + '</span></div>';
+}
+function filters(list) {
+  return '<div class="filters">' + list.map(function (f) { return '<span class="pill' + (f[2] ? ' on' : '') + '">' + f[0] + (f[1] != null ? ' <small>' + f[1] + '</small>' : '') + '</span>'; }).join('') + '</div>';
+}
+function lrow(title, sub, o) {
+  o = o || {};
+  return '<div class="lrow' + (!o.tile && !sub ? ' single' : '') + '"' + (o.dim ? ' style="opacity:.55"' : '') + '>' + (o.tile || '') +
+    '<div class="tx"><div class="t-row" style="' + (o.w ? 'font-weight:' + o.w : '') + '">' + title + '</div>' +
+    (sub ? '<div class="' + (o.mono ? 'mono' : 't-cap') + ' sec2" style="' + (o.mono ? '' : '') + '">' + sub + '</div>' : '') + '</div>' + (o.trail || '') + '</div>';
+}
+function tile(icn, dash) { return '<span class="tile' + (dash ? ' dash' : '') + '">' + ic(icn, 18) + '</span>'; }
+function sectionTitle(t) { return '<div class="t-over" style="margin-bottom:8px">' + t + '</div>'; }
+function section(t, body) { return '<div>' + sectionTitle(t) + body + '</div>'; }
+function card(inner, style) { return '<div class="card"' + (style ? ' style="' + style + '"' : '') + '>' + inner + '</div>'; }
+function chev() { return '<span class="sec2">' + ic('chevron', 18) + '</span>'; }
+function notice(text, tone, action) { return '<div class="notice ' + (tone || '') + '">' + ic('info', 18) + '<div style="flex:1;min-width:0">' + text + '</div>' + (action || '') + '</div>'; }
+function figure(code, title, note, screen) {
+  return '<div class="fig"><div class="fig-head"><span class="code">' + code + '</span><span class="fig-title">' + title + '</span></div>' + screen + '<p class="fig-note">' + note + '</p></div>';
+}
+
+/* ============ badges de la liste ============ */
+function badge(kind, pct) {
+  switch (kind) {
+    case 'box': return '<span class="badge">' + ic('recorder', 12) + 'Sur le boîtier</span>';
+    case 'mp3': return '<span class="badge">' + ic('check', 12) + 'MP3</span>';
+    case 'vtt': return '<span class="badge">' + ic('check', 12) + 'VTT</span>';
+    case 'md': return '<span class="badge">' + ic('check', 12) + 'MD</span>';
+    case 'drive': return '<span class="badge s">' + ic('cloud', 12) + 'Sur Drive</span>';
+    case 'rec': return '<span class="badge"><span class="g-run" style="display:flex">' + arc(12, pct) + '</span>Récupération ' + pct + ' %</span>';
+    case 'stt': return '<span class="badge"><span class="g-run" style="display:flex">' + arc(12, pct) + '</span>Transcription ' + pct + ' %</span>';
+    case 'llm': return '<span class="badge"><span class="g-run" style="display:flex">' + arc(12, null) + '</span>Synthèse…</span>';
+    case 'wait': return '<span class="badge"><span class="g g-wait" style="width:12px;height:12px;border-width:1.5px"></span>En attente</span>';
+    case 'err': return '<span class="badge d">Erreur</span>';
+  }
+}
+/* Une ligne de la liste. n : nom, t : type, d : détail, k : badge, p : pourcentage, dots : quatre étapes. */
+var R = {
+  box1: { id: 'box1', t: 'note', title: 'Note du 14 nov. 08:02', d: '12 min · 2,9 Mo', k: 'box', dots: ['todo', 'todo', 'todo', 'todo'], need: 'recover' },
+  rec1: { id: 'rec1', t: 'call', title: 'Appel du 14 nov. 07:40', d: '28 min · 6,6 Mo', k: 'rec', p: 40, dots: ['run', 'todo', 'todo', 'todo'], need: 'busy' },
+  wait1: { id: 'wait1', t: 'note', title: 'Note du 13 nov. 18:25', d: '9 min · 2,1 Mo · 2e dans la file', k: 'wait', dots: ['done', 'wait', 'todo', 'todo'], need: 'busy' },
+  stt1: { id: 'stt1', t: 'note', title: 'Note du 13 nov. 16:10', d: '41 min · 9,8 Mo', k: 'stt', p: 62, dots: ['done', 'run', 'todo', 'todo'], need: 'busy' },
+  vtt1: { id: 'vtt1', t: 'note', title: 'Revue des tests avant livraison', d: '13 nov. 11:47 · 18 min · 4,3 Mo', k: 'vtt', dots: ['done', 'done', 'todo', 'todo'], need: 'vtt' },
+  mp31: { id: 'mp31', t: 'note', title: 'Note du 12 nov. 17:05', d: '23 min · 5,5 Mo', k: 'mp3', dots: ['done', 'todo', 'todo', 'todo'], need: 'vtt' },
+  md1: { id: 'md1', t: 'call', title: 'Calendrier de la livraison démo', d: '12 nov. 14:20 · 35 min · 8,4 Mo', k: 'md', dots: ['done', 'done', 'done', 'todo'], need: 'send' },
+  drv1: { id: 'drv1', t: 'note', title: 'Point de suivi du projet démo', d: '12 nov. 09:14 · 14 min · 3,4 Mo', k: 'drive', dots: ['done', 'done', 'done', 'done'], need: 'none' },
+  err1: { id: 'err1', t: 'note', title: 'Note du 12 nov. 08:51', d: '6 min · 1,4 Mo', k: 'err', dots: ['done', 'err', 'todo', 'todo'], need: 'vtt' },
+  llm1: { id: 'llm1', t: 'note', title: 'Préparation de l\'atelier démo', d: '12 nov. 17:05 · 23 min · 5,5 Mo', k: 'llm', dots: ['done', 'done', 'run', 'todo'], need: 'busy' }
+};
+function rrow(r, sel) {
+  var lead = sel == null ? tile(r.t === 'call' ? 'call' : 'note') : '<span class="chk' + (sel ? ' on' : '') + '">' + (sel ? ic('check', 14) : '') + '</span>';
+  return '<div class="rrow' + (sel ? ' sel' : '') + '">' + lead + '<div class="tx"><div class="t-row ell">' + r.title + '</div><div class="t-cap ell">' + r.d + '</div>' +
+    '<div class="meta">' + badge(r.k, r.p) + dots(r.dots) + '</div></div></div>';
+}
+function dayGroup(label, rows, sel) {
+  return '<div><div style="margin-bottom:8px">' + sectionTitle(label) + '</div><div class="card">' +
+    rows.map(function (r, i) { return (i ? '<hr class="divider">' : '') + rrow(r, sel ? sel.indexOf(r.id) >= 0 : null); }).join('') + '</div></div>';
+}
+function count(rows, need) { return rows.filter(function (r) { return r.need === need; }).length; }
+function actionbar(rows) {
+  var a = count(rows, 'recover'), b = count(rows, 'vtt'), c = count(rows, 'send');
+  return '<div class="actionbar">' +
+    '<div class="btn p' + (a ? '' : ' dis') + '">Récupérer (' + a + ')</div>' +
+    '<div class="btn' + (b ? '' : ' dis') + '">VTT + MD (' + b + ')</div>' +
+    '<div class="btn' + (c ? '' : ' dis') + '">Envoyer (' + c + ')</div></div>';
+}
+function pbar(label, pct) {
+  return '<div class="pline"><div class="t-cap">' + label + '</div><div class="bar"><i' + (pct == null ? ' class="ind"' : ' style="width:' + pct + '%"') + '></i></div></div>';
+}
+
+/* ============ écrans de la liste ============ */
+function listScreen(o) {
+  var groups = o.groups.map(function (g) { return dayGroup(g[0], g[1], o.sel); }).join('');
+  var all = [].concat.apply([], o.groups.map(function (g) { return g[1]; }));
+  var head = o.sel ? '<div class="hdr" style="padding-left:8px;padding-right:16px"><span class="iconbtn">' + ic('close', 20) + '</span><span class="t-item">' + o.sel.length + ' sélectionnés</span><span class="grow"></span><span class="btn sm">Tout</span></div>' : header('Boîtier-démo', true);
+  var chosen = o.sel ? all.filter(function (r) { return o.sel.indexOf(r.id) >= 0; }) : all;
+  return phone(head + (o.bars ? '<div class="pbars">' + o.bars + '</div>' : '') + filters(o.filters) +
+    '<div class="scr pad col gap14" style="padding-top:2px;padding-bottom:16px">' + groups + '</div>' + actionbar(chosen), { h: o.h, navSurface: true });
+}
+var F3 = [['Tous', 9, true], ['À relire', 0], ['Sur le boîtier', 1]];
+var L1 = listScreen({
+  h: 1180, filters: F3,
+  groups: [['Aujourd\'hui', [R.box1, R.rec1]], ['Hier', [R.wait1, R.stt1, R.vtt1]], ['Jeudi 12 novembre', [R.mp31, R.md1, R.drv1, R.err1]]]
+});
+var L2 = listScreen({
+  filters: [['Tous', 8, true], ['À relire', 0], ['Sur le boîtier', 1]],
+  bars: pbar('Récupération 1/2 · 40 %', 40) + pbar('Synthèse 1/3', null),
+  groups: [['Aujourd\'hui', [R.box1, R.rec1]], ['Hier', [R.wait1, R.vtt1]], ['Jeudi 12 novembre', [R.llm1, R.md1]]]
+});
+var L3 = listScreen({
+  filters: F3, sel: ['vtt1', 'mp31', 'md1'],
+  groups: [['Hier', [R.stt1, R.vtt1]], ['Jeudi 12 novembre', [R.mp31, R.md1, R.drv1]]]
+});
+var L4 = phone(header('Boîtier-démo', false) + filters([['Tous', 0, true], ['À relire', 0], ['Sur le boîtier', 0]]) +
+  '<div class="scr" style="justify-content:center;align-items:center;padding:0 32px 80px;text-align:center"><div class="t-body sec2">Boîtier hors de portée. Touche la pastille pour relancer.</div></div>' +
+  '<div class="actionbar"><div class="btn p dis">Récupérer (0)</div><div class="btn dis">VTT + MD (0)</div><div class="btn dis">Envoyer (0)</div></div>', { navSurface: true });
+
+/* ============ fiche ============ */
+var NAMES = ['Téléphone', 'VTT', 'MD', 'Drive'];
+function steps(a, reason) {
+  var cells = a.map(function (s, i) {
+    var left = i > 0 ? '<span class="ln l' + (a[i - 1].s === 'done' ? ' ok' : '') + '"></span>' : '';
+    var right = i < 3 ? '<span class="ln r' + (s.s === 'done' ? ' ok' : '') + '"></span>' : '';
+    return '<div class="step"><div class="gw">' + left + right + glyph(s.s, s.pct) + '</div><span class="nm">' + NAMES[i] + '</span><span class="st ' + (s.cls || (s.s === 'done' ? 'ok' : s.s === 'run' ? 'run' : s.s === 'err' ? 'err' : '')) + '">' + s.cap + '</span></div>';
+  }).join('');
+  var rs = '';
+  if (reason) rs = '<div class="reason ' + (reason.tone || '') + '" style="--c:' + reason.col + '"><b>' + NAMES[reason.col] + '</b> · ' + reason.text + '</div>';
+  return '<div class="card steps"><div class="srow">' + cells + '</div>' + rs + '</div>';
+}
+function S(s, cap, pct, cls) { return { s: s, cap: cap, pct: pct, cls: cls }; }
+function player(pos) {
+  return '<div class="card player"><span class="play">' + ic('play', 16) + '</span><div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px"><div class="seek"><div class="tr"><i style="width:' + pos + '%"></i></div><span class="kn" style="left:' + pos + '%"></span></div><div class="times mono"><span>' + (pos ? '12:04' : '00:00') + '</span><span>41:08</span></div></div></div>';
+}
+function fileline() {
+  return '<div class="card" style="display:flex;align-items:center;gap:10px;padding:10px 12px"><span class="sec2">' + ic('file', 18) + '</span><div style="flex:1;min-width:0"><div class="mono ell">Note-20261112091400.mp3</div><div class="t-cap ell">Documents/Dictee-demo</div></div><span class="sec2">' + ic('check', 16) + '</span></div>';
+}
+function tabs(on) { return '<div class="tabs"><span class="tab' + (on === 0 ? ' on' : '') + '">Synthèse</span><span class="tab' + (on === 1 ? ' on' : '') + '">Transcription</span></div>'; }
+function synEmpty(vtt) {
+  return '<div class="card" style="padding:16px;display:flex;flex-direction:column;gap:8px"><div class="t-row">La synthèse reste à créer</div><div class="t-cap">' +
+    (vtt ? 'Le VTT présent sera utilisé sans retranscrire l\'audio.' : 'La synthèse pourra être créée lorsque le VTT sera disponible.') + '</div></div>';
+}
+function synMd(model, stale) {
+  return (stale ? notice('Cette synthèse utilise l\'ancien VTT. Le MD précédent reste lisible jusqu\'à son remplacement.', 'w') : '') +
+    '<div class="card" style="padding:16px;display:flex;flex-direction:column;gap:12px"><div class="md">' +
+    '<h3>Point de suivi du projet démo</h3><p>Le groupe a fait le tour des priorités de la semaine et validé l\'ordre des livraisons.</p>' +
+    '<h4>Points clés</h4><ul><li>La première version sort jeudi prochain.</li><li>Les tests restent à finir avant vendredi.</li><li>Le budget n\'a pas bougé.</li></ul>' +
+    '<h4>Actions</h4><ul><li>Locuteur 1 prépare la liste des tests.</li><li>Locuteur 2 relit le plan de livraison.</li></ul></div>' +
+    '<div class="t-cap">' + (stale ? 'Cette synthèse utilise l\'ancien VTT. ' : '') + 'Modèle utilisé : modèle-démo</div></div>';
+}
+var CUES = [
+  ['00:00', 'Locuteur 1', 'Bonjour, on commence par les priorités de la semaine.'],
+  ['00:12', 'Locuteur 2', 'La livraison de jeudi dépend des tests, qui ne sont pas finis.'],
+  ['00:31', 'Locuteur 1', 'D\'accord, on bloque vendredi matin pour les terminer.'],
+  ['00:48', 'Locuteur 2', 'Je relis le plan de livraison cet après-midi.'],
+  ['01:05', 'Locuteur 1', 'Parfait. Dernier point : le budget reste inchangé.']
+];
+function transcript(now) {
+  return '<div class="card" style="padding:4px 0"><div class="t-row" style="padding:12px">Transcription</div>' + CUES.map(function (c, i) {
+    return '<div class="cue' + (i === now ? ' now' : '') + '"><div class="mono sec2">' + c[0] + ' · ' + c[1] + '</div><div class="t-body">' + c[2] + '</div></div>';
+  }).join('') + '</div>';
+}
+function fichebar(menu, subject) {
+  return '<div class="topbar"><span class="iconbtn">' + ic('back', 20) + '</span><div class="ttl col" style="gap:2px"><span class="t-item ell">' + (subject ? 'Point de suivi du projet démo' : 'Note du 12 nov. 09:14') + '</span><span class="t-cap">' + (subject ? 'Note du 12 nov. 09:14 · 41 min' : '41 min') + '</span></div><span class="iconbtn"' + (menu ? ' style="background:var(--a-accent)"' : '') + '>' + ic('more', 20) + '</span></div>';
+}
+function menuHtml() {
+  return '<div class="menu"><div>Refaire le VTT et le MD</div><div>Refaire le MD</div><div>Récupérer à nouveau</div></div>';
+}
+/* o : steps (tableau), reason, btn [label, kind, icon], player (null, 'missing' ou position), tab (0 ou 1), body (html), menu */
+function fiche(o) {
+  var mid = '';
+  if (o.player === 'missing') mid = '<div class="card" style="padding:16px"><div class="t-body sec2">Le MP3 n\'est pas encore sur le téléphone.</div></div>';
+  else mid = player(o.player || 0) + fileline();
+  var inner = fichebar(o.menu, o.steps[1].s === 'done' && !o.nosubject) + '<div class="scr pad col gap12" style="padding-bottom:16px">' + steps(o.steps, o.reason) +
+    (o.btn ? btn(o.btn[0], o.btn[1], o.btn[2]) : '') + mid + tabs(o.tab || 0) + o.body + '</div>';
+  return phone(inner + (o.menu ? menuHtml() : ''));
+}
+var D = S('done', 'Fait');
+var F = {};
+F.f1 = fiche({ steps: [D, S('todo', 'À faire'), S('todo', 'À faire'), S('todo', 'À faire')], btn: ['Créer le VTT et le MD', 'p'], body: synEmpty(false) });
+F.f2 = fiche({ steps: [D, S('run', '62 %', 62), S('todo', 'À faire'), S('todo', 'À faire')], btn: ['Annuler la transcription', ''], body: synEmpty(false) });
+F.f3 = fiche({ steps: [D, D, S('todo', 'À faire'), S('todo', 'À faire')], btn: ['Créer le MD', 'p'], body: synEmpty(true) });
+F.f4 = fiche({ steps: [D, D, S('wait', 'En attente'), S('todo', 'À faire')], reason: { col: 2, text: '2e dans la file. Une autre tâche est en cours. Aucun appel n\'est parti vers le service de synthèse, il partira à son tour.' }, btn: ['Retirer de la file', ''], body: synEmpty(true) });
+F.f5 = fiche({ steps: [D, D, S('run', 'Synthèse 1/3', null), S('todo', 'À faire')], reason: { col: 2, text: 'Appel envoyé à 10:32, réponse attendue. La synthèse est tentée trois fois au plus.' }, btn: ['Annuler la synthèse', ''], body: synEmpty(true) });
+F.f6 = fiche({ steps: [D, D, S('err', 'Suspendue'), S('todo', 'À faire')], reason: { col: 2, tone: 'd', text: 'La synthèse est suspendue après trois tentatives. Le service n\'a pas répondu dans le délai (120 s).' }, btn: ['Relancer le MD', 'p'], body: synEmpty(true) });
+F.f7 = fiche({ steps: [D, D, S('todo', 'À configurer', null, 'warn'), S('todo', 'À faire')], reason: { col: 2, tone: 'w', text: 'Réglages de synthèse à compléter. Il manque l\'adresse du service et le modèle.' }, btn: ['Ouvrir les réglages', 'p', 'settings'], nosubject: true, body: synEmpty(true) });
+F.f8 = fiche({ steps: [D, D, D, S('todo', 'À faire')], btn: ['Envoyer sur Drive', 'p', 'upload'], player: 0, body: synMd(false) });
+F.f9 = fiche({ steps: [D, D, D, S('done', 'Sur Drive')], body: synMd(false) });
+F.f10 = fiche({ steps: [D, S('done', 'Refait'), S('run', 'Synthèse…', null), S('todo', 'À faire')], reason: { col: 2, tone: 'w', text: 'Le VTT a été refait. Le nouveau MD se prépare, l\'ancien reste lisible en attendant.' }, btn: ['Annuler la synthèse', ''], body: synMd(true, true) });
+F.f11 = fiche({ steps: [D, S('err', 'Erreur'), S('todo', 'À faire'), S('todo', 'À faire')], reason: { col: 1, tone: 'd', text: 'Le serveur est occupé, nouvelle tentative dans 2 min.' }, btn: ['Réessayer le VTT', 'p'], body: synEmpty(false) });
+F.f12 = fiche({ steps: [D, D, D, S('todo', 'À faire')], btn: ['Envoyer sur Drive', 'p', 'upload'], menu: true, body: synMd(false) });
+F.f13 = fiche({ steps: [D, D, D, S('done', 'Sur Drive')], player: 22, tab: 1, body: transcript(1) });
+F.f14 = fiche({ steps: [S('todo', 'Sur le boîtier'), S('todo', 'À faire'), S('todo', 'À faire'), S('todo', 'À faire')], btn: ['Récupérer', 'p', 'download'], player: 'missing', tab: 0, body: synEmpty(false) });
+
+/* ============ réglages et annexes ============ */
+function label(t) { return '<div class="t-lab" style="margin-bottom:6px">' + t + '</div>'; }
+function fld(v, extra) { return '<div class="field' + (extra || '') + '"><span class="ell">' + v + '</span></div>'; }
+function synthFields() {
+  return '<div class="card" style="padding:16px;display:flex;flex-direction:column;gap:14px">' +
+    '<div class="t-cap">Service compatible OpenAI. Le VTT et le prompt sont envoyés au service que tu configures.</div>' +
+    '<div>' + label('Adresse du serveur (/v1)') + fld('https://example.invalid/v1') + '</div>' +
+    '<div>' + label('Clé') + fld('••••••••••••') + '<div class="t-cap" style="margin-top:6px">Une clé est enregistrée. Saisis une nouvelle clé pour la remplacer.</div></div>' +
+    '<div>' + label('Modèle') + fld('modèle-démo') + '</div>' +
+    '<div style="display:flex;gap:10px">' + btn('Tester', '') + btn('Enregistrer', 'p') + '</div>' +
+    '<div class="t-cap">« Tester » envoie une courte requête au modèle et peut entraîner un coût.</div></div>' +
+    card(lrow('Prompt et format', 'Instructions et structure du Markdown', { trail: chev() })) +
+    '<div class="t-cap" style="padding:0 4px">En cas d\'interruption, la tâche est conservée. Dictée effectue au plus deux relances automatiques, puis attend une relance manuelle.</div>';
+}
+var R1 = phone(topbar('Réglages') + '<div class="scr pad col gap14" style="padding-bottom:20px">' +
+  section('Boîtier', card(lrow('Boîtier-démo', null, { tile: tile('recorder'), trail: '<span class="btn sm">Changer</span>' }))) +
+  section('Stockage sur le téléphone', card(lrow('Dossier', 'Documents/Dictee-demo', { tile: tile('folder'), trail: '<span class="btn sm">Changer</span>' }))) +
+  section('Google Drive', card(lrow('Envoyer vers Drive', null, { w: 400, trail: '<span class="switch on"></span>' }) + '<hr class="divider">' +
+    lrow('Compte', 'compte@example.invalid', {}) + '<hr class="divider">' + lrow('Dossier', 'Dictée', { trail: chev() }))) +
+  section('Transcription', card('<div style="padding:16px;display:flex;flex-direction:column;gap:12px"><div>' + label('Adresse du serveur (/v1)') + fld('https://example.invalid/v1') + '</div><div>' + label('Langue') + fld('fr') + '</div><div>' + label('Modèle') + fld('modèle-démo') + '</div>' + btn('Enregistrer', 'p') + '</div>')) +
+  section('Synthèse', '<div class="col gap12">' + synthFields() + '</div>') +
+  section('Apparence', '<div class="seg"><span class="on">Clair</span><span>Sombre</span><span>Système</span></div>') +
+  section('À propos', card(lrow('Journal', null, { trail: chev() }) + '<hr class="divider">' + lrow('Version', null, { w: 400, trail: '<span class="mono sec2" style="font-size:13px">0.3.0</span>' }))) +
+  '</div>', { h: 1700 });
+var R2 = phone(topbar('Réglages') + '<div class="scr pad col gap14" style="padding-bottom:20px">' + section('Synthèse', '<div class="col gap12">' + synthFields() + '</div>') + '</div>');
+var R3 = phone(topbar('Prompt et format') + '<div class="scr pad col gap12" style="padding-bottom:20px">' +
+  '<div class="t-cap">Ces instructions et le format attendu sont envoyés dans le message system. Le VTT complet est envoyé séparément dans le message user.</div>' +
+  '<div style="display:flex;flex-wrap:wrap;gap:8px"><span class="chip">{{type}}</span><span class="chip">{{date}}</span><span class="chip">{{duree}}</span><span class="chip">{{intervenants}}</span></div>' +
+  '<div class="t-cap">Les valeurs sont tirées de l\'enregistrement et du VTT. Les intervenants sont les étiquettes du VTT, pas des identités déduites.</div>' +
+  '<div>' + label('Instructions et format Markdown') + '<div class="field ta" style="min-height:250px;display:block"><span class="t-body">Tu rédiges la synthèse d\'un enregistrement de type {{type}}, daté du {{date}}, d\'une durée de {{duree}}. Les intervenants sont : {{intervenants}}.<br><br>Réponds en Markdown, avec un titre, un résumé court, les points clés en puces et les actions à mener.</span></div></div>' +
+  btn('Rétablir le prompt par défaut', '') +
+  '<div class="t-cap">Le nouveau prompt sera utilisé pour les prochaines synthèses. Les tâches déjà lancées gardent leurs instructions.</div>' +
+  btn('Enregistrer le prompt', 'p') + '</div>');
+function logl(tm, src, ms, er) { return '<div class="logl' + (er ? ' er' : '') + '"><span class="tm">' + tm + '</span><span class="sr">' + src + '</span><span class="ms">' + ms + '</span></div>'; }
+var R4 = phone(topbar('Journal', '<span class="iconbtn">' + ic('copy', 20) + '</span><span class="iconbtn">' + ic('upload', 20) + '</span><span class="iconbtn">' + ic('trash', 20) + '</span>') +
+  '<div class="filters"><span class="pill on">Tout</span><span class="pill">Erreurs</span><span class="pill">Bluetooth</span><span class="pill">Drive</span><span class="pill">Transcription</span><span class="pill">Synthèse</span></div>' +
+  '<div class="scr"><div class="logcard"><div class="t-over dayh first">Aujourd\'hui · 14 novembre</div>' +
+  logl('10:29:50', 'APP', 'démarrage') + logl('10:30:12', 'BLE', 'Boîtier-démo : connecté') + logl('10:30:15', 'FS', 'Note-20261112091400 : MP3 enregistré') +
+  logl('10:30:41', 'STT', 'Note-20261112091400 : envoyé au serveur') + logl('10:31:58', 'STT', 'Note-20261112091400 : VTT enregistré') +
+  logl('10:32:07', 'LLM', 'Note-20261112091400 : appel envoyé') + logl('10:33:41', 'LLM', 'Note-20261112091400 : réponse 200 en 94 s') +
+  logl('10:33:42', 'LLM', 'Note-20261112091400 : MD enregistré') + logl('10:34:05', 'DRIVE', 'Note-20261112091400 : 3 fichiers envoyés') +
+  logl('10:35:20', 'STT', 'Note-20261112085100 : serveur occupé, nouvelle tentative dans 2 min', true) +
+  '<div class="t-over dayh">Hier · 13 novembre</div>' + logl('18:26:03', 'BLE', 'Boîtier-démo : connexion perdue') + logl('18:41:10', 'FS', 'Note-20261113182500 : MP3 enregistré') +
+  '</div></div>');
+var R5 = phone(topbar('Dossier Drive') + '<div class="scr pad col gap14" style="padding-bottom:20px">' +
+  notice('L\'app ne voit que les dossiers qu\'elle a créés et ceux que tu lui as ouverts une fois.') +
+  section('Dossiers connus', card(
+    lrow('Dictée', 'Dossier par défaut', { tile: tile('folder'), trail: '<span style="color:var(--a-text)">' + ic('check', 20) + '</span>' }) + '<hr class="divider">' +
+    lrow('Réunions-démo', 'Créé par l\'app', { tile: tile('folder') }) + '<hr class="divider">' +
+    lrow('Archives-démo', 'Ouvert avec le sélecteur Google', { tile: tile('folder') }) + '<hr class="divider">' +
+    lrow('Ancien-dossier', 'Inaccessible', { tile: tile('folder'), dim: true }))) +
+  card(lrow('Nouveau dossier', null, { tile: tile('add', true) }) + '<hr class="divider">' +
+    lrow('Autre dossier…', 'Ouvre le sélecteur Google', { tile: tile('search'), trail: '<span class="sec2">' + ic('open', 16) + '</span>' })) +
+  '</div>');
+function welcome() {
+  return header('Aucun boîtier', false) + '<div class="scr" style="align-items:center;justify-content:center;gap:20px;padding:0 32px 96px;text-align:center">' +
+    '<span style="width:72px;height:72px;border-radius:50%;background:var(--a-muted);display:grid;place-items:center">' + ic('recorder', 28) + '</span>' +
+    '<div class="col gap8"><div class="t-sec">Associe ton enregistreur</div><div class="t-body sec2">L\'app récupère les enregistrements de ton boîtier par Bluetooth. Tu n\'auras à l\'associer qu\'une fois.</div></div>' +
+    btn('Rechercher le boîtier', 'p', 'search') + '</div>';
+}
+var A1 = phone(welcome());
+var A2 = phone(welcome() + '<div class="sheet-scrim"></div><div class="sheet"><span class="grab"></span>' +
+  '<div class="col" style="gap:4px"><div class="t-modal">Recherche du boîtier</div><div style="display:flex;align-items:center;gap:8px" class="t-cap"><span class="g-run" style="display:flex">' + arc(14, null) + '</span>Recherche en cours · 18 s</div></div>' +
+  card(lrow('Boîtier-démo', '00:00:00:00:00:01', { mono: true, tile: tile('recorder'), trail: '<span class="btn sm p">Associer</span>' })) +
+  '<div class="t-cap">Ton boîtier n\'apparaît pas ? Vérifie qu\'il est allumé et que l\'app du fabricant est fermée.</div>' +
+  '<div style="display:flex;gap:10px">' + btn('Annuler', '') + btn('Relancer', '') + '</div></div>');
+
+/* ============ planche ============ */
+var SECTIONS = [
+  ['Liste', 'La liste montre pour chaque enregistrement l\'étape atteinte, avec un indicateur à quatre points (Téléphone, VTT, MD, Drive). La barre du bas suit l\'ordre du parcours, de gauche à droite.', [
+    ['L1', 'Liste, état courant', '<b>Change :</b> le badge nomme l\'étape atteinte (MP3, VTT, MD, Sur Drive) au lieu d\'un « Récupéré » unique, les quatre points montrent le parcours, et « En attente » dit le rang dans la file. Les boutons du bas passent dans l\'ordre du parcours. Dès que le VTT est fait, le titre devient le sujet de la réunion et la date passe sur la ligne de détail.', L1],
+    ['L2', 'Liste pendant des travaux', '<b>Change :</b> les barres du haut disent « Synthèse 1/3 » quand la synthèse tourne, et non « Transcription ». Une tâche à la fois, de la plus ancienne à la plus récente.', L2],
+    ['L3', 'Liste en sélection', '<b>Change :</b> les compteurs des trois boutons sont recalculés sur les lignes cochées. Ici aucune ligne cochée n\'est sur le boîtier, donc « Récupérer (0) » est grisé.', L3],
+    ['L4', 'Liste vide, boîtier hors de portée', '<b>Change :</b> les trois boutons sont grisés à zéro, y compris « VTT + MD » qui reste actif aujourd\'hui.', L4]
+  ], 1180],
+  ['Fiche', 'La ligne des quatre étapes remplace les bandeaux d\'erreur et de progression. Sous elle, un seul bouton principal annonce ce qu\'il va faire. Les onglets ne servent plus qu\'à lire.', [
+    ['F1', 'MP3 seul', '<b>Change :</b> un seul bouton, « Créer le VTT et le MD », qui reprend à la première étape manquante.', F.f1],
+    ['F2', 'Transcription en cours', '<b>Change :</b> le bouton devient « Annuler la transcription » en style secondaire, et le pourcentage est lisible sous l\'étape VTT.', F.f2],
+    ['F3', 'VTT présent, MD à faire', '<b>Change :</b> « Créer le MD » ne retranscrit pas l\'audio. Le bouton de l\'onglet Synthèse disparaît. Le titre devient le sujet de la réunion dès que le VTT est fait, et la date passe dessous.', F.f3],
+    ['F4', 'MD en attente dans la file', '<b>Change :</b> la fiche dit « 2e dans la file » et précise qu\'aucun appel n\'est parti.', F.f4],
+    ['F5', 'Synthèse en cours', '<b>Change :</b> la tentative en cours (1/3) se lit sous l\'étape MD, plus de bandeau séparé.', F.f5],
+    ['F6', 'Synthèse suspendue', '<b>Change :</b> la raison est sous l\'étape MD, et la relance manuelle devient le bouton principal.', F.f6],
+    ['F7', 'Synthèse non configurée', '<b>Change :</b> l\'étape MD dit ce qui manque et le bouton ouvre les réglages.', F.f7],
+    ['F8', 'Tout est fait sauf Drive', '<b>Change :</b> « Envoyer sur Drive » est le bouton principal, et l\'envoi ne part que sur cet appui.', F.f8],
+    ['F9', 'Sur Drive', '<b>Change :</b> les quatre étapes sont faites et il n\'y a plus de bouton principal.', F.f9],
+    ['F10', 'VTT refait, ancien MD affiché', '<b>Change :</b> l\'ancien MD reste lisible avec la mention « Cette synthèse utilise l\'ancien VTT » tant que le nouveau n\'est pas prêt.', F.f10],
+    ['F11', 'Erreur de transcription', '<b>Change :</b> la raison s\'affiche sous l\'étape VTT, avec un bouton qui nomme l\'étape à relancer.', F.f11],
+    ['F12', 'Menu ⋮ ouvert', '<b>Change :</b> refaire une étape faite est une demande explicite, rangée ici et nulle part ailleurs.', F.f12],
+    ['F13', 'Onglet Transcription', '<b>Change :</b> rien, sauf que les onglets ne portent plus d\'action. Un appui sur un segment lance la lecture à cet endroit.', F.f13],
+    ['F14', 'Encore sur le boîtier', '<b>Change :</b> le bouton « Récupérer » est le bouton principal, au lieu d\'une entrée du menu.', F.f14]
+  ]],
+  ['Réglages et écrans annexes', 'Ces écrans reprennent l\'existant. Seuls les textes d\'exemple changent.', [
+    ['R1', 'Réglages', '<b>Change :</b> rien dans la structure. Le cadre est long, faites-le défiler.', R1],
+    ['R2', 'Réglages, rubrique Synthèse', '<b>Change :</b> le champ de clé affiche des points quand une clé est enregistrée, au lieu de rester vide. La même règle vaut pour la clé de transcription. Le reste ne change pas.', R2],
+    ['R3', 'Prompt et format', '<b>Change :</b> rien. Les quatre variables sont insérables dans le prompt.', R3],
+    ['R4', 'Journal', '<b>Change :</b> les lignes STT et LLM racontent chaque appel (envoyé, réponse, MD enregistré).', R4],
+    ['R5', 'Dossier Drive', '<b>Change :</b> rien.', R5],
+    ['A1', 'Accueil', '<b>Change :</b> rien.', A1],
+    ['A2', 'Association du boîtier', '<b>Change :</b> rien.', A2]
+  ]]
+];
+(function () {
+  var html = '';
+  SECTIONS.forEach(function (s) {
+    html += '<h2>' + s[0] + '</h2><p class="sec-note">' + s[1] + '</p><div class="grid">';
+    s[2].forEach(function (f) { html += figure(f[0], f[1], f[2], f[3]); });
+    html += '</div>';
+  });
+  document.getElementById('app').innerHTML = html;
+  var L = [['done', 'Fait'], ['run', 'En cours'], ['wait', 'En attente'], ['todo', 'À faire'], ['err', 'Erreur']];
+  document.getElementById('legend').innerHTML = L.map(function (l) { return '<span>' + glyph(l[0], l[0] === 'run' ? 62 : null) + l[1] + '</span>'; }).join('');
+  var root = document.documentElement, btnEl = document.getElementById('themeBtn');
+  function isDark() {
+    var t = root.getAttribute('data-theme');
+    if (t) return t === 'dark';
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  }
+  function sync() { var d = isDark(); btnEl.textContent = d ? 'Basculer en thème clair' : 'Basculer en thème sombre'; btnEl.setAttribute('aria-pressed', d ? 'true' : 'false'); }
+  btnEl.addEventListener('click', function () { root.setAttribute('data-theme', isDark() ? 'light' : 'dark'); sync(); });
+  sync();
+})();
+</script>
