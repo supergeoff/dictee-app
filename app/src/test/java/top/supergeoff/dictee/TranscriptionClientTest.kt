@@ -8,26 +8,6 @@ import java.net.*
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
-private class FakeCredentials : CredentialStore {
-    val refs = mutableListOf<String>()
-    override fun read(ref: String): String { refs += ref; return "synthetic-secret" }
-    override fun save(secret: String) = "ref"
-    override fun remove(ref: String) {}
-}
-private class FakeConnection(url: URL, val status: Int = 200, val body: ByteArray = ByteArray(0), val type: String = "application/json") : HttpURLConnection(url) {
-    val written = ByteArrayOutputStream()
-    @Volatile var closed = false
-    var outputFactory: (() -> OutputStream)? = null
-    override fun connect() {}
-    override fun disconnect() { closed = true }
-    override fun usingProxy() = false
-    override fun getResponseCode() = status
-    override fun getContentType() = type
-    override fun getContentLengthLong() = body.size.toLong()
-    override fun getInputStream(): InputStream = ByteArrayInputStream(body)
-    override fun getErrorStream(): InputStream = ByteArrayInputStream(body)
-    override fun getOutputStream(): OutputStream = outputFactory?.invoke() ?: written
-}
 class TranscriptionClientTest {
     // La récupération de pile des coroutines peut copier une exception sûre et chaîner l'originale.
     private fun assertSafeError(e: Throwable) {

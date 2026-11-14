@@ -1,6 +1,7 @@
 package top.supergeoff.dictee
 
-import java.io.File
+import java.io.*
+import java.net.*
 
 /** Journal en mémoire : une chaîne par ligne, de la forme « SOURCE message » ou « SOURCE erreur : message ». */
 class ListLog : Log {
@@ -27,4 +28,26 @@ class MemoryStore(var failWrites: Boolean = false) : PhoneStore {
     }
 
     override fun open(fileName: String) = (files[fileName] ?: throw PhoneStoreException("$fileName absent")).inputStream()
+}
+
+internal class FakeCredentials : CredentialStore {
+    val refs = mutableListOf<String>()
+    override fun read(ref: String): String { refs += ref; return "synthetic-secret" }
+    override fun save(secret: String) = "ref"
+    override fun remove(ref: String) {}
+}
+internal class FakeConnection(url: URL, val status: Int = 200, val body: ByteArray = ByteArray(0), val type: String = "application/json") : HttpURLConnection(url) {
+    val written = ByteArrayOutputStream()
+    val log = mutableListOf<String>()
+    @Volatile var closed = false
+    var outputFactory: (() -> OutputStream)? = null
+    override fun connect() {}
+    override fun disconnect() { closed = true }
+    override fun usingProxy() = false
+    override fun getResponseCode() = status
+    override fun getContentType() = type
+    override fun getContentLengthLong() = body.size.toLong()
+    override fun getInputStream(): InputStream = ByteArrayInputStream(body)
+    override fun getErrorStream(): InputStream = ByteArrayInputStream(body)
+    override fun getOutputStream(): OutputStream = outputFactory?.invoke() ?: written
 }
