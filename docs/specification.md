@@ -1,6 +1,6 @@
 # Dictée : spécification du produit
 
-Statut : ce document décrit ce que fait la version 0.2.4, livrée. Il ne décrit aucune version future : chaque évolution a sa carte et sa propre spec, puis met ce document à jour quand elle est livrée.
+Statut : ce document décrit le comportement implémenté dans la branche pour la version 0.4.0 (`versionCode` 13), y compris la transcription DIC-4 et la synthèse DIC-19. La 0.4.0 n'est pas annoncée comme livrée : le lint échoue et la vérification sur appareil, l'essai de capacité du fournisseur, la réunion réelle et la vérification de l'APK signé restent ouverts.
 
 Le protocole Bluetooth du MECHEN V05 est décrit dans [`protocole-v05.md`](protocole-v05.md).
 
@@ -29,7 +29,7 @@ Dictée récupère les enregistrements du MECHEN V05 par Bluetooth et les range 
 
 ## Écrans
 
-L'app garde une seule activité. Le passage d'un écran à l'autre suit une pile d'écrans tenue dans l'activité, sans bibliothèque de navigation. Les écrans de la pile sont l'accueil, la fiche, les réglages, le dossier Drive et le journal. La feuille d'association s'affiche par-dessus l'écran en cours. Les messages courts de l'app s'affichent en toast.
+L'app garde une seule activité. Le passage d'un écran à l'autre suit une pile d'écrans tenue dans l'activité, sans bibliothèque de navigation. Les écrans de la pile sont l'accueil, la fiche, les réglages, le prompt de synthèse, le dossier Drive et le journal. La feuille d'association s'affiche par-dessus l'écran en cours. Les messages courts de l'app s'affichent en toast.
 
 ### Premier lancement et recherche du boîtier
 
@@ -42,11 +42,11 @@ L'app garde une seule activité. Le passage d'un écran à l'autre suit une pile
 
 - La liste réunit trois sources : la dernière liste lue sur le boîtier, le dossier du téléphone et les MP3 du dossier Drive, quand Drive est activé. Elle est groupée par jour (« Aujourd'hui », « Hier », puis par exemple « Jeudi 29 octobre »), du plus récent au plus ancien. Un enregistrement absent du boîtier reste listé tant qu'un de ses fichiers existe sur le téléphone ou dans Drive.
 - La pastille du boîtier montre un point plein quand la liaison est ouverte et un point vide sinon. Un toucher relance la connexion, et un échec affiche « Boîtier hors de portée. ». Tirer la liste vers le bas relit le dossier du téléphone, le dossier Drive et le boîtier.
-- Les filtres sont « Tous », « À relire » et « Sur le boîtier », chacun avec son compteur. « Sur le boîtier » retient les enregistrements du boîtier qui n'ont aucun fichier sur le téléphone. « À relire » ne retient aucun enregistrement en 0.2.4 et affiche toujours 0.
+- Les filtres sont « Tous », « À relire » et « Sur le boîtier », chacun avec son compteur. « Sur le boîtier » retient les enregistrements du boîtier qui n'ont aucun fichier sur le téléphone. « À relire » ne retient aucun enregistrement et affiche toujours 0.
 - « Récupérer (N) » compte les enregistrements du boîtier qui ne sont ni sur le téléphone ni dans Drive. Il n'est actif que si la liaison est ouverte, qu'aucune récupération ne tourne et que N n'est pas nul. Il affiche « Récupération… » pendant le travail.
 - « Envoyer (N) » n'apparaît que si Drive est activé. Il compte les enregistrements dont au moins un fichier du téléphone manque dans le dossier Drive, sauf ceux dont la récupération est en erreur. Tant que le contenu du dossier Drive n'est pas connu, il compte tous les enregistrements qui ont un fichier sur le téléphone. Il affiche « Envoi… » pendant le travail.
 - « VTT + MD (N) » se place entre « Envoyer » et « Récupérer ». Il compte les MP3 exploitables du téléphone auxquels il manque un VTT ou un MD, hors travaux actifs ; en sélection, il se limite aux lignes cochées. Il crée les fichiers manquants sans remplacer ceux qui existent et n'envoie rien vers Drive. Une ligne sans MP3 ou en erreur de récupération est signalée par un message ; une ligne déjà en cours n'est pas relancée.
-- Un appui long passe en sélection. La barre affiche le nombre de lignes cochées, une croix pour sortir et « Tout », qui coche les lignes du filtre en cours. Les deux boutons portent alors sur les lignes cochées : récupérer une ligne cochée la transfère de nouveau depuis le boîtier, quel que soit son état. La sélection se vide après l'action.
+- Un appui long passe en sélection. La barre affiche le nombre de lignes cochées, une croix pour sortir et « Tout », qui coche les lignes du filtre en cours. Les actions portent alors sur les lignes cochées : récupérer une ligne cochée la transfère de nouveau depuis le boîtier, quel que soit son état ; « VTT + MD » ne remplace aucun fichier. La sélection se vide après l'action.
 - La barre d'avancement affiche « Récupération i/N · p % » ou « Envoi i/N · p % ». Pour un envoi, N compte les fichiers, et p est le pourcentage du fichier en cours. Une transcription affiche « Transcription i/N · p % », ou « Transcription i/N » avec une barre indéterminée quand le serveur ne donne pas d'avancement. Les barres peuvent s'afficher les unes sous les autres.
 
 ### Fiche d'un enregistrement
@@ -56,15 +56,17 @@ L'app garde une seule activité. Le passage d'un écran à l'autre suit une pile
 - Le lecteur lit le MP3 du téléphone avec `MediaPlayer` : lecture, pause, barre de position et temps en minutes et secondes. Sans MP3 sur le téléphone, la fiche affiche « Le MP3 n'est pas encore sur le téléphone. ». La lecture se met en pause quand l'app passe en arrière-plan.
 - La fiche affiche le nom du fichier et son dossier. Elle se ferme d'elle-même si l'enregistrement disparaît de la liste.
 - Bandeau d'erreur : il affiche la raison en clair et un bouton « Réessayer », qui relance la récupération ou l'envoi selon l'étape en erreur.
-- Les onglets « Synthèse » et « Transcription » montrent le MD et les segments du VTT. Toucher un segment place le lecteur à son début et le lance ; un VTT illisible ou sans parole n'affecte que cette carte. « Créer le MD » utilise le VTT présent et ne remplace pas un MD apparu entre-temps ; « Refaire le MD » est une régénération explicite. Après chaque promotion de VTT ou de MD, le dossier est relu pour actualiser la fiche et les compteurs, y compris avant la fin de la synthèse.
-- La fiche distingue la synthèse en cours, l'attente d'une relance automatique et l'enregistrement du MD ; une première requête en cours n'est pas présentée comme une relance.
-- Le menu propose « Annuler la transcription » tant qu'une tâche est active. Une confirmation prévient que, si la tâche est partagée avec d'autres clients du serveur, elle est annulée pour eux aussi. Si le serveur a déjà terminé la tâche, l'annulation n'écrit rien et ne détruit pas le VTT existant.
+- Les onglets « Synthèse » et « Transcription » montrent le MD rendu en lecture seule et les segments du VTT. Toucher un segment place le lecteur à son début et le lance ; un VTT illisible ou sans parole n'affecte que cette carte. La fiche affiche le modèle et la correspondance au VTT quand la provenance est connue, sinon elle les indique inconnus.
+- « Créer le MD » utilise le VTT présent et ne remplace pas un MD apparu entre-temps. Le menu propose « Refaire le MD » et « Refaire le VTT et le MD » : ce sont des remplacements explicites, indisponibles pour une tâche déjà active. Après chaque promotion de VTT ou de MD, le dossier est relu pour actualiser la fiche et les compteurs, y compris avant la fin de la synthèse.
+- La fiche distingue la synthèse en cours, l'attente d'une relance automatique et l'enregistrement du MD ; une première requête en cours n'est pas présentée comme une relance. Une synthèse suspendue propose « Relancer le MD » lorsque son contexte permet la reprise.
+- Le menu propose d'annuler la transcription ou la synthèse tant qu'une tâche est active. Pour la transcription, une confirmation prévient que la tâche serveur peut être partagée avec d'autres clients ; si elle est déjà terminée, l'annulation n'écrit rien et ne détruit pas le VTT existant. Pour la synthèse, l'annulation empêche la promotion mais ne garantit ni l'arrêt côté serveur ni l'absence de facturation.
 
 ### Réglages
 
 - Les sections sont Boîtier, Stockage sur le téléphone, Google Drive, Transcription, Synthèse, Apparence et À propos.
 - La section Transcription règle l'adresse du serveur, la langue et la clé, protégée par Android Keystore, avec un test de connexion.
-- La section Synthèse règle séparément l'adresse, le modèle, la clé protégée par Android Keystore et le prompt. « Tester » envoie une courte requête pouvant être facturée ; il expire après 30 secondes et libère le formulaire. Cette limite ne s'applique pas aux synthèses complètes.
+- La section Synthèse règle séparément l'adresse, le modèle, la clé protégée par Android Keystore et le prompt. Une clé vide conserve la précédente ; une tâche garde sa référence et son contexte figés, même après changement des réglages. « Prompt et format » permet de modifier, enregistrer ou rétablir le prompt et d'insérer `{{type}}`, `{{date}}`, `{{duree}}`, `{{intervenants}}`. Le prompt par défaut demande une synthèse fidèle en français, sans invention, en sections Résumé, Décisions et Actions ; il traite le VTT comme source, non comme instruction.
+- « Tester » envoie une courte requête pouvant être facturée ; il expire après 30 secondes et libère le formulaire. Cette limite ne s'applique pas aux synthèses complètes. Ce test ne vérifie pas la capacité pour un VTT de deux heures.
 - Stockage : « Changer » ouvre le sélecteur de dossiers. Le changement est refusé pendant un transfert, avec le message « Attends la fin du transfert pour changer de dossier. ».
 - Google Drive : l'interrupteur « Envoyer vers Drive » demande aussitôt l'accord de Google. Une fois activé, la section affiche le compte et l'entrée « Dossier ». « Déconnecter » révoque l'accès de l'app avec `AuthorizationClient.revokeAccess`, en utilisant l'adresse du compte lue par `about.get`, puis désactive l'envoi. Désactiver l'envoi efface les erreurs d'envoi.
 - Apparence : « Clair », « Sombre » ou « Système ».
@@ -93,7 +95,7 @@ L'app garde une seule activité. Le passage d'un écran à l'autre suit une pile
 | Type | Indicateur de la liste : `01` donne Note et `00` donne Call. Une autre valeur, ou une valeur absente, donne Note, avec une ligne au journal. Pour un enregistrement connu seulement par ses fichiers, le type vient du préfixe. |
 | Taille sur le boîtier | Liste du boîtier |
 | Durée | Taille divisée par 4 000 octets par seconde (MP3 à 32 kbit/s constant), affichée en minutes arrondies, ou en secondes sous une minute |
-| Fichiers | `<Type>-<nom>.mp3` dans le dossier du téléphone. Des fichiers `.vtt` et `.md` du même nom, déposés par un autre outil, sont aussi reconnus. |
+| Fichiers | `<Type>-<nom>.mp3`, `.vtt` et `.md` dans le dossier du téléphone ; les VTT et MD créés par l'app ou déposés par un autre outil sont reconnus. |
 
 ### État affiché
 
@@ -118,6 +120,8 @@ Le fichier `state.json` du stockage interne ne garde que ce qui ne se déduit pa
 - l'adresse du dossier du téléphone (URI de l'arborescence choisie) ;
 - l'activation de Drive, le compte Google autorisé, les dossiers Drive connus (identifiant, nom, origine) et le dossier choisi ;
 - la dernière erreur par enregistrement et par étape (récupération ou envoi), gardée après un redémarrage ;
+- les réglages de transcription et de synthèse, avec des références aux clés chiffrées, jamais les clés en clair ;
+- les tâches durables, leurs contextes figés, phases, tentatives et éventuelles suspensions, ainsi que les empreintes de provenance des synthèses ;
 - le thème.
 
 Le fichier est écrit dans un fichier temporaire puis renommé. Un fichier illisible est mis de côté sous `state.json.bad`.
@@ -151,9 +155,9 @@ L'app reprend l'état de la version 0.1.5 au premier lancement : elle garde l'ad
 
 ## Travaux longs
 
-- Un service de premier plan exécute les récupérations et les envois. Il déclare le type `dataSync`, et `connectedDevice` quand la permission Bluetooth est accordée. Il garde le processeur éveillé une heure au plus.
+- Un service de premier plan exécute les récupérations, les envois et le suivi des transcriptions et synthèses. Il déclare le type `dataSync`, et `connectedDevice` quand la permission Bluetooth est accordée. Il garde le processeur éveillé une heure au plus.
 - Sa notification, sur le canal « Travaux en cours », reprend le texte de la barre d'avancement. Sur Android 13 et plus, l'app demande la permission de notification au premier travail long de chaque lancement. Un refus n'arrête pas le travail : seule la notification manque.
-- Une récupération et un envoi peuvent tourner en même temps, mais jamais deux récupérations ni deux envois.
+- Une récupération et un envoi peuvent tourner en même temps, mais jamais deux récupérations ni deux envois. Les transcriptions et synthèses partagent une file et un coordinateur avec la reprise WorkManager ; les tâches DIC-4 déjà persistées restent VTT uniquement.
 
 ## Transcription
 
@@ -164,10 +168,43 @@ L'app reprend l'état de la version 0.1.5 au premier lancement : elle garde l'ad
 - Le VTT reçu est validé en entier (UTF-8, en-tête `WEBVTT`, horodatages), puis écrit tel quel par le mécanisme `.part` / `.old`. Un VTT invalide n'est jamais écrit. Une annulation demandée avant la promotion l'empêche. Une récupération ne peut pas écraser un MP3 suivi par une tâche active.
 - Si le serveur refuse explicitement le champ `background`, l'app l'indique ; le mode synchrone ne permet pas de reprendre une réponse perdue.
 
+## Synthèse
+
+### Fichiers manquants et régénération
+
+« VTT + MD » traite les MP3 locaux exploitables du plus ancien au plus récent, sans remplacer de fichier existant, avec ou sans sélection. Les enregistrements sans MP3, en erreur de récupération ou déjà actifs sont exclus et signalés ; les fichiers créés ne partent pas automatiquement vers Drive.
+
+| VTT | MD | Travail demandé |
+|---|---|---|
+| Absent | Absent | Transcription, promotion du VTT, puis synthèse. |
+| Présent | Absent | Synthèse depuis le VTT présent, sans transcription. |
+| Absent | Présent | Transcription seule ; le MD reste intact, sa correspondance au nouveau VTT n'est pas présumée. |
+| Présent | Présent | Aucun travail. |
+
+« Refaire le VTT et le MD » demande la transcription puis la synthèse sur le nouveau VTT ; un échec de transcription ne synthétise pas l'ancien. « Refaire le MD » utilise le VTT présent sans retranscrire. Ces actions exigent un MP3 local exploitable ; la seconde exige aussi un VTT. Les anciens fichiers restent disponibles jusqu'à la promotion de leurs remplaçants.
+
+### Réglages, requête et confidentialité
+
+L'adresse de synthèse est une base HTTP(S) dont le chemin est `/v1`, sans identifiants, requête ni fragment. Aucun service ou modèle personnel n'est préconfiguré. La clé est chiffrée dans les préférences privées à l'aide d'Android Keystore ; `state.json` ne contient que sa référence. Les anciennes références restent disponibles pour les tâches qui les utilisent. Seuls les réglages nécessaires aux étapes demandées sont requis : une synthèse sur VTT existant ne nécessite pas de réglages de transcription. Si la synthèse manque de configuration, le VTT produit reste disponible et l'app invite à configurer le service puis à créer explicitement le travail MD.
+
+L'app envoie `POST <base>/chat/completions` au service choisi, avec le modèle figé, le prompt résolu dans `system` et le VTT complet UTF-8 dans `user` : ni découpage ni troncature silencieuse. Le type et la date viennent du nom de l'enregistrement, la durée est estimée selon la taille et les intervenants proviennent des étiquettes du VTT ; une valeur indisponible est indiquée comme telle, sans inférer d'identité. Les synthèses complètes ont un délai de deux heures. Le premier choix doit contenir un texte assistant non vide, sans refus, appel d'outil ni indication de fin autre que `stop` si elle est présente ; une réponse invalide ou tronquée signalée ne remplace pas le MD. Le texte accepté est enregistré tel quel.
+
+Le service reçoit donc le contenu complet de la transcription : son choix et ses conditions de confidentialité relèvent de l'utilisateur. Les erreurs affichées sont catégorisées ; le journal ne contient ni clé, ni VTT, ni réponse complète, ni contenu d'erreur brut du fournisseur. La capacité effective pour deux heures et la réception complète par le modèle choisi restent non vérifiées ; le test court ne les établit pas. Il n'y a pas de découpage automatique en cas de contexte trop long.
+
+### Reprise, coût et provenance
+
+Le dossier, les noms, le serveur, le modèle, la référence de clé et le prompt sont figés par tâche. L'empreinte du VTT existant est fixée à la création ; pour un VTT produit par la tâche, elle est fixée après promotion. Avant l'appel et avant la promotion du MD, un VTT modifié ou inaccessible suspend le travail ; une nouvelle action explicite utilise le fichier courant. Une clé ou un dossier inaccessible suspend aussi le travail, sans appel réseau tant que le contrôle préalable échoue. Une relance ne modifie pas silencieusement le contexte figé.
+
+Chaque tentative réseau est persistée avant l'appel : une tentative initiale et au plus deux relances automatiques, avec des délais persistés d'au moins 60 puis 120 secondes. Les erreurs permanentes et les réponses invalides suspendent immédiatement ; après épuisement du budget, une relance manuelle repart avec trois tentatives. Une requête interrompue peut avoir été traitée et facturée : sa reprise peut coûter une seconde fois. WorkManager peut retarder la reprise ; le retrait des récents et l'arrêt forcé depuis les réglages Android ne sont pas équivalents, et ce dernier n'est pas couvert.
+
+La réponse reçue est conservée temporairement en stockage privé avant écriture via `.part` / `.old`. Une erreur d'écriture peut laisser le résultat disponible pour une reprise sans nouvel appel. En cas de panne avant promotion, la restauration de l'ancien fichier est tentée ; si le fournisseur la refuse, l'ancien peut rester en `.old`. Si le fournisseur ne permet pas de relire le nom final après promotion, le nouveau peut rester en place, l'ancien peut avoir été supprimé et l'erreur est signalée. Le dossier doit accepter le renommage ; les fichiers temporaires ne sont pas listés comme résultats.
+
+Les empreintes du VTT et du MD et le modèle sont conservés en privé pour un MD dont la promotion a été observée. Un VTT changé rend cette synthèse ancienne ; un MD modifié, importé ou sans métadonnées fiables a une provenance et un modèle inconnus. Après interruption, si le MD final est déjà identique au résultat en attente sans promotion observée, sa provenance reste inconnue et aucun nouvel appel n'est nécessaire. Une mort du processus après la réponse mais avant sa sauvegarde privée peut perdre la réponse et entraîner une nouvelle tentative facturée.
+
 ## Journal
 
 - Chaque ligne a la forme `HH:mm:ss SOURCE message`.
-- Les requêtes HTTP sont journalisées sans en-têtes ni corps : méthode, chemin, statut, durée et taille.
+- Les requêtes Drive sont journalisées sans en-têtes ni corps : méthode, chemin, statut, durée et taille.
 - Les trames Bluetooth sont journalisées en hexadécimal, précédées de TX ou RX.
 
 ## Erreurs et reprise
@@ -181,6 +218,8 @@ L'app reprend l'état de la version 0.1.5 au premier lancement : elle garde l'ad
 | Erreur 401 de Drive après le nouvel essai | L'envoi s'arrête avec le message « Accès Google à renouveler ». Les fichiers restent à envoyer. |
 | Dossier Drive inaccessible | L'envoi est annulé avec un message. L'app ne remplace jamais le dossier choisi sans action de l'utilisateur. |
 | Réponse perdue à l'envoi d'une transcription, 404 du serveur, MP3 modifié | La tâche est suspendue avec un message, sans renvoi automatique. |
+| Synthèse interrompue ou erreur transitoire | Reprise bornée à trois tentatives au total, avec délais persistés ; un appel interrompu peut être facturé. |
+| Synthèse refusée ou invalide, VTT changé, clé ou dossier inaccessible | Suspension visible ; aucun MD invalide ne remplace le fichier existant. |
 | Dossier du téléphone inaccessible ou plein | L'écriture échoue, l'enregistrement passe en erreur, la file s'arrête et le message renvoie vers Réglages. |
 
 ## Architecture du code
@@ -196,6 +235,8 @@ L'app reprend l'état de la version 0.1.5 au premier lancement : elle garde l'ad
 | `DriveClient.kt` | Dossiers, listes, téléversement, renouvellement du jeton |
 | `Journal.kt` | Journal sur sept jours et ses filtres |
 | `LocalState.kt` | Lecture, écriture et reprise de `state.json` |
+| `WebVtt.kt`, `TranscriptionState.kt`, `TranscriptionPreparation.kt` | Validation du VTT, état et préparation de la transcription |
+| `SynthesisSelection.kt`, `SynthesisPrompt.kt`, `SynthesisState.kt`, `SynthesisStorage.kt` | Sélection, prompt, état durable et stockage privé de la synthèse |
 
 ### Unités Android
 
@@ -204,14 +245,15 @@ L'app reprend l'état de la version 0.1.5 au premier lancement : elle garde l'ad
 | `BleLink.kt`, `BoxConnection.kt` | Liaison Bluetooth, recherche et connexion au boîtier |
 | `PhoneFolder.kt`, `PhoneStore.kt` | Accès au dossier du téléphone par le Storage Access Framework |
 | `GoogleAuth.kt` | Autorisation Google, jeton et révocation |
-| `WorkService.kt` | Service de premier plan et sa notification |
+| `WorkService.kt`, `TranscriptionWorker.kt`, `TranscriptionCoordinator.kt` | Service de premier plan, reprise WorkManager et coordinateur des tâches |
+| `TranscriptionClient.kt`, `SynthesisClient.kt`, `TranscriptionSettings.kt`, `SynthesisSettings.kt` | Clients des services, réglages et protection des clés |
 | `AppState.kt` | État observé par l'interface et actions de l'app |
 | `DicteeApp.kt`, `MainActivity.kt` | Application, activité unique et pile d'écrans |
 | `ui/Theme.kt`, `ui/Tokens.kt` | Tokens du design system en thème clair et sombre |
 | `ui/…Screen.kt`, `ui/AssociateSheet.kt` | Un fichier par écran : accueil, liste, fiche, réglages, dossier Drive, journal, feuille d'association |
 | `ui/Components.kt`, `ui/Rows.kt`, `ui/Dialogs.kt`, `ui/Modifiers.kt`, `ui/Playback.kt` | Composants partagés et lecteur audio |
 
-Les dépendances sont celles de Jetpack Compose (nomenclature, UI, foundation, material3, activity-compose), des coroutines Kotlin et de `play-services-auth` 22.0.0, la version que cite la documentation de `revokeAccess`. Le lecteur audio utilise `MediaPlayer` d'Android.
+Les dépendances comprennent Jetpack Compose (nomenclature, UI, foundation, material3, activity-compose), les coroutines Kotlin, WorkManager, Markwon pour le Markdown et `play-services-auth` 22.0.0, la version que cite la documentation de `revokeAccess`. Le lecteur audio utilise `MediaPlayer` d'Android.
 
 ### Design system
 
@@ -251,3 +293,5 @@ La police d'interface est Figtree (graisses 400, 500, 600 et 700, en police vari
 ### Sur un téléphone
 
 L'association se fait une fois, et l'app s'ouvre ensuite sur la liste. La liste montre les mêmes enregistrements que DOWAY, avec le bon type. « Récupérer » écrit les MP3 préfixés dans le dossier choisi. « Envoyer » les dépose dans « Dictée » sans créer de doublon avec les fichiers de la version 0.1.5 ni avec les exports de DOWAY. Une récupération continue écran éteint, et un boîtier éteint pendant un transfert ne laisse aucun fichier partiel.
+
+Pour la 0.4.0, restent à vérifier sur appareil le retrait des récents pendant l'appel et l'écriture, la reprise après redémarrage, les interruptions répétées jusqu'à suspension, la relance manuelle, l'annulation, le maintien des anciens fichiers et les thèmes clair et sombre. Un essai explicitement autorisé d'un VTT synthétique représentatif de deux heures doit vérifier la réception et une réponse non tronquée, et relever les limites et tokens lorsqu'ils sont exposés. Un essai distinct autorisé sur une réunion réelle doit confirmer VTT puis MD en un appui. Sans ces essais et la vérification d'une construction signée, DIC-19 reste ouverte et la 0.4.0 n'est pas annoncée comme livrée.
