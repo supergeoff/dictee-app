@@ -24,7 +24,7 @@ Le document distingue les garanties de DIC-4 pour la transcription et celles d'u
 
 ## Parcours et sélection
 
-« VTT + MD » ne remplace aucun fichier existant, avec ou sans sélection. L'application prend les enregistrements éligibles du plus ancien au plus récent. Elle signale les éléments sélectionnés exclus, dont les MP3 absents, les récupérations en échec et les tâches déjà actives. Pour chaque MP3 local exploitable :
+Depuis DIC-26, « VTT + MD » est désactivé quand son compteur vaut zéro ; les exclusions restent signalées quand des candidats subsistent. « VTT + MD » ne remplace aucun fichier existant, avec ou sans sélection. L'application prend les enregistrements éligibles du plus ancien au plus récent. Elle signale les éléments sélectionnés exclus, dont les MP3 absents, les récupérations en échec et les tâches déjà actives. Pour chaque MP3 local exploitable :
 
 | VTT | MD | Travail demandé |
 | --- | --- | --- |
@@ -44,7 +44,7 @@ Les actions n'écrasent pas une tâche déjà active pour le même enregistremen
 
 ## Écrans validés
 
-La fiche conserve le lecteur et le fichier MP3, puis présente deux onglets : **Synthèse** et **Transcription**. Synthèse affiche le Markdown rendu en lecture seule, pas sa syntaxe brute, et le modèle utilisé quand il est connu. Transcription garde les segments cliquables qui positionnent le lecteur. L'absence d'un MD propose sa création à partir du VTT présent. Les erreurs et suspensions expliquent la cause et l'action de reprise ; le menu contient les actions de régénération. La maquette validée par Geoff sert de référence de disposition, sans imposer une reproduction HTML.
+La fiche conserve le lecteur et le fichier MP3, puis présente deux onglets : **Synthèse** et **Transcription**. Synthèse affiche le Markdown rendu en lecture seule et le modèle utilisé quand il est connu. Transcription garde les segments cliquables. Depuis DIC-26, les onglets ne proposent aucune action : le bouton principal de la fiche crée ou relance le MD. Le menu contient les actions de régénération explicite.
 
 Une rubrique **Synthèse** dans Réglages contient l'adresse du service compatible OpenAI, la clé et le modèle. Elle donne accès à **« Prompt et format »**. Cet écran permet de modifier, enregistrer et rétablir les instructions par défaut, et d'insérer les variables `{{type}}`, `{{date}}`, `{{duree}}` et `{{intervenants}}`. Le thème et les composants existants restent la référence visuelle, en clair comme en sombre.
 

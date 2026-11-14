@@ -45,9 +45,10 @@ L'app garde une seule activité. Le passage d'un écran à l'autre suit une pile
 - Les filtres sont « Tous », « À relire » et « Sur le boîtier », chacun avec son compteur. « Sur le boîtier » retient les enregistrements du boîtier qui n'ont aucun fichier sur le téléphone. « À relire » ne retient aucun enregistrement et affiche toujours 0.
 - « Récupérer (N) » compte les enregistrements du boîtier qui ne sont ni sur le téléphone ni dans Drive. Il n'est actif que si la liaison est ouverte, qu'aucune récupération ne tourne et que N n'est pas nul. Il affiche « Récupération… » pendant le travail.
 - « Envoyer (N) » n'apparaît que si Drive est activé. Il compte les enregistrements dont au moins un fichier du téléphone manque dans le dossier Drive, sauf ceux dont la récupération est en erreur. Tant que le contenu du dossier Drive n'est pas connu, il compte tous les enregistrements qui ont un fichier sur le téléphone. Il affiche « Envoi… » pendant le travail.
-- « VTT + MD (N) » se place entre « Envoyer » et « Récupérer ». Il compte les MP3 exploitables du téléphone auxquels il manque un VTT ou un MD, hors travaux actifs ; en sélection, il se limite aux lignes cochées. Il crée les fichiers manquants sans remplacer ceux qui existent et n'envoie rien vers Drive. En sélection, une ligne cochée sans MP3 ou en erreur de récupération est signalée par un message ; une ligne déjà en cours n'est pas relancée.
+- Les boutons suivent l'ordre « Récupérer », « VTT + MD », « Envoyer ». Un compteur nul désactive son bouton. « VTT + MD » compte les MP3 exploitables auxquels il manque un VTT ou un MD, hors travaux actifs ; en sélection, il se limite aux lignes cochées. Il crée les fichiers manquants sans remplacer ceux qui existent et n'envoie rien vers Drive. Les exclusions de la sélection sont signalées.
 - Un appui long passe en sélection. La barre affiche le nombre de lignes cochées, une croix pour sortir et « Tout », qui coche les lignes du filtre en cours. Les actions portent alors sur les lignes cochées : récupérer une ligne cochée la transfère de nouveau depuis le boîtier, quel que soit son état ; « VTT + MD » ne remplace aucun fichier. La sélection se vide après l'action.
-- La barre d'avancement affiche « Récupération i/N · p % » ou « Envoi i/N · p % ». Pour un envoi, N compte les fichiers, et p est le pourcentage du fichier en cours. Une transcription affiche « Transcription i/N · p % », ou « Transcription i/N » avec une barre indéterminée quand le serveur ne donne pas d'avancement. Les barres peuvent s'afficher les unes sous les autres.
+- Chaque ligne affiche un badge et quatre points pour les étapes Téléphone, VTT, MD et Drive. Le badge indique l'erreur, le travail en cours, l'attente ou la dernière étape faite. Une tâche en attente affiche son rang dans la file.
+- La barre d'avancement affiche le type de travail, « Transcription » ou « Synthèse » pour la file de production. Les barres de récupération et d'envoi peuvent s'afficher simultanément.
 
 ### Fiche d'un enregistrement
 
@@ -55,16 +56,17 @@ L'app garde une seule activité. Le passage d'un écran à l'autre suit une pile
 - Le menu propose « Récupérer à nouveau ». L'action n'est active que si l'enregistrement est sur le boîtier, que la liaison est ouverte et qu'aucune récupération ne tourne.
 - Le lecteur lit le MP3 du téléphone avec `MediaPlayer` : lecture, pause, barre de position et temps en minutes et secondes. Sans MP3 sur le téléphone, la fiche affiche « Le MP3 n'est pas encore sur le téléphone. ». La lecture se met en pause quand l'app passe en arrière-plan.
 - La fiche affiche le nom du fichier et son dossier. Elle se ferme d'elle-même si l'enregistrement disparaît de la liste.
-- Bandeau d'erreur : il affiche la raison en clair et un bouton « Réessayer », qui relance la récupération ou l'envoi selon l'étape en erreur.
+- La carte du parcours affiche les quatre étapes, la première raison utile et une seule action principale. Les onglets ne portent aucune action.
 - Les onglets « Synthèse » et « Transcription » montrent le MD rendu en lecture seule et les segments du VTT. Toucher un segment place le lecteur à son début et le lance ; un VTT illisible ou sans parole n'affecte que cette carte. La fiche affiche le modèle et la correspondance au VTT quand la provenance est connue, sinon elle les indique inconnus.
 - « Créer le MD » utilise le VTT présent et ne remplace pas un MD apparu entre-temps. Le menu propose « Refaire le MD » et « Refaire le VTT et le MD » : ce sont des remplacements explicites, indisponibles pour une tâche déjà active. Après chaque promotion de VTT ou de MD, le dossier est relu pour actualiser la fiche et les compteurs, y compris avant la fin de la synthèse.
 - La fiche distingue la synthèse en cours, l'attente d'une relance automatique et l'enregistrement du MD ; une première requête en cours n'est pas présentée comme une relance. Une synthèse suspendue propose « Relancer le MD » lorsque son contexte permet la reprise.
-- Le menu propose d'annuler la transcription ou la synthèse tant qu'une tâche est active. Pour la transcription, une confirmation prévient que la tâche serveur peut être partagée avec d'autres clients ; si elle est déjà terminée, l'annulation n'écrit rien et ne détruit pas le VTT existant. Pour la synthèse, l'annulation empêche la promotion mais ne garantit ni l'arrêt côté serveur ni l'absence de facturation.
+- Le bouton principal permet d'annuler la transcription ou la synthèse après confirmation ; une tâche en attente se retire directement de la file. L'annulation de la synthèse empêche la promotion sans garantir l'arrêt côté serveur ni l'absence de facturation.
 
 ### Réglages
 
 - Les sections sont Boîtier, Stockage sur le téléphone, Google Drive, Transcription, Synthèse, Apparence et À propos.
 - La section Transcription règle l'adresse du serveur, la langue et la clé, protégée par Android Keystore. La langue vaut `auto` par défaut pour détecter automatiquement le français et l'anglais ; une langue déjà enregistrée, comme `fr`, reste inchangée tant que l'utilisateur ne la modifie pas. Le test de connexion n'est pas encore disponible : l'écran l'annonce pour une version ultérieure.
+- Une clé déjà enregistrée est indiquée par des points sans être relue ; une saisie la remplace, et une saisie effacée conserve la précédente.
 - La section Synthèse règle séparément l'adresse, le modèle, la clé protégée par Android Keystore et le prompt. Une clé vide conserve la précédente ; une tâche garde sa référence et son contexte figés, même après changement des réglages. « Prompt et format » permet de modifier, enregistrer ou rétablir le prompt et d'insérer `{{type}}`, `{{date}}`, `{{duree}}`, `{{intervenants}}`. Le prompt par défaut demande une synthèse fidèle en français, sans invention, en sections Résumé, Décisions et Actions ; il traite le VTT comme source, non comme instruction.
 - « Tester » envoie une courte requête pouvant être facturée ; il expire après 30 secondes et libère le formulaire. Cette limite ne s'applique pas aux synthèses complètes. Ce test ne vérifie pas la capacité pour un VTT de deux heures.
 - Stockage : « Changer » ouvre le sélecteur de dossiers. Le changement est refusé pendant un transfert, avec le message « Attends la fin du transfert pour changer de dossier. ».
@@ -114,7 +116,7 @@ L'état se calcule à chaque rafraîchissement à partir des trois sources, des 
 
 ### État local
 
-Le fichier `state.json` du stockage interne ne garde que ce qui ne se déduit pas des trois sources :
+Le fichier `state.json`, version 5, du stockage interne ne garde que ce qui ne se déduit pas des trois sources :
 
 - l'adresse et le nom du boîtier associé ;
 - la dernière liste lue sur le boîtier (nom, taille, indicateur), remplacée à chaque lecture et utilisée quand le boîtier est hors de portée ;
@@ -123,7 +125,10 @@ Le fichier `state.json` du stockage interne ne garde que ce qui ne se déduit pa
 - la dernière erreur par enregistrement et par étape (récupération ou envoi), gardée après un redémarrage ;
 - les réglages de transcription et de synthèse, avec des références aux clés chiffrées, jamais les clés en clair ;
 - les tâches durables, leurs contextes figés, phases, tentatives et éventuelles suspensions, ainsi que les empreintes de provenance des synthèses ;
+- les sujets des enregistrements et le marqueur de tentative de sujet par tâche ;
 - le thème.
+
+La version 4 est lue sans sujet. Après le VTT, une demande courte au service de synthèse peut produire un sujet ; un échec ne bloque pas le MD. Le sujet remplace le titre de date dans la liste et la fiche.
 
 Le fichier est écrit dans un fichier temporaire puis renommé. Un fichier illisible est mis de côté sous `state.json.bad`.
 
