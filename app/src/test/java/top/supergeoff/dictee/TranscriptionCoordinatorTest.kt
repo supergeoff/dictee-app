@@ -237,6 +237,22 @@ class TranscriptionCoordinatorTest {
 
     private fun tracking() = task(phase = TranscriptionPhase.TRACKING).copy(serverId = "server-1")
 
+    @Test fun `incomplete migrated transcription context is suspended and never reaches client`() = runBlocking {
+        store.save(LocalState(transcriptionTasks = listOf(task())))
+        val json = org.json.JSONObject(file.readText()).put("version", 3)
+        json.getJSONArray("transcriptionTasks").getJSONObject(0).put("language", "").put("model", "")
+        file.writeText(json.toString())
+        val client = FakeClient()
+        val coordinator = coordinator(LocalStateRepository(store), client)
+        assertEquals(RunOutcome.Suspended, coordinator.runBounded("local-1"))
+        assertTrue(store.load().transcriptionTasks.single().suspended)
+        assertEquals(0, client.submissions + client.reads + client.cancels)
+        try { coordinator.requestCancel("local-1"); fail("L'annulation ne doit pas réactiver le contexte incomplet") }
+        catch (_: IllegalArgumentException) { }
+        assertEquals(0, client.submissions + client.reads + client.cancels)
+        assertTrue(store.load().transcriptionTasks.single().suspended)
+    }
+
     @Test fun `synthesis cancellation does not call transcription even with a server id`() = runBlocking {
         val synthesis = SynthesisWork(SynthesisPhase.READY, "Note.md", false,
             SynthesisContext("https://example.invalid/v1", "synth-ref", "synthetic-model", "template",

@@ -76,6 +76,115 @@ class LocalStateTest {
     }
 
     @Test
+    fun partiallyEmptySynthesisTaskIsNotTreatedAsMdOnly() {
+        val work = SynthesisWork(SynthesisPhase.SUSPENDED, "Note.md", false, null, 0, null, null, "Service non configuré")
+        val task = sampleTask().copy(phase = TranscriptionPhase.SYNTHESIZING, synthesis = work, model = "")
+        val store = LocalStateStore(file())
+        try { store.save(LocalState(transcriptionTasks = listOf(task))); org.junit.Assert.fail("Contexte partiel interdit") }
+        catch (_: IllegalArgumentException) { }
+        store.save(LocalState(transcriptionTasks = listOf(sampleTask().copy(phase = TranscriptionPhase.SYNTHESIZING, synthesis = work))))
+        val json = org.json.JSONObject(file().readText())
+        json.getJSONArray("transcriptionTasks").getJSONObject(0).put("model", "")
+        file().writeText(json.toString())
+        val loaded = store.load()
+        assertTrue(loaded.transcriptionTasks.single().suspended)
+        assertEquals(TranscriptionPhase.SYNTHESIZING, loaded.transcriptionTasks.single().phase)
+        assertEquals("", loaded.transcriptionTasks.single().model)
+        store.save(loaded)
+        assertEquals(loaded, store.load())
+    }
+
+    @Test
+    fun emptyFrozenSttFieldsCannotBeWrittenForActiveTasks() {
+        val store = LocalStateStore(file())
+        val fields = listOf("mp3Sha256", "encryptedKeyRef", "language", "model")
+        for (field in fields) for (value in listOf("", "  ")) {
+            val task = when (field) {
+                "mp3Sha256" -> sampleTask().copy(mp3Sha256 = value)
+                "encryptedKeyRef" -> sampleTask().copy(encryptedKeyRef = value)
+                "language" -> sampleTask().copy(language = value)
+                else -> sampleTask().copy(model = value)
+            }
+            try {
+                store.save(LocalState(transcriptionTasks = listOf(task)))
+                org.junit.Assert.fail("Le champ $field vide doit empêcher l'écriture d'une tâche active")
+            } catch (_: IllegalArgumentException) { }
+            assertFalse(file().exists())
+        }
+    }
+
+    @Test
+    fun incompleteFrozenSttFieldsAreQuarantinedOnReadWithoutLosingTasks() {
+        val store = LocalStateStore(file())
+        val phases = listOf(TranscriptionPhase.PENDING, TranscriptionPhase.TRACKING, TranscriptionPhase.SAVING,
+            TranscriptionPhase.CANCEL_REQUESTED, TranscriptionPhase.COMPLETED, TranscriptionPhase.FAILED, TranscriptionPhase.CANCELLED)
+        val fields = listOf("mp3Sha256", "encryptedKeyRef", "language", "model")
+        for (version in listOf(3, 4)) for (field in fields) for (phase in phases) {
+            val original = sampleTask().copy(phase = phase, serverId = "server-id", progress = 0.6, error = "erreur conservée")
+            store.save(LocalState(transcriptionTasks = listOf(original), deviceName = "boitier"))
+            val json = org.json.JSONObject(file().readText()).put("version", version)
+            json.getJSONArray("transcriptionTasks").getJSONObject(0).put(field, "")
+            file().writeText(json.toString())
+            val before = file().readText()
+            val loaded = store.load()
+            assertEquals(before, file().readText())
+            assertEquals("boitier", loaded.deviceName)
+            val task = loaded.transcriptionTasks.single()
+            assertEquals(original.localId, task.localId)
+            assertEquals(phase, task.phase)
+            assertEquals(original.serverId, task.serverId)
+            assertEquals(original.progress, task.progress)
+            assertEquals(original.error, task.error)
+            assertEquals(original.serverAddress, task.serverAddress)
+            if (phase.isTerminal()) {
+                assertFalse(task.suspended)
+            } else {
+                assertTrue("$version $field $phase", task.suspended)
+                assertTrue(task.suspensionReason?.contains("transcription") == true)
+                try {
+                    store.save(loaded.copy(transcriptionTasks = listOf(task.copy(suspended = false, suspensionReason = null))))
+                    org.junit.Assert.fail("Une tâche incomplète ne doit pas être réactivée")
+                } catch (_: IllegalArgumentException) { }
+            }
+            store.save(loaded)
+            assertEquals(loaded, store.load())
+        }
+    }
+
+    @Test
+    fun incompletePreviouslySuspendedTaskKeepsItsSuspensionReason() {
+        val original = sampleTask().copy(suspended = true, suspensionReason = "Connexion absente")
+        val store = LocalStateStore(file())
+        store.save(LocalState(transcriptionTasks = listOf(original)))
+        val json = org.json.JSONObject(file().readText()).put("version", 3)
+        json.getJSONArray("transcriptionTasks").getJSONObject(0).put("language", "")
+        file().writeText(json.toString())
+        val loaded = store.load()
+        assertEquals(original.copy(language = ""), loaded.transcriptionTasks.single())
+        store.save(loaded)
+        assertEquals(loaded, store.load())
+    }
+
+    @Test
+    fun incompleteSttFieldsAndInvalidAddressStayQuarantined() {
+        val store = LocalStateStore(file())
+        store.save(LocalState(transcriptionTasks = listOf(sampleTask().copy(serverId = "server-id"))))
+        val json = org.json.JSONObject(file().readText()).put("version", 3)
+        val task = json.getJSONArray("transcriptionTasks").getJSONObject(0)
+        task.put("serverAddress", "https://user:synthetic-secret@example.invalid/v1").put("model", "")
+        file().writeText(json.toString())
+        val loaded = store.load()
+        val blocked = loaded.transcriptionTasks.single()
+        assertTrue(blocked.suspended)
+        assertEquals("", blocked.serverAddress)
+        assertEquals("", blocked.model)
+        assertEquals("server-id", blocked.serverId)
+        assertFalse(loaded.toString().contains("synthetic-secret"))
+        store.save(loaded)
+        assertEquals(loaded, store.load())
+    }
+
+    @Test
     fun invalidFrozenSynthesisAddressIsScrubbedAndSuspended() {
         val store = LocalStateStore(file())
         val context = SynthesisContext("https://example.invalid/v1", "ref", "model", "template",

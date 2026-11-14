@@ -101,6 +101,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
             !isValidTranscriptionBaseUrl(state.synthesisSettings.baseUrl) ||
             state.transcriptionTasks.any { !isSafeStoredTaskAddress(it) || !isSafeStoredSynthesisAddress(it.synthesis) })
             throw InvalidTranscriptionAddressException()
+        require(state.transcriptionTasks.all(::isSafeStoredTaskContext)) { "Contexte de transcription incomplet" }
         require(state.transcriptionTasks.all { it.synthesis?.let(::hasValidSynthesisContext) != false })
         val json = JSONObject()
             .put("version", VERSION)
@@ -248,7 +249,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
             synthesis = if (version >= 4) o.objectOrNull("synthesis")?.let { readSynthesis(it) } else null,
             replaceVtt = if (version >= 4) o.booleanOr("replaceVtt", true) else true,
         )
-        when {
+        val addressSafeTask = when {
             // Corrige les suspensions terminales enregistrées par la migration précédente.
             task.phase.isTerminal() && task.serverAddress.isEmpty() &&
                 task.suspended && task.suspensionReason == INVALID_TASK_ADDRESS_REASON ->
@@ -257,6 +258,8 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
             task.phase.isTerminal() -> task.copy(serverAddress = "")
             else -> task.copy(serverAddress = "", suspended = true, suspensionReason = INVALID_TASK_ADDRESS_REASON)
         }
+        if (isSafeStoredTaskContext(addressSafeTask)) addressSafeTask
+        else addressSafeTask.copy(suspended = true, suspensionReason = INVALID_TASK_CONTEXT_REASON)
     }
 
     private fun writeSynthesis(work: SynthesisWork): JSONObject = JSONObject()
