@@ -70,10 +70,27 @@ class TranscriptionSettingsForm(
     }
 }
 
-/** Messages affichés pour les tâches encore susceptibles d'être traitées. */
+internal fun transcriptionCancellationMessage(task: TranscriptionTask?): String =
+    if (task != null && isLocalTranscriptionAbandon(task))
+        "Cette tâche sera abandonnée localement, sans appel au serveur. L'arrêt côté serveur n'est pas confirmé."
+    else "Si cette tâche est partagée avec d'autres clients du serveur, elle sera annulée pour eux aussi."
+
+/** Suspensions à corriger et avertissements d'abandon local conservés après annulation. */
 internal fun transcriptionTaskSettingsMessages(tasks: List<TranscriptionTask>): List<String> =
-    tasks.filter { it.suspended && !it.phase.isTerminal() }.mapNotNull { task ->
+    tasks.mapNotNull { task ->
         when {
+            task.phase == TranscriptionPhase.CANCELLED && task.suspensionReason == LOCAL_ABANDON_WARNING ->
+                "${task.recordingName} : $LOCAL_ABANDON_WARNING"
+            !task.suspended || task.phase.isTerminal() -> null
+            isLocalTranscriptionAbandon(task) -> {
+                val reason = when {
+                    task.suspensionReason == null || task.suspensionReason == INVALID_TASK_CONTEXT_REASON -> ""
+                    task.suspensionReason == INVALID_TASK_ADDRESS_REASON ->
+                        "adresse de serveur invalide. Cette tâche ne peut pas changer de serveur ; crée une nouvelle tâche après avoir vérifié les réglages. "
+                    else -> "${task.suspensionReason} "
+                }
+                "${task.recordingName} : $reason$INVALID_TASK_CONTEXT_REASON"
+            }
             task.suspensionReason?.contains("Clé inaccessible") == true ->
                 "${task.recordingName} : clé inaccessible. La nouvelle clé ne modifie pas cette tâche ; il faudra la relancer avec les nouveaux réglages."
             task.serverAddress.isEmpty() -> "${task.recordingName} : adresse de serveur invalide. Cette tâche ne peut pas changer de serveur ; crée une nouvelle tâche après avoir vérifié les réglages."

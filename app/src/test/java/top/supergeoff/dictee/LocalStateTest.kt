@@ -152,6 +152,35 @@ class LocalStateTest {
     }
 
     @Test
+    fun locallyAbandonedIncompleteTaskRetainsMetadataAndWarningAfterReload() = kotlinx.coroutines.runBlocking {
+        val task = sampleTask().copy(phase = TranscriptionPhase.TRACKING, serverId = "server-id", progress = 0.6,
+            error = "erreur conservée", model = "", suspended = true, suspensionReason = INVALID_TASK_CONTEXT_REASON)
+        val store = LocalStateStore(file())
+        store.save(LocalState(transcriptionTasks = listOf(task)))
+        val repository = LocalStateRepository(store)
+        val client = object : TranscriptionClient {
+            override suspend fun submit(task: TranscriptionTask): SubmitResult = error("appel STT interdit")
+            override suspend fun get(task: TranscriptionTask): ServerTask = error("appel STT interdit")
+            override suspend fun cancel(task: TranscriptionTask): ServerTask = error("appel STT interdit")
+            override suspend fun test(settings: TranscriptionSettings) = error("appel STT interdit")
+        }
+        val credentials = object : CredentialStore {
+            override fun save(secret: String): String = error("accès clé interdit")
+            override fun read(ref: String): String = error("accès clé interdit")
+            override fun remove(ref: String) = error("accès clé interdit")
+        }
+        val coordinator = TranscriptionCoordinator(repository, client, TranscriptionSettingsManager(repository, credentials),
+            RecoverySafety(repository), verifyAudio = { false })
+        coordinator.requestCancel(task.localId)
+        val saved = store.load().transcriptionTasks.single()
+        assertEquals(task.copy(phase = TranscriptionPhase.CANCELLED, suspended = false, suspensionReason = saved.suspensionReason), saved)
+        assertTrue(saved.suspensionReason!!.contains("pas confirmé"))
+        val restarted = LocalStateRepository(store)
+        assertEquals(saved, restarted.awaitInitialized().transcriptionTasks.single())
+        assertEquals(saved, store.load().transcriptionTasks.single())
+    }
+
+    @Test
     fun incompletePreviouslySuspendedTaskKeepsItsSuspensionReason() {
         val original = sampleTask().copy(suspended = true, suspensionReason = "Connexion absente")
         val store = LocalStateStore(file())

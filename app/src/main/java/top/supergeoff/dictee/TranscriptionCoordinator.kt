@@ -54,11 +54,16 @@ class TranscriptionCoordinator(
     suspend fun requestCancel(localId: String) {
         repository.updateDurably { current ->
             current.copy(transcriptionTasks = current.transcriptionTasks.map { task ->
-                if (task.localId != localId || task.phase.isTerminal() || task.phase == TranscriptionPhase.SYNTHESIZING) task
-                else task.copy(
-                    phase = TranscriptionPhase.CANCEL_REQUESTED, suspended = false, suspensionReason = null,
-                    error = if (task.serverId == null && task.phase in MAYBE_SENT) CANNOT_CONFIRM else task.error,
-                )
+                when {
+                    task.localId != localId || task.phase.isTerminal() || task.phase == TranscriptionPhase.SYNTHESIZING -> task
+                    isLocalTranscriptionAbandon(task) -> task.copy(
+                        phase = TranscriptionPhase.CANCELLED, suspended = false, suspensionReason = LOCAL_ABANDON_WARNING,
+                    )
+                    else -> task.copy(
+                        phase = TranscriptionPhase.CANCEL_REQUESTED, suspended = false, suspensionReason = null,
+                        error = if (task.serverId == null && task.phase in MAYBE_SENT) CANNOT_CONFIRM else task.error,
+                    )
+                }
             })
         }
         mutex.withLock { recoverySafety.withTransferLock { runLocked(localId) } }

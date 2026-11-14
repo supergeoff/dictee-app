@@ -45,6 +45,7 @@ internal fun isSafeStoredTaskAddress(task: TranscriptionTask): Boolean =
 
 /** Un contexte incomplet ne doit jamais être utilisé pour un appel STT. */
 internal const val INVALID_TASK_CONTEXT_REASON = "Contexte de transcription incomplet. Cette tâche ne peut pas changer de contexte ; crée une nouvelle tâche après avoir vérifié les réglages."
+internal const val LOCAL_ABANDON_WARNING = "Abandon local. L'arrêt côté serveur n'est pas confirmé."
 
 internal fun isSynthesisOnlyTask(task: TranscriptionTask): Boolean =
     task.phase == TranscriptionPhase.SYNTHESIZING && task.synthesis != null && task.serverAddress.isEmpty() &&
@@ -52,6 +53,10 @@ internal fun isSynthesisOnlyTask(task: TranscriptionTask): Boolean =
 
 internal fun hasCompleteTranscriptionContext(task: TranscriptionTask): Boolean =
     task.mp3Sha256.isNotBlank() && task.encryptedKeyRef.isNotBlank() && task.language.isNotBlank() && task.model.isNotBlank()
+
+internal fun isLocalTranscriptionAbandon(task: TranscriptionTask): Boolean =
+    task.suspended && !task.phase.isTerminal() && task.phase != TranscriptionPhase.SYNTHESIZING &&
+        !hasCompleteTranscriptionContext(task)
 
 internal fun isSafeStoredTaskContext(task: TranscriptionTask): Boolean =
     isSynthesisOnlyTask(task) || hasCompleteTranscriptionContext(task) || task.phase.isTerminal() || task.suspended

@@ -61,6 +61,7 @@ import top.supergeoff.dictee.RecordName
 import top.supergeoff.dictee.Recording
 import top.supergeoff.dictee.UiState
 import top.supergeoff.dictee.isTerminal
+import top.supergeoff.dictee.transcriptionCancellationMessage
 
 /**
  * Fiche d'un enregistrement : titre, durée et état dans l'en-tête, le lecteur du MP3 du téléphone, puis le fichier et son dossier.
@@ -76,7 +77,8 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
     }
     val canRecover = ui.local.boxList.any { it.name == name } && ui.link == LinkStatus.CONNECTED && !ui.recovering
     Column(modifier = Modifier.fillMaxSize().background(Dictee.colors.background)) {
-        val cancellable = ui.local.transcriptionTasks.any { it.recordingName == name && !it.phase.isTerminal() }
+        val activeTask = ui.local.transcriptionTasks.firstOrNull { it.recordingName == name && !it.phase.isTerminal() }
+        val cancellable = activeTask != null
         var confirmCancel by remember { mutableStateOf(false) }
         if (confirmCancel) {
             DicteeDialog(
@@ -87,7 +89,7 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
                 onDismiss = { confirmCancel = false },
             ) {
                 Text(
-                    text = "Si cette tâche est partagée avec d'autres clients du serveur, elle sera annulée pour eux aussi.",
+                    text = transcriptionCancellationMessage(activeTask),
                     style = Dictee.type.caption, color = Dictee.colors.textSecondary,
                 )
             }

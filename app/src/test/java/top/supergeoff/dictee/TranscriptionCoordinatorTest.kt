@@ -247,10 +247,67 @@ class TranscriptionCoordinatorTest {
         assertEquals(RunOutcome.Suspended, coordinator.runBounded("local-1"))
         assertTrue(store.load().transcriptionTasks.single().suspended)
         assertEquals(0, client.submissions + client.reads + client.cancels)
-        try { coordinator.requestCancel("local-1"); fail("L'annulation ne doit pas réactiver le contexte incomplet") }
-        catch (_: IllegalArgumentException) { }
+        coordinator.requestCancel("local-1")
         assertEquals(0, client.submissions + client.reads + client.cancels)
-        assertTrue(store.load().transcriptionTasks.single().suspended)
+        val cancelled = store.load().transcriptionTasks.single()
+        assertEquals(TranscriptionPhase.CANCELLED, cancelled.phase)
+        assertFalse(cancelled.suspended)
+        assertTrue(cancelled.suspensionReason!!.contains("arrêt côté serveur"))
+        assertTrue(cancelled.suspensionReason!!.contains("pas confirmé"))
+    }
+
+    @Test fun `local abandon handles incomplete contexts in every active STT phase`() = runBlocking {
+        val phases = listOf(TranscriptionPhase.PENDING, TranscriptionPhase.SUBMITTING, TranscriptionPhase.UNKNOWN_SUBMISSION,
+            TranscriptionPhase.TRACKING, TranscriptionPhase.CANCEL_REQUESTED, TranscriptionPhase.SAVING)
+        for (phase in phases) for (serverId in listOf(null, "server-1")) {
+            val blocked = task(phase = phase).copy(serverId = serverId, model = "", progress = 0.4,
+                error = "erreur conservée", suspended = true, suspensionReason = INVALID_TASK_CONTEXT_REASON)
+            store.save(LocalState(transcriptionTasks = listOf(blocked)))
+            val client = FakeClient()
+            coordinator(LocalStateRepository(store), client).requestCancel(blocked.localId)
+            val actual = store.load().transcriptionTasks.single()
+            assertEquals("$phase $serverId", blocked.copy(phase = TranscriptionPhase.CANCELLED,
+                suspended = false, suspensionReason = LOCAL_ABANDON_WARNING), actual)
+            assertEquals(0, client.submissions + client.reads + client.cancels)
+        }
+    }
+
+    @Test fun `local abandon retains metadata and permits explicit new transcription`() = runBlocking {
+        val original = tracking().copy(progress = 0.4, error = "ancienne erreur")
+        store.save(LocalState(transcriptionTasks = listOf(original)))
+        val json = org.json.JSONObject(file.readText()).put("version", 3)
+        json.getJSONArray("transcriptionTasks").getJSONObject(0).put("model", "")
+        file.writeText(json.toString())
+        val repository = LocalStateRepository(store)
+        val client = FakeClient()
+        val next = task(id = "local-2")
+        val scheduled = mutableListOf<String>()
+        val coordinator = TranscriptionCoordinator(repository, client, TranscriptionSettingsManager(repository, credentials),
+            RecoverySafety(repository), verifyAudio = { true }, prepare = { listOf(next) }, schedule = { scheduled += it })
+        val blocked = repository.awaitInitialized().transcriptionTasks.single()
+        assertTrue(blocked.suspended)
+        assertTrue(coordinator.start(setOf(blocked.recordingName)).isEmpty())
+        coordinator.requestCancel(blocked.localId)
+        val abandoned = store.load().transcriptionTasks.single()
+        assertEquals(blocked.copy(phase = TranscriptionPhase.CANCELLED, suspended = false,
+            suspensionReason = abandoned.suspensionReason), abandoned)
+        assertTrue(abandoned.suspensionReason!!.contains("pas confirmé"))
+        assertEquals(listOf("local-2"), coordinator.start(setOf(blocked.recordingName)))
+        assertEquals(listOf("local-2"), scheduled)
+        assertEquals(abandoned, store.load().transcriptionTasks.first())
+        assertEquals(0, client.submissions + client.reads + client.cancels)
+    }
+
+    @Test fun `failed local abandon does not publish or contact transcription`() = runBlocking {
+        val original = task().copy(model = "", suspended = true, suspensionReason = INVALID_TASK_CONTEXT_REASON)
+        store.save(LocalState(transcriptionTasks = listOf(original)))
+        val repository = LocalStateRepository(LocalStateStore(file, rename = { _, _ -> false }))
+        val client = FakeClient()
+        try { coordinator(repository, client).requestCancel(original.localId); fail("L'écriture doit échouer") }
+        catch (_: java.io.IOException) { }
+        assertEquals(original, store.load().transcriptionTasks.single())
+        assertEquals(original, repository.awaitInitialized().transcriptionTasks.single())
+        assertEquals(0, client.submissions + client.reads + client.cancels)
     }
 
     @Test fun `synthesis cancellation does not call transcription even with a server id`() = runBlocking {
