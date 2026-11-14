@@ -20,6 +20,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -50,6 +53,9 @@ import top.supergeoff.dictee.Recordings
 import top.supergeoff.dictee.UiState
 import top.supergeoff.dictee.isTerminal
 import top.supergeoff.dictee.transcriptionNotificationLabel
+import top.supergeoff.dictee.recordingListPresentation
+import top.supergeoff.dictee.PipelinePresentation
+import top.supergeoff.dictee.PipelineStatus
 import java.time.LocalDate
 
 /**
@@ -132,6 +138,7 @@ fun RecordingsScreen(ui: UiState, model: AppModel, onOpen: (name: String) -> Uni
                 shown.isEmpty() -> EmptyList(NO_MATCH_TEXT)
                 else -> RecordingList(
                     recordings = shown,
+                    ui = ui,
                     checked = checked,
                     onClick = { name -> if (checked != null) selection.toggle(name) else onOpen(name) },
                     onLongClick = { name -> if (checked == null) selection.start(name) },
@@ -205,6 +212,7 @@ private fun Filters(recordings: List<Recording>, selected: Filter, onSelect: (Fi
 @Composable
 private fun RecordingList(
     recordings: List<Recording>,
+    ui: UiState,
     checked: Set<String>?,
     onClick: (name: String) -> Unit,
     onLongClick: (name: String) -> Unit,
@@ -216,7 +224,7 @@ private fun RecordingList(
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         // Le libellé du jour n'a pas d'année : la clé est le premier enregistrement du groupe, unique par construction.
-        items(groups, key = { it.second.first().name }) { (day, group) -> DayGroup(day, group, checked, onClick, onLongClick) }
+        items(groups, key = { it.second.first().name }) { (day, group) -> DayGroup(day, group, ui, checked, onClick, onLongClick) }
     }
 }
 
@@ -225,6 +233,7 @@ private fun RecordingList(
 private fun DayGroup(
     day: String,
     recordings: List<Recording>,
+    ui: UiState,
     checked: Set<String>?,
     onClick: (name: String) -> Unit,
     onLongClick: (name: String) -> Unit,
@@ -237,6 +246,7 @@ private fun DayGroup(
                 if (index > 0) HorizontalDivider(color = colors.border)
                 RecordingRow(
                     recording = recording,
+                    presentation = recordingListPresentation(recording, ui),
                     checked = checked?.let { recording.name in it },
                     onClick = { onClick(recording.name) },
                     onLongClick = { onLongClick(recording.name) },
@@ -248,7 +258,7 @@ private fun DayGroup(
 
 /** Ligne d'enregistrement. [checked] est `null` hors sélection : le pictogramme du type laisse alors la place à la case. */
 @Composable
-private fun RecordingRow(recording: Recording, checked: Boolean?, onClick: () -> Unit, onLongClick: () -> Unit) {
+private fun RecordingRow(recording: Recording, presentation: PipelinePresentation, checked: Boolean?, onClick: () -> Unit, onLongClick: () -> Unit) {
     val colors = Dictee.colors
     Row(
         modifier = Modifier
@@ -272,9 +282,24 @@ private fun RecordingRow(recording: Recording, checked: Boolean?, onClick: () ->
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(text = details(recording), style = Dictee.type.caption, color = colors.textSecondary, maxLines = 1)
+            val rank = presentation.queueRank?.takeIf { presentation.badge == "En attente" }
+            Text(text = details(recording) + (rank?.let { " · ${it}e dans la file" } ?: ""), style = Dictee.type.caption, color = colors.textSecondary, maxLines = 1)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(presentation.badge, style = Dictee.type.captionStrong,
+                    color = when (presentation.badge) { "Erreur" -> colors.destructive; "Sur Drive" -> colors.success; else -> colors.textSecondary })
+                presentation.steps.forEach { step ->
+                    val color = when (step.status) {
+                        PipelineStatus.DONE -> colors.success
+                        PipelineStatus.RUNNING -> colors.primary
+                        PipelineStatus.ERROR -> colors.destructive
+                        PipelineStatus.WAITING -> colors.warning
+                        PipelineStatus.TODO -> colors.border
+                    }
+                    Box(Modifier.size(8.dp).background(color, CircleShape)
+                        .semantics { contentDescription = "${step.stage.title()} : ${step.label}" })
+                }
+            }
         }
-        StateBadge(recording.state)
     }
 }
 
@@ -324,6 +349,23 @@ private fun ActionBar(ui: UiState, model: AppModel, checked: Set<String>?, onDon
             modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            PrimaryButton(
+                text = if (ui.recovering) "Récupération…" else "Récupérer ($recoverCount)",
+                enabled = ui.link == LinkStatus.CONNECTED && !ui.recovering && recoverCount > 0,
+                modifier = Modifier.weight(1f),
+                icon = R.drawable.ic_download,
+            ) {
+                model.recover(recoverNames)
+                onDone()
+            }
+            SecondaryButton(
+                text = "VTT + MD (${transcribe.size})",
+                enabled = transcribe.isNotEmpty(),
+                modifier = Modifier.weight(1f),
+            ) {
+                model.transcribe(checked)
+                onDone()
+            }
             if (ui.local.driveEnabled) {
                 SecondaryButton(
                     text = if (ui.sending) "Envoi…" else "Envoyer ($sendCount)",
@@ -334,23 +376,6 @@ private fun ActionBar(ui: UiState, model: AppModel, checked: Set<String>?, onDon
                     model.send(sendNames)
                     onDone()
                 }
-            }
-            SecondaryButton(
-                text = "VTT + MD (${transcribe.size})",
-                enabled = true,
-                modifier = Modifier.weight(1f),
-            ) {
-                model.transcribe(checked)
-                onDone()
-            }
-            PrimaryButton(
-                text = if (ui.recovering) "Récupération…" else "Récupérer ($recoverCount)",
-                enabled = ui.link == LinkStatus.CONNECTED && !ui.recovering && recoverCount > 0,
-                modifier = Modifier.weight(1f),
-                icon = R.drawable.ic_download,
-            ) {
-                model.recover(recoverNames)
-                onDone()
             }
         }
     }
