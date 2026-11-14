@@ -1,6 +1,12 @@
 package top.supergeoff.dictee
 
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.async
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeout
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import org.junit.Rule
 import org.junit.rules.TemporaryFolder
 import java.io.File
@@ -42,7 +48,7 @@ class SynthesisIntegrationTest {
         val coordinator = TranscriptionCoordinator(repo, stt, TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
             verifyAudio = { true }, schedule = {}, synthesisClient = md, synthesisStorage = SynthesisStorage(File(tmp.root, "stage")),
             phoneStore = { phone }, synthesisCredentialAccessible = { true },
-            saveVtt = { task, bytes -> phone.files[task.vttName] = bytes },
+            saveVtt = { task, bytes, promote -> promote { phone.files[task.vttName] = bytes } },
             prepareRequested = { names, request, active -> TranscriptionPreparation.prepare(phone, "content://folder", sttSettings, emptyMap(), names, mdSettings, request, active) { "id-${id++}" } })
         val first = coordinator.start(setOf("20261111120000"), RequestedWork.REDO_VTT_AND_MD).single()
         coordinator.runBounded(first)
@@ -78,7 +84,7 @@ class SynthesisIntegrationTest {
         var id = 0
         val coordinator = TranscriptionCoordinator(repo, stt, TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
             verifyAudio = { true }, schedule = {}, synthesisClient = md, synthesisStorage = SynthesisStorage(File(tmp.root, "stage")),
-            phoneStore = { phone }, synthesisCredentialAccessible = { true }, saveVtt = { task, bytes -> phone.files[task.vttName] = bytes },
+            phoneStore = { phone }, synthesisCredentialAccessible = { true }, saveVtt = { task, bytes, promote -> promote { phone.files[task.vttName] = bytes } },
             prepareRequested = { names, request, active -> TranscriptionPreparation.prepare(phone, "content://folder", sttSettings, emptyMap(), names,
                 if (configured) mdSettings else SynthesisSettings(), request, active) { "id-${id++}" } })
         val first = coordinator.start(null).single()
@@ -158,11 +164,11 @@ class SynthesisIntegrationTest {
         var writes = 0
         var crashAfterPromotion = true
         fun coordinator(repo: LocalStateRepository) = TranscriptionCoordinator(repo, client, TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
-            verifyAudio = { true }, phoneStore = { phone }, saveVtt = { task, bytes ->
+            verifyAudio = { true }, phoneStore = { phone }, saveVtt = { task, bytes, promote -> promote {
                 writes++; if (phone.files.containsKey(task.vttName)) throw PhoneStoreException("existe")
                 phone.files[task.vttName] = bytes
                 if (crashAfterPromotion) { crashAfterPromotion = false; throw java.io.IOException("crash synthétique") }
-            })
+            } })
         store.save(LocalState(transcriptionTasks = listOf(initial)))
         assertEquals(RunOutcome.Resume, coordinator(LocalStateRepository(store)).runBounded("id"))
         assertEquals(TranscriptionPhase.SAVING, store.load().transcriptionTasks.single().phase)
@@ -207,12 +213,12 @@ class SynthesisIntegrationTest {
         var writes = 0
         fun coordinator() = LocalStateRepository(store).let { repo ->
             TranscriptionCoordinator(repo, resumeClient(), TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
-                verifyAudio = { true }, phoneStore = { phone }, saveVtt = { task, bytes ->
+                verifyAudio = { true }, phoneStore = { phone }, saveVtt = { task, bytes, promote -> promote {
                     writes++
                     if (phone.files.containsKey(task.vttName)) throw PhoneStoreException("Le VTT existe déjà.")
                     phone.files[task.vttName] = bytes
                     throw java.io.IOException("interruption après promotion")
-                })
+                } })
         }
         assertEquals(RunOutcome.Resume, coordinator().runBounded("id"))
         assertEquals(TranscriptionPhase.SAVING, store.load().transcriptionTasks.single().phase)
@@ -239,10 +245,10 @@ class SynthesisIntegrationTest {
         val repo = LocalStateRepository(store)
         var promotions = 0
         val coordinator = TranscriptionCoordinator(repo, resumeClient(), TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
-            verifyAudio = { true }, phoneStore = { phone }, saveVtt = { task, bytes ->
+            verifyAudio = { true }, phoneStore = { phone }, saveVtt = { task, bytes, promote -> promote {
                 if (phone.files.containsKey(task.vttName) && !task.replaceVtt) throw PhoneStoreException("Le VTT existe déjà.")
                 promotions++; phone.files[task.vttName] = bytes
-            })
+            } })
         assertEquals(RunOutcome.Suspended, coordinator.runBounded("id"))
         val suspended = store.load().transcriptionTasks.single()
         assertEquals(TranscriptionPhase.SAVING, suspended.phase)
@@ -251,6 +257,159 @@ class SynthesisIntegrationTest {
         assertArrayEquals(external, phone.files[initial.vttName])
         assertEquals("md existant", phone.files["Note-20261111120000.md"]!!.toString(Charsets.UTF_8))
         assertEquals(0, promotions)
+    }
+
+    private suspend fun assertCancelDuringVttReconciliation(alreadySaved: Boolean) = kotlinx.coroutines.coroutineScope {
+        val memory = MemoryStore().apply {
+            files["Note-20261111120000.mp3"] = "audio".toByteArray()
+            files["Note-20261111120000.md"] = "md existant".toByteArray()
+        }
+        val initial = missingSavingTask(memory, hasMd = true)
+        if (alreadySaved) memory.files[initial.vttName] = validVtt
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val phone = object : PhoneStore by memory {
+            override fun list(): List<PhoneFile> {
+                entered.countDown()
+                check(release.await(10, TimeUnit.SECONDS))
+                return memory.list()
+            }
+        }
+        val store = LocalStateStore(File(tmp.root, "cancel-list-$alreadySaved.json"))
+        store.save(LocalState(transcriptionTasks = listOf(initial)))
+        val repo = LocalStateRepository(store)
+        val client = object : TranscriptionClient {
+            override suspend fun get(task: TranscriptionTask) = ServerTask("server", ServerStatus.COMPLETED, 1.0, validVtt)
+            override suspend fun submit(task: TranscriptionTask): SubmitResult = error("unexpected")
+            override suspend fun cancel(task: TranscriptionTask): ServerTask = throw TranscriptionNetworkException()
+            override suspend fun test(settings: TranscriptionSettings) = Unit
+        }
+        var writes = 0
+        val coordinator = TranscriptionCoordinator(repo, client, TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
+            verifyAudio = { true }, phoneStore = { phone }, saveVtt = { task, bytes, promote -> promote {
+                writes++
+                if (memory.files.containsKey(task.vttName) && !task.replaceVtt) throw PhoneStoreException("Le VTT existe déjà.")
+                memory.files[task.vttName] = bytes
+            } })
+        val run = async(Dispatchers.Default) { coordinator.runBounded("id") }
+        try {
+            assertTrue(entered.await(10, TimeUnit.SECONDS))
+            val cancel = async(Dispatchers.Default) { coordinator.requestCancel("id") }
+            withTimeout(5000) { while (repo.awaitInitialized().transcriptionTasks.single().phase != TranscriptionPhase.CANCEL_REQUESTED) delay(1) }
+            release.countDown()
+            assertEquals(RunOutcome.Resume, run.await())
+            cancel.await()
+            assertEquals(TranscriptionPhase.CANCEL_REQUESTED, store.load().transcriptionTasks.single().phase)
+            assertEquals(0, writes)
+            if (alreadySaved) assertArrayEquals(validVtt, memory.files[initial.vttName]) else assertNull(memory.files[initial.vttName])
+            assertEquals("md existant", memory.files["Note-20261111120000.md"]!!.toString(Charsets.UTF_8))
+        } finally {
+            release.countDown()
+        }
+    }
+
+    @Test fun cancellationDuringMissingVttOnlyListPreventsPromotion() = runBlocking { assertCancelDuringVttReconciliation(false) }
+    @Test fun cancellationDuringMissingVttOnlyListPreventsFinalization() = runBlocking { assertCancelDuringVttReconciliation(true) }
+
+    private suspend fun assertVttPromotionGuardOrder(cancelFirst: Boolean) = kotlinx.coroutines.coroutineScope {
+        val phone = MemoryStore().apply {
+            files["Note-20261111120000.mp3"] = "audio".toByteArray()
+            files["Note-20261111120000.md"] = "md existant".toByteArray()
+        }
+        val initial = missingSavingTask(phone, hasMd = true)
+        val store = LocalStateStore(File(tmp.root, "guard-$cancelFirst.json"))
+        store.save(LocalState(transcriptionTasks = listOf(initial)))
+        val repo = LocalStateRepository(store)
+        val guard = java.util.concurrent.locks.ReentrantLock()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val promoted = CountDownLatch(1)
+        val finishSave = CountDownLatch(1)
+        val client = object : TranscriptionClient {
+            override suspend fun get(task: TranscriptionTask): ServerTask {
+                assertFalse(guard.isLocked)
+                return ServerTask("server", ServerStatus.COMPLETED, 1.0, validVtt)
+            }
+            override suspend fun submit(task: TranscriptionTask): SubmitResult = error("unexpected")
+            override suspend fun cancel(task: TranscriptionTask): ServerTask {
+                assertFalse(guard.isLocked)
+                throw TranscriptionNetworkException()
+            }
+            override suspend fun test(settings: TranscriptionSettings) = Unit
+        }
+        var phaseAtPromotion: TranscriptionPhase? = null
+        var writes = 0
+        val coordinator = TranscriptionCoordinator(repo, client, TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
+            verifyAudio = { true }, phoneStore = { phone }, promotionGuard = guard, saveVtt = { task, bytes, promote ->
+                if (cancelFirst) {
+                    entered.countDown()
+                    check(release.await(10, TimeUnit.SECONDS))
+                }
+                var called = false
+                promote {
+                    called = true
+                    if (!cancelFirst) {
+                        entered.countDown()
+                        check(release.await(10, TimeUnit.SECONDS))
+                    }
+                    phaseAtPromotion = store.load().transcriptionTasks.single().phase
+                    if (phone.files.containsKey(task.vttName) && !task.replaceVtt) throw PhoneStoreException("Le VTT existe déjà.")
+                    writes++
+                    phone.files[task.vttName] = bytes
+                }
+                if (!called) throw PhoneStoreException("Promotion refusée")
+                promoted.countDown()
+                check(finishSave.await(10, TimeUnit.SECONDS))
+            })
+        val run = async(Dispatchers.Default) { coordinator.runBounded("id") }
+        try {
+            assertTrue(entered.await(10, TimeUnit.SECONDS))
+            val cancel = async(Dispatchers.Default) { coordinator.requestCancel("id") }
+            if (!cancelFirst) {
+                withTimeout(5000) { while (!guard.hasQueuedThreads()) delay(1) }
+                assertEquals(TranscriptionPhase.SAVING, store.load().transcriptionTasks.single().phase)
+                release.countDown()
+                assertTrue(promoted.await(10, TimeUnit.SECONDS))
+            }
+            withTimeout(5000) { while (repo.awaitInitialized().transcriptionTasks.single().phase != TranscriptionPhase.CANCEL_REQUESTED) delay(1) }
+            release.countDown()
+            finishSave.countDown()
+            assertEquals(RunOutcome.Resume, run.await())
+            cancel.await()
+            assertEquals(TranscriptionPhase.CANCEL_REQUESTED, store.load().transcriptionTasks.single().phase)
+            assertEquals(if (cancelFirst) 0 else 1, writes)
+            assertEquals(if (cancelFirst) null else TranscriptionPhase.SAVING, phaseAtPromotion)
+            if (cancelFirst) assertNull(phone.files[initial.vttName]) else assertArrayEquals(validVtt, phone.files[initial.vttName])
+            assertEquals("md existant", phone.files["Note-20261111120000.md"]!!.toString(Charsets.UTF_8))
+        } finally {
+            release.countDown()
+            finishSave.countDown()
+        }
+    }
+
+    @Test fun cancellationWinsBeforeVttPromotionGuard() = runBlocking { assertVttPromotionGuardOrder(true) }
+    @Test fun vttPromotionGuardWinsBeforeCancellation() = runBlocking { assertVttPromotionGuardOrder(false) }
+
+    @Test fun missingVttAppearingBeforeGuardedPromotionIsNotReplaced() = runBlocking {
+        val phone = MemoryStore().apply {
+            files["Note-20261111120000.mp3"] = "audio".toByteArray()
+            files["Note-20261111120000.md"] = "md existant".toByteArray()
+        }
+        val initial = missingSavingTask(phone, hasMd = true)
+        val store = LocalStateStore(File(tmp.root, "appearing.json"))
+        store.save(LocalState(transcriptionTasks = listOf(initial)))
+        val repo = LocalStateRepository(store)
+        val external = "vtt extérieur".toByteArray()
+        val coordinator = TranscriptionCoordinator(repo, resumeClient(), TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
+            verifyAudio = { true }, phoneStore = { phone }, saveVtt = { task, bytes, promote ->
+                val spool = File(tmp.root, "vtt-spool").apply { writeBytes(bytes) }
+                phone.files[task.vttName] = external
+                phone.writeGuarded(task.vttName, spool, task.replaceVtt, promote)
+            })
+        assertEquals(RunOutcome.Suspended, coordinator.runBounded("id"))
+        assertTrue(store.load().transcriptionTasks.single().suspended)
+        assertArrayEquals(external, phone.files[initial.vttName])
+        assertEquals("md existant", phone.files["Note-20261111120000.md"]!!.toString(Charsets.UTF_8))
     }
 
     private suspend fun assertReconciliationStreamFailure(hasMd: Boolean, failOnClose: Boolean) {
@@ -282,7 +441,7 @@ class SynthesisIntegrationTest {
         val repo = LocalStateRepository(store)
         var writes = 0
         val coordinator = TranscriptionCoordinator(repo, resumeClient(), TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
-            verifyAudio = { true }, phoneStore = { phone }, saveVtt = { _, _ -> writes++ })
+            verifyAudio = { true }, phoneStore = { phone }, saveVtt = { _, _, promote -> promote { writes++ } })
         assertEquals(RunOutcome.Suspended, coordinator.runBounded("id"))
         val suspended = store.load().transcriptionTasks.single()
         assertEquals(TranscriptionPhase.SAVING, suspended.phase)
@@ -314,7 +473,7 @@ class SynthesisIntegrationTest {
         val repo = LocalStateRepository(store)
         var writes = 0
         val coordinator = TranscriptionCoordinator(repo, resumeClient(), TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
-            verifyAudio = { true }, phoneStore = { error("DIC-4 ne consulte pas le dossier en reprise") }, saveVtt = { _, _ -> writes++ })
+            verifyAudio = { true }, phoneStore = { error("DIC-4 ne consulte pas le dossier en reprise") }, saveVtt = { _, _, promote -> promote { writes++ } })
         assertEquals(RunOutcome.Finished, coordinator.runBounded("id"))
         assertEquals(1, writes)
         assertEquals(TranscriptionPhase.COMPLETED, store.load().transcriptionTasks.single().phase)

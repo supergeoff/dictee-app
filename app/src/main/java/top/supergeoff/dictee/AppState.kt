@@ -166,11 +166,11 @@ class AppModel(
             phoneStore = { folder -> PhoneFolder(app, folder.toUri()) },
             synthesisCredentialAccessible = { ref -> runCatching { synthesisCredentials.read(ref).isNotBlank() }.getOrDefault(false) },
             schedule = scheduler::enqueue,
-            saveVtt = { task, bytes -> withContext(Dispatchers.IO) {
+            saveVtt = { task, bytes, promote -> withContext(Dispatchers.IO) {
                 val spool = java.io.File(app.cacheDir, "vtt-" + java.util.UUID.randomUUID())
                 try {
                     spool.writeBytes(bytes)
-                    PhoneFolder(app, task.folderUri.toUri()).writeGuarded(task.vttName, spool, task.replaceVtt) { it() }
+                    PhoneFolder(app, task.folderUri.toUri()).writeGuarded(task.vttName, spool, task.replaceVtt, promote)
                 } catch (e: java.io.IOException) {
                     throw PhoneStoreException("Écriture impossible dans le dossier du téléphone.", e)
                 } finally { spool.delete() }

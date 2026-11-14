@@ -32,8 +32,8 @@ class TranscriptionCoordinator(
     private val verifyAudio: suspend (TranscriptionTask) -> Boolean,
     private val prepare: suspend (Set<String>?) -> List<TranscriptionTask> = { emptyList() },
     private val schedule: suspend (String) -> Unit = { error("Planification indisponible") },
-    /** Écrit les octets exacts du VTT dans le dossier, en protégeant l'ancien fichier ; lève [PhoneStoreException] sinon. */
-    private val saveVtt: suspend (TranscriptionTask, ByteArray) -> Unit = { _, _ -> error("Sauvegarde indisponible") },
+    /** Prépare le VTT et confie sa promotion synchrone à la garde ; protège l'ancien fichier, ou lève [PhoneStoreException]. */
+    private val saveVtt: suspend (TranscriptionTask, ByteArray, ((() -> Unit) -> Unit)) -> Unit = { _, _, _ -> error("Sauvegarde indisponible") },
     private val launch: suspend () -> Unit = {},
     private val synthesisClient: SynthesisClient? = null,
     private val synthesisStorage: SynthesisStorage? = null,
@@ -73,8 +73,8 @@ class TranscriptionCoordinator(
     }
 
     /**
-     * L'intention d'annuler est persistée avant tout appel réseau, sans attendre le verrou : une soumission longue
-     * ne la retarde pas, et [update] la préserve face aux réponses qui arrivent ensuite.
+     * L'intention d'annuler est persistée sous la garde de promotion, avant tout appel réseau et sans attendre le mutex
+     * de la file : une soumission longue ne la retarde pas, et [update] la préserve face aux réponses qui arrivent ensuite.
      */
     suspend fun requestCancel(localId: String) {
         val call = withContext(Dispatchers.IO) { promotionGuard.withLock {
@@ -306,12 +306,25 @@ class TranscriptionCoordinator(
             } catch (e: java.io.IOException) {
                 throw PhoneStoreException("Le VTT ou le dossier est inaccessible. Vérifie le dossier avant de relancer.", e)
             }
-            if (!alreadySaved) saveVtt(task, bytes)
+            if (!alreadySaved) {
+                var promoted = false
+                saveVtt(task, bytes) { promote -> promotionGuard.withLock {
+                    val current = runBlocking(Dispatchers.IO) { repository.awaitInitialized().transcriptionTasks.first { it.localId == localId } }
+                    if (current.phase == TranscriptionPhase.SAVING) {
+                        promote()
+                        promoted = true
+                    }
+                } }
+                if (!promoted) return RunOutcome.Resume
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: PhoneStoreException) {
-            update(localId) { it.copy(suspended = true, suspensionReason = e.message ?: "Écriture impossible dans le dossier.") }
-            return RunOutcome.Suspended
+            val current = update(localId) {
+                if (it.phase != TranscriptionPhase.SAVING) it else it.copy(
+                    suspended = true, suspensionReason = e.message ?: "Écriture impossible dans le dossier.")
+            }
+            return if (current.phase == TranscriptionPhase.SAVING) RunOutcome.Suspended else RunOutcome.Resume
         } catch (_: java.io.IOException) {
             return RunOutcome.Resume
         }
@@ -324,6 +337,7 @@ class TranscriptionCoordinator(
         }
         val saved = update(localId) { current ->
             when {
+                current.phase != TranscriptionPhase.SAVING -> current
                 current.synthesis == null -> current.copy(phase = TranscriptionPhase.COMPLETED, progress = 1.0, error = null)
                 resolved == null -> current.copy(phase = TranscriptionPhase.COMPLETED, progress = 1.0, error = null,
                     synthesis = current.synthesis.copy(phase = SynthesisPhase.SUSPENDED,
@@ -332,7 +346,7 @@ class TranscriptionCoordinator(
                     synthesis = current.synthesis.copy(phase = SynthesisPhase.READY, context = resolved))
             }
         }
-        return if (saved.phase == TranscriptionPhase.SYNTHESIZING) RunOutcome.Resume else RunOutcome.Finished
+        return if (saved.phase == TranscriptionPhase.COMPLETED) RunOutcome.Finished else RunOutcome.Resume
     }
 
     private suspend fun synthesize(task: TranscriptionTask): RunOutcome {

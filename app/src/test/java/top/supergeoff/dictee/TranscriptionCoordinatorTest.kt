@@ -49,7 +49,7 @@ class TranscriptionCoordinatorTest {
     private fun coordinator(repository: LocalStateRepository, client: FakeClient) =
         TranscriptionCoordinator(repository, client, TranscriptionSettingsManager(repository, credentials), RecoverySafety(repository),
             verifyAudio = { true },
-            saveVtt = { task, bytes -> saveFailure?.let { throw it }; saved += task.vttName to bytes })
+            saveVtt = { task, bytes, promote -> promote { saveFailure?.let { throw it }; saved += task.vttName to bytes } })
 
     @Test fun `reconciliation restores missing work for active tasks but not terminal tasks`() = runBlocking {
         val pending = task(id = "pending")
