@@ -216,7 +216,7 @@ private fun TranscriptionSection(local: LocalState, form: TranscriptionSettingsF
             OutlinedTextField(draft.baseUrl, form::setBaseUrl, enabled = draft.initialized && !draft.saving, label = { Text("Adresse du serveur (/v1)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(draft.secret, form::setSecret, enabled = draft.initialized && !draft.saving, label = { Text("Nouvelle clé") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
             Text(if (settings.credentialRef == null) "Aucune clé enregistrée" else "Une clé est enregistrée. Laisse ce champ vide pour la conserver.", color = Dictee.colors.textSecondary)
-            OutlinedTextField(draft.language, form::setLanguage, enabled = draft.initialized && !draft.saving, label = { Text("Langue") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(draft.language, form::setLanguage, enabled = draft.initialized && !draft.saving, label = { Text("Langue") }, supportingText = { Text("auto : détection automatique (français et anglais).") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(draft.model, form::setModel, enabled = draft.initialized && !draft.saving, label = { Text("Modèle") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             Button(onClick = { form.submit() }, enabled = draft.initialized && !draft.saving) { Text(if (draft.saving) "Enregistrement…" else "Enregistrer") }
             draft.message?.let { Text(it, color = Dictee.colors.textSecondary) }

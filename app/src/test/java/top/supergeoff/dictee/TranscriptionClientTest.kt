@@ -40,6 +40,12 @@ class TranscriptionClientTest {
         listOf("name=\"file\"; filename=\"audio.mp3\"", "Content-Type: audio/mpeg", "name=\"model\"\r\n\r\ndictee-diarize", "name=\"response_format\"\r\n\r\nvtt", "name=\"background\"\r\n\r\ntrue", "name=\"language\"\r\n\r\nfr", mp3.toString(Charsets.ISO_8859_1)).forEach { assertTrue(it, body.contains(it)) }
         assertEquals(listOf("old-ref"), creds.refs); assertTrue(c.closed)
     }
+    @Test fun multipartUsesAutomaticLanguageFromDefaultSettings() = runBlocking {
+        reply(200, json("queued"))
+        client().submit(task().copy(language = TranscriptionSettings().language))
+        val body = connections.single().written.toString(Charsets.UTF_8.name())
+        assertTrue(body.contains("name=\"language\"\r\n\r\nauto\r\n"))
+    }
     @Test fun multipartUsesFrozenConfigurableModel() = runBlocking {
         reply(200, json("queued"))
         client().submit(task().copy(model = "synthetic-alternative"))

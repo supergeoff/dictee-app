@@ -17,7 +17,7 @@ import javax.crypto.spec.GCMParameterSpec
 
 data class TranscriptionSettings(
     val baseUrl: String = "/v1",
-    val language: String = "fr",
+    val language: String = "auto",
     val model: String = "dictee-diarize",
     val credentialRef: String? = null,
 )

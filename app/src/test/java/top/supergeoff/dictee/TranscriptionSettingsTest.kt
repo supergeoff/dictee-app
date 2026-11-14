@@ -27,11 +27,28 @@ class TranscriptionSettingsTest {
     @Test fun defaultsAndMigration() {
         val defaults = TranscriptionSettings()
         assertEquals("/v1", defaults.baseUrl)
-        assertEquals("fr", defaults.language)
+        assertEquals("auto", defaults.language)
         assertEquals("dictee-diarize", defaults.model)
         assertNull(defaults.credentialRef)
         file().writeText("{\"version\":3}")
         assertEquals(defaults, LocalStateStore(file()).load().transcriptionSettings)
+    }
+
+    @Test fun draftDefaultsToAutomaticLanguage() {
+        assertEquals("auto", TranscriptionSettingsDraft().language)
+    }
+
+    @Test fun storedFrenchLanguageIsNotMigrated() {
+        file().writeText("""{"version":3,"transcriptionSettings":{"language":"fr"}}""")
+        val store = LocalStateStore(file())
+        val loaded = store.load()
+        assertEquals("fr", loaded.transcriptionSettings.language)
+        store.save(loaded)
+        assertEquals("fr", store.load().transcriptionSettings.language)
+    }
+
+    @Test fun automaticLanguageIsACompleteTranscriptionContext() {
+        assertTrue(hasCompleteTranscriptionContext(task("ref").copy(language = "auto")))
     }
 
     @Test fun urlValidationRejectsCredentialsQueryFragmentAndUnexpectedPaths() = runBlocking {

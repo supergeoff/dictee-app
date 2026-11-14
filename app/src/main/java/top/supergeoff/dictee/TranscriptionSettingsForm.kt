@@ -9,7 +9,7 @@ import kotlinx.coroutines.launch
 /** Brouillon en mémoire seulement, jamais écrit au journal ni dans l'état local. */
 data class TranscriptionSettingsDraft(
     val baseUrl: String = "/v1",
-    val language: String = "fr",
+    val language: String = "auto",
     val model: String = "dictee-diarize",
     val secret: String = "",
     val initialized: Boolean = false,
