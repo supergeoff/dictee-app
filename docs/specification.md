@@ -1,6 +1,6 @@
 # Dictée : spécification du produit
 
-Statut : ce document décrit le comportement implémenté dans la branche pour la version 0.4.0 (`versionCode` 13), y compris la transcription DIC-4 et la synthèse DIC-19. La 0.4.0 n'est pas annoncée comme livrée : le lint échoue et la vérification sur appareil, l'essai de capacité du fournisseur, la réunion réelle et la vérification de l'APK signé restent ouverts.
+Statut : ce document décrit le comportement implémenté dans la branche pour la version 0.4.0 (`versionCode` 13), y compris la transcription DIC-4 et la synthèse DIC-19. La 0.4.0 n'est pas annoncée comme livrée : le lint passe sans erreur avec 18 avertissements ouverts, et la vérification sur appareil, l'essai de capacité du fournisseur, la réunion réelle et la vérification de l'APK signé restent ouverts.
 
 Le protocole Bluetooth du MECHEN V05 est décrit dans [`protocole-v05.md`](protocole-v05.md).
 
@@ -45,7 +45,7 @@ L'app garde une seule activité. Le passage d'un écran à l'autre suit une pile
 - Les filtres sont « Tous », « À relire » et « Sur le boîtier », chacun avec son compteur. « Sur le boîtier » retient les enregistrements du boîtier qui n'ont aucun fichier sur le téléphone. « À relire » ne retient aucun enregistrement et affiche toujours 0.
 - « Récupérer (N) » compte les enregistrements du boîtier qui ne sont ni sur le téléphone ni dans Drive. Il n'est actif que si la liaison est ouverte, qu'aucune récupération ne tourne et que N n'est pas nul. Il affiche « Récupération… » pendant le travail.
 - « Envoyer (N) » n'apparaît que si Drive est activé. Il compte les enregistrements dont au moins un fichier du téléphone manque dans le dossier Drive, sauf ceux dont la récupération est en erreur. Tant que le contenu du dossier Drive n'est pas connu, il compte tous les enregistrements qui ont un fichier sur le téléphone. Il affiche « Envoi… » pendant le travail.
-- « VTT + MD (N) » se place entre « Envoyer » et « Récupérer ». Il compte les MP3 exploitables du téléphone auxquels il manque un VTT ou un MD, hors travaux actifs ; en sélection, il se limite aux lignes cochées. Il crée les fichiers manquants sans remplacer ceux qui existent et n'envoie rien vers Drive. Une ligne sans MP3 ou en erreur de récupération est signalée par un message ; une ligne déjà en cours n'est pas relancée.
+- « VTT + MD (N) » se place entre « Envoyer » et « Récupérer ». Il compte les MP3 exploitables du téléphone auxquels il manque un VTT ou un MD, hors travaux actifs ; en sélection, il se limite aux lignes cochées. Il crée les fichiers manquants sans remplacer ceux qui existent et n'envoie rien vers Drive. En sélection, une ligne cochée sans MP3 ou en erreur de récupération est signalée par un message ; une ligne déjà en cours n'est pas relancée.
 - Un appui long passe en sélection. La barre affiche le nombre de lignes cochées, une croix pour sortir et « Tout », qui coche les lignes du filtre en cours. Les actions portent alors sur les lignes cochées : récupérer une ligne cochée la transfère de nouveau depuis le boîtier, quel que soit son état ; « VTT + MD » ne remplace aucun fichier. La sélection se vide après l'action.
 - La barre d'avancement affiche « Récupération i/N · p % » ou « Envoi i/N · p % ». Pour un envoi, N compte les fichiers, et p est le pourcentage du fichier en cours. Une transcription affiche « Transcription i/N · p % », ou « Transcription i/N » avec une barre indéterminée quand le serveur ne donne pas d'avancement. Les barres peuvent s'afficher les unes sous les autres.
 
@@ -64,7 +64,7 @@ L'app garde une seule activité. Le passage d'un écran à l'autre suit une pile
 ### Réglages
 
 - Les sections sont Boîtier, Stockage sur le téléphone, Google Drive, Transcription, Synthèse, Apparence et À propos.
-- La section Transcription règle l'adresse du serveur, la langue et la clé, protégée par Android Keystore, avec un test de connexion.
+- La section Transcription règle l'adresse du serveur, la langue et la clé, protégée par Android Keystore. Le test de connexion n'est pas encore disponible : l'écran l'annonce pour une version ultérieure.
 - La section Synthèse règle séparément l'adresse, le modèle, la clé protégée par Android Keystore et le prompt. Une clé vide conserve la précédente ; une tâche garde sa référence et son contexte figés, même après changement des réglages. « Prompt et format » permet de modifier, enregistrer ou rétablir le prompt et d'insérer `{{type}}`, `{{date}}`, `{{duree}}`, `{{intervenants}}`. Le prompt par défaut demande une synthèse fidèle en français, sans invention, en sections Résumé, Décisions et Actions ; il traite le VTT comme source, non comme instruction.
 - « Tester » envoie une courte requête pouvant être facturée ; il expire après 30 secondes et libère le formulaire. Cette limite ne s'applique pas aux synthèses complètes. Ce test ne vérifie pas la capacité pour un VTT de deux heures.
 - Stockage : « Changer » ouvre le sélecteur de dossiers. Le changement est refusé pendant un transfert, avec le message « Attends la fin du transfert pour changer de dossier. ».
@@ -106,10 +106,11 @@ L'état se calcule à chaque rafraîchissement à partir des trois sources, des 
 | 1 | Erreur | La dernière tentative de récupération ou d'envoi a échoué et n'a pas été reprise avec succès. |
 | 2 | Récupération p % | Le transfert Bluetooth de cet enregistrement est en cours. |
 | 3 | Envoi… | Un envoi de cet enregistrement vers Drive est en cours. |
-| 4 | Sur Drive | Le MP3 est dans le dossier Drive et chaque fichier du téléphone y est aussi. |
-| 5 | Prêt | Le MP3, le VTT et le MD sont sur le téléphone. |
-| 6 | Récupéré | Au moins un fichier de l'enregistrement est sur le téléphone. |
-| 7 | Sur le boîtier | L'enregistrement n'est que sur le boîtier. |
+| 4 | Transcription… ou Transcription p % | Une transcription de cet enregistrement est en cours. |
+| 5 | Sur Drive | Le MP3 est dans le dossier Drive et chaque fichier du téléphone y est aussi. |
+| 6 | Prêt | Le MP3, le VTT et le MD sont sur le téléphone. |
+| 7 | Récupéré | Au moins un fichier de l'enregistrement est sur le téléphone. |
+| 8 | Sur le boîtier | L'enregistrement n'est que sur le boîtier. |
 
 ### État local
 
@@ -172,7 +173,7 @@ L'app reprend l'état de la version 0.1.5 au premier lancement : elle garde l'ad
 
 ### Fichiers manquants et régénération
 
-« VTT + MD » traite les MP3 locaux exploitables du plus ancien au plus récent, sans remplacer de fichier existant, avec ou sans sélection. Les enregistrements sans MP3, en erreur de récupération ou déjà actifs sont exclus et signalés ; les fichiers créés ne partent pas automatiquement vers Drive.
+« VTT + MD » traite les MP3 locaux exploitables du plus ancien au plus récent, sans remplacer de fichier existant, avec ou sans sélection. Les enregistrements sans MP3, en erreur de récupération ou déjà actifs sont exclus. En sélection, les lignes exclues pour MP3 absent, erreur de récupération ou travail actif sont signalées ; hors sélection, un message n'apparaît que si aucun candidat ne reste. Les fichiers créés ne partent pas automatiquement vers Drive.
 
 | VTT | MD | Travail demandé |
 |---|---|---|
