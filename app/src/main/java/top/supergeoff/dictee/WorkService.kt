@@ -81,7 +81,8 @@ class WorkService : Service() {
             stopSelf(lastStartId)
             return
         }
-        show(listOfNotNull(ui.recovery?.label(), ui.send?.label(), ui.transcription?.label()).joinToString("\n").ifEmpty { PREPARING })
+        val transcription = ui.transcription?.let { transcriptionNotificationLabel(it, ui.local.transcriptionTasks) }
+        show(listOfNotNull(ui.recovery?.label(), ui.send?.label(), transcription).joinToString("\n").ifEmpty { PREPARING })
     }
 
     private fun show(text: String) {

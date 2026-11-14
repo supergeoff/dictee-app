@@ -36,7 +36,9 @@ class TranscriptionSettingsPresentationTest {
         assertTrue(transcriptionCancellationMessage(sampleTask()).contains("autres clients"))
         assertTrue(transcriptionCancellationMessage(null).contains("autres clients"))
         assertTrue(transcriptionCancellationMessage(blocked.copy(suspended = false)).contains("autres clients"))
-        assertTrue(transcriptionCancellationMessage(blocked.copy(phase = TranscriptionPhase.SYNTHESIZING)).contains("autres clients"))
+        val synthesis = transcriptionCancellationMessage(blocked.copy(phase = TranscriptionPhase.SYNTHESIZING))
+        assertTrue(synthesis.contains("facturation"))
+        assertTrue(synthesis.contains("arrêt"))
     }
 
     @Test fun `les messages ne proposent pas de recréer les tâches terminales`() {

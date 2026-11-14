@@ -70,10 +70,13 @@ class TranscriptionSettingsForm(
     }
 }
 
-internal fun transcriptionCancellationMessage(task: TranscriptionTask?): String =
-    if (task != null && isLocalTranscriptionAbandon(task))
+internal fun transcriptionCancellationMessage(task: TranscriptionTask?): String = when {
+    task?.phase == TranscriptionPhase.SYNTHESIZING ->
+        "L'arrêt du traitement et de la facturation côté serveur ne peut pas être garanti."
+    task != null && isLocalTranscriptionAbandon(task) ->
         "Cette tâche sera abandonnée localement, sans appel au serveur. L'arrêt côté serveur n'est pas confirmé."
-    else "Si cette tâche est partagée avec d'autres clients du serveur, elle sera annulée pour eux aussi."
+    else -> "Si cette tâche est partagée avec d'autres clients du serveur, elle sera annulée pour eux aussi."
+}
 
 /** Suspensions à corriger et avertissements d'abandon local conservés après annulation. */
 internal fun transcriptionTaskSettingsMessages(tasks: List<TranscriptionTask>): List<String> =

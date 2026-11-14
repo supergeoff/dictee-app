@@ -10,11 +10,11 @@ import android.os.Build
 import androidx.core.net.toUri
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -101,7 +101,6 @@ private data class Live(
 
 private val BLUETOOTH_PERMISSIONS = listOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
 private const val PHONE_FOLDER_LOST = "Dossier du téléphone inaccessible. Choisis-le de nouveau dans Réglages."
-private const val TRANSCRIPTION_POLL_MS = 5_000L
 private const val OUT_OF_RANGE = "Boîtier hors de portée."
 private const val NO_FOLDER = "Aucun dossier choisi"
 private const val WAIT_FOR_TRANSFER = "Attends la fin du transfert pour changer de dossier."
@@ -432,6 +431,7 @@ class AppModel(
         }
     }
 
+    private val transcriptionLoopLock = Any()
     @Volatile private var transcriptionLoop: Job? = null
 
     /**
@@ -445,8 +445,11 @@ class AppModel(
                 announceExclusions(names)
                 val started = transcriptionCoordinator.start(names, request)
                 if (started.isNotEmpty()) {
-                    val loop = scope.launch { followTranscriptions() }
-                    transcriptionLoop = loop
+                    val loop = synchronized(transcriptionLoopLock) {
+                        transcriptionLoop?.takeIf { it.isActive } ?: scope.launch(start = CoroutineStart.LAZY) {
+                            followTranscriptions()
+                        }.also { transcriptionLoop = it; it.start() }
+                    }
                     loop.join()
                 }
             } catch (e: CancellationException) {
@@ -472,11 +475,9 @@ class AppModel(
     }
 
     private suspend fun followTranscriptions() {
-        while (true) {
-            val next = localFlow.transcriptionTasks.filter { !it.phase.isTerminal() && !it.suspended }
-                .minByOrNull { it.recordingName } ?: return
-            if (transcriptionCoordinator.runBounded(next.localId) == RunOutcome.Resume) delay(TRANSCRIPTION_POLL_MS)
-        }
+        val scheduler = TranscriptionSchedule(androidx.work.WorkManager.getInstance(app))
+        val runner = TranscriptionWorkerRunner(localRepository, transcriptionCoordinator, scheduler::cancel)
+        TranscriptionInteractiveRunner(localRepository, transcriptionCoordinator, runner).run()
     }
 
     /** Demande l'annulation de la transcription de [name] ; l'intention est persistée avant tout appel au serveur. */
@@ -486,6 +487,8 @@ class AppModel(
                 .firstOrNull { it.recordingName == name && !it.phase.isTerminal() } ?: return@launch
             try {
                 transcriptionCoordinator.requestCancel(task.localId)
+                val scheduler = TranscriptionSchedule(androidx.work.WorkManager.getInstance(app))
+                TranscriptionWorkerRunner(localRepository, transcriptionCoordinator, scheduler::cancel).retireIfTerminal(task.localId)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

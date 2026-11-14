@@ -36,4 +36,25 @@ class TranscriptionScheduleTest {
         schedule.cancel("local-schedule-test")
         assertEquals(WorkInfo.State.CANCELLED, manager.getWorkInfosForUniqueWork(TranscriptionSchedule.name("local-schedule-test")).get().single().state)
     }
+    @Test fun eachTaskKeepsItsOwnSinglePeriodicRequestAndCancellation() = runBlocking {
+        val first = "local-schedule-first"
+        val second = "local-schedule-second"
+        schedule.enqueue(first); schedule.enqueue(second)
+        schedule.enqueue(first); schedule.enqueue(second)
+        val firstWork = manager.getWorkInfosForUniqueWork(TranscriptionSchedule.name(first)).get()
+        val secondWork = manager.getWorkInfosForUniqueWork(TranscriptionSchedule.name(second)).get()
+        for (work in listOf(firstWork, secondWork)) {
+            assertEquals(1, work.size)
+            assertEquals(WorkInfo.State.ENQUEUED, work.single().state)
+            assertEquals(androidx.work.NetworkType.CONNECTED, work.single().constraints.requiredNetworkType)
+            assertEquals(15 * 60 * 1000L, work.single().periodicityInfo!!.repeatIntervalMillis)
+        }
+        assertNotEquals(firstWork.single().id, secondWork.single().id)
+        schedule.cancel(first)
+        assertEquals(WorkInfo.State.CANCELLED, manager.getWorkInfosForUniqueWork(TranscriptionSchedule.name(first)).get().single().state)
+        assertEquals(WorkInfo.State.ENQUEUED, manager.getWorkInfosForUniqueWork(TranscriptionSchedule.name(second)).get().single().state)
+        schedule.cancel(second)
+        assertEquals(WorkInfo.State.CANCELLED, manager.getWorkInfosForUniqueWork(TranscriptionSchedule.name(second)).get().single().state)
+    }
+
 }
