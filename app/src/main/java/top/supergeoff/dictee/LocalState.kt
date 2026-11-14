@@ -291,6 +291,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
         } ?: JSONObject.NULL)
         .put("attempts", work.attempts).put("nextAttemptAtMillis", work.nextAttemptAtMillis ?: JSONObject.NULL)
         .put("stagedSha256", work.stagedSha256 ?: JSONObject.NULL).put("suspensionReason", work.suspensionReason ?: JSONObject.NULL)
+        .put("promotionStarted", work.promotionStarted).put("previousMdSha256", work.previousMdSha256 ?: JSONObject.NULL)
 
     private fun readSynthesisSettings(o: JSONObject): SynthesisSettings {
         val defaults = SynthesisSettings()
@@ -316,7 +317,8 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
         }
         val work = SynthesisWork(phase, o.getString("mdName"), o.getBoolean("replaceMd"), context,
             o.getInt("attempts"), if (o.isNull("nextAttemptAtMillis")) null else o.getLong("nextAttemptAtMillis"),
-            o.stringOrNull("stagedSha256"), o.stringOrNull("suspensionReason"))
+            o.stringOrNull("stagedSha256"), o.stringOrNull("suspensionReason"),
+            o.booleanOr("promotionStarted", false), o.stringOrNull("previousMdSha256"))
         if (!hasValidSynthesisContext(work)) throw JSONException("Contexte de synthèse absent pour la phase $phaseName")
         if (isSafeStoredSynthesisAddress(work)) return work
         if (phase == SynthesisPhase.COMPLETED || phase == SynthesisPhase.CANCELLED)

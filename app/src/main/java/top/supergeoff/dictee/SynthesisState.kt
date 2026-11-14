@@ -23,6 +23,8 @@ data class SynthesisWork(
     val nextAttemptAtMillis: Long?,
     val stagedSha256: String?,
     val suspensionReason: String?,
+    val promotionStarted: Boolean = false,
+    val previousMdSha256: String? = null,
 )
 
 internal fun hasValidSynthesisContext(work: SynthesisWork): Boolean = work.context != null ||

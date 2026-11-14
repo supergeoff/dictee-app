@@ -155,18 +155,22 @@ class AppModel(
             verifyAudio = { task -> withContext(Dispatchers.IO) {
                 TranscriptionAudio.matches(PhoneFolder(app, task.folderUri.toUri()), task)
             } },
-            prepare = { names -> withContext(Dispatchers.IO) {
+            prepareRequested = { names, request -> withContext(Dispatchers.IO) {
                 val state = localRepository.awaitInitialized()
                 val folder = state.phoneTreeUri ?: throw PhoneStoreException(PHONE_FOLDER_LOST)
                 TranscriptionPreparation.prepare(PhoneFolder(app, folder.toUri()), folder,
-                    state.transcriptionSettings, state.errors, names) { java.util.UUID.randomUUID().toString() }
+                    state.transcriptionSettings, state.errors, names, state.synthesisSettings, request) { java.util.UUID.randomUUID().toString() }
             } },
+            synthesisClient = synthesisClient,
+            synthesisStorage = SynthesisStorage(File(app.filesDir, "synthesis")),
+            phoneStore = { folder -> PhoneFolder(app, folder.toUri()) },
+            synthesisCredentialAccessible = { ref -> runCatching { synthesisCredentials.read(ref).isNotBlank() }.getOrDefault(false) },
             schedule = scheduler::enqueue,
             saveVtt = { task, bytes -> withContext(Dispatchers.IO) {
                 val spool = java.io.File(app.cacheDir, "vtt-" + java.util.UUID.randomUUID())
                 try {
                     spool.writeBytes(bytes)
-                    PhoneFolder(app, task.folderUri.toUri()).write(task.vttName, spool)
+                    PhoneFolder(app, task.folderUri.toUri()).writeGuarded(task.vttName, spool, task.replaceVtt) { it() }
                 } catch (e: java.io.IOException) {
                     throw PhoneStoreException("Écriture impossible dans le dossier du téléphone.", e)
                 } finally { spool.delete() }
@@ -434,12 +438,12 @@ class AppModel(
      * Lance la transcription de [names] (null : tout ce qui est éligible). La planification WorkManager est confirmée avant
      * la tâche durable et le service ; la boucle interactive suit ensuite les tâches jusqu'à leur fin ou leur suspension.
      */
-    fun transcribe(names: Set<String>?) {
+    fun transcribe(names: Set<String>?, request: RequestedWork = RequestedWork.MISSING) {
         scope.launch {
             jobs.incrementAndGet()
             try {
                 announceExclusions(names)
-                val started = transcriptionCoordinator.start(names)
+                val started = transcriptionCoordinator.start(names, request)
                 if (started.isNotEmpty()) {
                     val loop = scope.launch { followTranscriptions() }
                     transcriptionLoop = loop

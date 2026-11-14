@@ -49,7 +49,8 @@ class LocalStateTest {
         assertEquals(secret, credentials.read(ref))
         val context = SynthesisContext("https://example.invalid/v1", ref, "synthetic-model", "template {{type}}",
             PromptMetadata("Note", "date", "2 min"), "prompt résolu", "a".repeat(64))
-        val work = SynthesisWork(SynthesisPhase.CALLING, "Note.md", false, context, 2, 120000L, "b".repeat(64), null)
+        val work = SynthesisWork(SynthesisPhase.CALLING, "Note.md", false, context, 2, 120000L, "b".repeat(64), null,
+            promotionStarted = true, previousMdSha256 = "c".repeat(64))
         val provenance = SynthesisProvenance("content://test/tree", "Note.md", "synthetic-model", "a".repeat(64), "b".repeat(64))
         val state = LocalState(transcriptionTasks = listOf(sampleTask().copy(synthesis = work, replaceVtt = false)),
             synthesisSettings = SynthesisSettings("https://example.invalid/v1", "synthetic-model", ref, "template"),
@@ -59,6 +60,20 @@ class LocalStateTest {
         assertEquals(4, org.json.JSONObject(file().readText()).getInt("version"))
         assertEquals(state, store.load())
         assertFalse(file().readText().contains(secret))
+    }
+
+    @Test
+    fun oldV4SynthesisDefaultsPromotionMarker() {
+        val context = SynthesisContext("https://example.invalid/v1", "ref", "model", "template",
+            PromptMetadata("Note", "date", "durée"), "prompt", "a".repeat(64))
+        val work = SynthesisWork(SynthesisPhase.SAVE_PENDING, "Note.md", false, context, 1, null, "b".repeat(64), null)
+        val store = LocalStateStore(file())
+        store.save(LocalState(transcriptionTasks = listOf(sampleTask().copy(synthesis = work))))
+        val json = org.json.JSONObject(file().readText())
+        val synthesis = json.getJSONArray("transcriptionTasks").getJSONObject(0).getJSONObject("synthesis")
+        synthesis.remove("promotionStarted"); synthesis.remove("previousMdSha256")
+        file().writeText(json.toString())
+        assertEquals(work, store.load().transcriptionTasks.single().synthesis)
     }
 
     @Test

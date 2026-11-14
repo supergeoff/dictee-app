@@ -319,7 +319,9 @@ class TranscriptionCoordinatorTest {
         val client = FakeClient().apply { onCancel = { ServerTask("server-1", ServerStatus.CANCELLED, null, null) } }
         coordinator(LocalStateRepository(store), client).requestCancel("local-1")
         assertEquals(0, client.cancels + client.submissions + client.reads)
-        assertEquals(task, store.load().transcriptionTasks.single())
+        val cancelled = store.load().transcriptionTasks.single()
+        assertEquals(TranscriptionPhase.CANCELLED, cancelled.phase)
+        assertEquals(SynthesisPhase.CANCELLED, cancelled.synthesis!!.phase)
     }
 
     @Test fun `cancel intent is durable before the network call and server confirmation ends the task`() = runBlocking {
