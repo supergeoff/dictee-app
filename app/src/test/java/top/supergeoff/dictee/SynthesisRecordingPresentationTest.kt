@@ -34,6 +34,27 @@ class SynthesisRecordingPresentationTest {
         assertTrue(message.contains(running.name))
     }
 
+    @Test fun promotionChangesSnapshotRevisionEvenWhenNamesAndSizesMatch() {
+        val snapshot = PhoneSnapshot(listOf(PhoneFile("Note-20261101000000.vtt", 42)), ok = true)
+        val promoted = snapshot.afterPromotion()
+        assertEquals(snapshot.files, promoted.files)
+        assertNotEquals(snapshot.revision, promoted.revision)
+    }
+
+    @Test fun documentActionsUseCreationUnlessMdIsAlreadyPresent() {
+        assertEquals(RequestedWork.MISSING, synthesisDocumentRequest(mdPresent = false))
+        assertEquals(RequestedWork.REDO_MD, synthesisDocumentRequest(mdPresent = true))
+    }
+
+    @Test fun noticeDistinguishesCallingDelayedRetryAndSaving() {
+        val work = SynthesisWork(SynthesisPhase.CALLING, "Note.md", false, null, 1, 60_000, null, null)
+        val task = TranscriptionTask("id", "20261101000000", "Note.mp3", "Note.vtt", "content://folder", "", "", "", "", "", TranscriptionPhase.SYNTHESIZING, synthesis = work)
+        assertEquals("Synthèse en cours. Le MD sera enregistré dès réception.", synthesisProgressMessage(task))
+        assertEquals("Relance automatique prévue. La tâche est conservée.", synthesisProgressMessage(task.copy(synthesis = work.copy(phase = SynthesisPhase.READY))))
+        assertEquals("Enregistrement de la synthèse en cours.", synthesisProgressMessage(task.copy(synthesis = work.copy(phase = SynthesisPhase.SAVE_PENDING, nextAttemptAtMillis = null))))
+        assertEquals("Synthèse en cours. Le MD sera enregistré dès réception.", synthesisProgressMessage(task.copy(synthesis = work.copy(phase = SynthesisPhase.READY, nextAttemptAtMillis = null))))
+    }
+
     @Test fun selectionCountUsesMissingMatrixAndNeverReplaces() {
         val rows = listOf(
             recording("20261101000000", FileKind.MP3),

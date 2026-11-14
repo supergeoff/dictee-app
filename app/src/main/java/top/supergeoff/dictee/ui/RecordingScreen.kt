@@ -71,6 +71,8 @@ import top.supergeoff.dictee.TranscriptionTask
 import top.supergeoff.dictee.UiState
 import top.supergeoff.dictee.isTerminal
 import top.supergeoff.dictee.transcriptionCancellationMessage
+import top.supergeoff.dictee.synthesisDocumentRequest
+import top.supergeoff.dictee.synthesisProgressMessage
 
 /**
  * Fiche d'un enregistrement : titre, durée et état dans l'en-tête, le lecteur du MP3 du téléphone, puis le fichier et son dossier.
@@ -131,7 +133,7 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
             }
             val md = recording.phoneFiles[FileKind.MD]
             val vtt = recording.phoneFiles[FileKind.VTT]
-            val document by produceState<Result<SynthesisDocument>?>(null, md, vtt, ui.local.synthesisProvenance, ui.local.transcriptionTasks, ui.refreshing) {
+            val document by produceState<Result<SynthesisDocument>?>(null, md, vtt, ui.local.synthesisProvenance, ui.local.transcriptionTasks, ui.refreshing, ui.phoneRevision) {
                 value = null
                 value = if (md == null) null else withContext(Dispatchers.IO) { model.readSynthesis(md.fileName, vtt?.fileName) }
             }
@@ -146,10 +148,11 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
             if (current?.status == ProvenanceStatus.STALE) {
                 Notice("Cette synthèse utilise l'ancien VTT. Le MD précédent reste lisible jusqu'à son remplacement.")
             }
-            RecordingDocuments(markdown = current?.markdown, provenanceLabel = label, canCreate = vtt != null && canRedoMd,
-                onCreate = { model.transcribe(setOf(name), RequestedWork.REDO_MD) }, mdPresent = md != null, mdError = document?.isFailure == true,
+            val documentRequest = synthesisDocumentRequest(mdPresent = md != null)
+            RecordingDocuments(markdown = current?.markdown, provenanceLabel = label, canCreate = vtt != null && canRequest(documentRequest),
+                onCreate = { model.transcribe(setOf(name), documentRequest) }, mdPresent = md != null, mdError = document?.isFailure == true,
                 hasVtt = vtt != null, stale = current?.status == ProvenanceStatus.STALE) {
-                if (vtt == null) Notice("La transcription n'est pas encore disponible.") else Transcript(model, vtt, playback)
+                if (vtt == null) Notice("La transcription n'est pas encore disponible.") else Transcript(model, vtt, playback, ui.phoneRevision)
             }
         }
     }
@@ -163,9 +166,8 @@ internal fun SynthesisTaskNotice(task: TranscriptionTask?, onRetry: (String) -> 
             (work.stagedSha256 != null || (!work.context.vttSha256.isNullOrBlank() && !work.context.systemPrompt.isNullOrBlank()))
         Notice(work.suspensionReason ?: "La synthèse est suspendue.", NoticeTone.Destructive,
             action = if (resumable) ({ CompactButton("Relancer le MD") { onRetry(task.localId) } }) else null)
-    } else if (task.phase == TranscriptionPhase.SYNTHESIZING) {
-        Notice(if (work.nextAttemptAtMillis != null) "Relance automatique prévue. La tâche est conservée."
-            else "Synthèse en cours. Le MD sera enregistré dès réception.")
+    } else {
+        synthesisProgressMessage(task)?.let { Notice(it) }
     }
 }
 
@@ -291,9 +293,9 @@ private fun MissingMp3() {
 
 /** Segments du VTT : un toucher place la lecture du MP3 au début du segment et la lance. Un fichier illisible n'affecte que cette carte. */
 @Composable
-private fun Transcript(model: AppModel, vtt: PhoneFile, playback: Playback?) {
+private fun Transcript(model: AppModel, vtt: PhoneFile, playback: Playback?, phoneRevision: Long) {
     val colors = Dictee.colors
-    val cues by produceState<Result<List<VttCue>>?>(null, vtt.fileName, vtt.size) {
+    val cues by produceState<Result<List<VttCue>>?>(null, vtt.fileName, vtt.size, phoneRevision) {
         value = withContext(Dispatchers.IO) { model.readTranscript(vtt.fileName) }
     }
     Column(modifier = Modifier.fillMaxWidth().card().padding(vertical = 4.dp)) {

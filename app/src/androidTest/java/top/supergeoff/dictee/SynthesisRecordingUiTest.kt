@@ -8,6 +8,7 @@ import androidx.compose.material3.Text
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
@@ -87,6 +88,19 @@ class SynthesisRecordingUiTest {
         compose.onNodeWithText("Trois tentatives ont échoué.").assertIsDisplayed()
         compose.onNodeWithText("Relancer le MD").performClick()
         compose.runOnIdle { assertEquals("id-synthétique", retried) }
+    }
+
+    @Test fun taskNoticeShowsCallingRetryAndSavingAsDistinctStates() {
+        val work = SynthesisWork(SynthesisPhase.CALLING, "Note.md", false, null, 1, 60_000, null, null)
+        val task = TranscriptionTask("id", "20261101000000", "Note.mp3", "Note.vtt", "content://folder", "", "", "", "", "", TranscriptionPhase.SYNTHESIZING, synthesis = work)
+        val current = mutableStateOf(task)
+        compose.setContent { DicteeTheme(false) { SynthesisTaskNotice(current.value) {} } }
+        compose.onNodeWithText("Synthèse en cours. Le MD sera enregistré dès réception.").assertIsDisplayed()
+        compose.onNodeWithText("Relance automatique prévue. La tâche est conservée.").assertDoesNotExist()
+        compose.runOnIdle { current.value = task.copy(synthesis = work.copy(phase = SynthesisPhase.READY)) }
+        compose.onNodeWithText("Relance automatique prévue. La tâche est conservée.").assertIsDisplayed()
+        compose.runOnIdle { current.value = task.copy(synthesis = work.copy(phase = SynthesisPhase.SAVE_PENDING, nextAttemptAtMillis = null)) }
+        compose.onNodeWithText("Enregistrement de la synthèse en cours.").assertIsDisplayed()
     }
 
     @Test fun renderedMarkdownShowsModelInLightTheme() {

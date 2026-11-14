@@ -42,6 +42,7 @@ class TranscriptionCoordinator(
     private val clock: () -> Long = System::currentTimeMillis,
     private val promotionGuard: ReentrantLock = ReentrantLock(),
     private val prepareRequested: suspend (Set<String>?, RequestedWork, Set<String>) -> List<TranscriptionTask> = { names, _, _ -> prepare(names) },
+    private val onFilesPromoted: suspend (String) -> Unit = {},
 ) {
     private val mutex = Mutex()
     // Accès protégé par promotionGuard : l'enregistrement ne peut manquer une annulation durable.
@@ -317,6 +318,7 @@ class TranscriptionCoordinator(
                 } }
                 if (!promoted) return RunOutcome.Resume
             }
+            notifyFilesPromoted(task.folderUri)
         } catch (e: CancellationException) {
             throw e
         } catch (e: PhoneStoreException) {
@@ -471,6 +473,7 @@ class TranscriptionCoordinator(
         val context = work.context ?: return suspendSynthesis(task.localId, "Contexte de synthèse absent.")
         val expected = work.stagedSha256 ?: return suspendSynthesis(task.localId, "Synthèse temporaire absente.")
         val phone = phoneStore(task.folderUri)
+        var refreshCompleted = false
         try {
             withContext(Dispatchers.IO) {
                 if (TranscriptionAudio.sha256(phone, task.vttName) != context.vttSha256) throw PhoneStoreException("Le VTT a changé.")
@@ -500,6 +503,10 @@ class TranscriptionCoordinator(
                         promotionObserved = true
                     } }
                 }
+                if (promotionObserved) {
+                    notifyFilesPromoted(task.folderUri)
+                    refreshCompleted = true
+                }
                 promotionGuard.withLock {
                     if (TranscriptionAudio.sha256(phone, task.vttName) != context.vttSha256 ||
                         TranscriptionAudio.sha256(phone, work.mdName) != expected) throw PhoneStoreException("Les fichiers ont changé.")
@@ -517,9 +524,16 @@ class TranscriptionCoordinator(
                     checkNotNull(synthesisStorage).discard(task.localId)
                 }
             }
+            if (!refreshCompleted) notifyFilesPromoted(task.folderUri)
         } catch (e: CancellationException) { throw e }
           catch (_: Exception) { return suspendSynthesis(task.localId, "Écriture de la synthèse impossible ou fichier modifié. Vérifie le dossier.") }
         return RunOutcome.Finished
+    }
+
+    private suspend fun notifyFilesPromoted(folder: String) {
+        try { onFilesPromoted(folder) }
+        catch (e: CancellationException) { throw e }
+        catch (_: Exception) { /* La lecture de la liste ne doit pas modifier le résultat de la promotion. */ }
     }
 
     private suspend fun update(localId: String, change: (TranscriptionTask) -> TranscriptionTask): TranscriptionTask {

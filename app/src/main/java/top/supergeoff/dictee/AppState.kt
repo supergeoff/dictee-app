@@ -49,6 +49,7 @@ data class UiState(
     val transcription: Progress? = null,
     val phoneFolder: String? = null,      // chemin affiché, null sans dossier
     val phoneFolderOk: Boolean = false,
+    val phoneRevision: Long = 0,
     val drive: DriveListing? = null,      // null si Drive est désactivé ou illisible
     val message: String? = null,
 ) {
@@ -82,7 +83,9 @@ sealed class UiRequest {
 }
 
 /** Dossier du téléphone tel que lu : ses fichiers, et s'il répond. */
-private data class PhoneSnapshot(val files: List<PhoneFile> = emptyList(), val ok: Boolean = false)
+internal data class PhoneSnapshot(val files: List<PhoneFile> = emptyList(), val ok: Boolean = false, val revision: Long = 0) {
+    fun afterPromotion(): PhoneSnapshot = copy(revision = revision + 1)
+}
 
 /** Ce qui n'est pas dans `state.json` : travaux en cours avec leur avancement, et message à afficher. */
 private data class Live(
@@ -171,6 +174,7 @@ class AppModel(
                     throw PhoneStoreException("Écriture impossible dans le dossier du téléphone.", e)
                 } finally { spool.delete() }
             } },
+            onFilesPromoted = { folder -> readPhoneAfterPromotion(folder) },
             launch = { startWork() })
     }
 
@@ -807,11 +811,27 @@ class AppModel(
         }
     }
 
+    private suspend fun readPhoneAfterPromotion(folder: String) {
+        localRepository.awaitInitialized()
+        phoneMutex.withLock {
+            if (localFlow.phoneTreeUri != folder) return@withLock
+            val snapshot = try {
+                withContext(Dispatchers.IO) { readFolder(folder.toUri(), phoneFlow.value) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                journal.error(Source.FS, "Lecture du dossier après promotion : ${reasonOf(e)}")
+                phoneFlow.value.copy(ok = false)
+            }
+            if (localFlow.phoneTreeUri == folder) phoneFlow.value = snapshot.afterPromotion()
+        }
+    }
+
     /** Fichiers du dossier ; s'il ne répond pas, la dernière lecture marquée inaccessible, avec l'erreur au journal. */
     private fun readFolder(uri: Uri, last: PhoneSnapshot): PhoneSnapshot =
         try {
             if (!PhoneFolder.hasAccess(app, uri)) throw PhoneStoreException(PHONE_FOLDER_LOST)
-            PhoneSnapshot(PhoneFolder(app, uri).list(), ok = true)
+            last.copy(files = PhoneFolder(app, uri).list(), ok = true)
         } catch (e: PhoneStoreException) {
             journal.error(Source.FS, e.journalText)
             last.copy(ok = false)
@@ -1008,6 +1028,7 @@ class AppModel(
             transcription = transcription?.second,
             phoneFolder = local.phoneTreeUri?.let { runCatching { PhoneFolder.displayPath(it.toUri()) }.getOrDefault(it) },
             phoneFolderOk = phone.ok,
+            phoneRevision = phone.revision,
             drive = listing,
             message = live.message,
         )

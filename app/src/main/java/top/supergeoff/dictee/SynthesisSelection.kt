@@ -2,6 +2,21 @@ package top.supergeoff.dictee
 
 enum class RequestedWork { MISSING, REDO_VTT_AND_MD, REDO_MD }
 
+internal fun synthesisDocumentRequest(mdPresent: Boolean): RequestedWork =
+    if (mdPresent) RequestedWork.REDO_MD else RequestedWork.MISSING
+
+internal fun synthesisProgressMessage(task: TranscriptionTask): String? {
+    if (task.phase != TranscriptionPhase.SYNTHESIZING) return null
+    val work = task.synthesis ?: return null
+    return when (work.phase) {
+        SynthesisPhase.READY -> if (work.nextAttemptAtMillis != null) "Relance automatique prévue. La tâche est conservée."
+            else "Synthèse en cours. Le MD sera enregistré dès réception."
+        SynthesisPhase.CALLING -> "Synthèse en cours. Le MD sera enregistré dès réception."
+        SynthesisPhase.SAVE_PENDING -> "Enregistrement de la synthèse en cours."
+        else -> null
+    }
+}
+
 data class FilePlan(
     val recording: Recording,
     val makeVtt: Boolean,
