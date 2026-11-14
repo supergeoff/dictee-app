@@ -43,7 +43,7 @@ class SynthesisIntegrationTest {
             verifyAudio = { true }, schedule = {}, synthesisClient = md, synthesisStorage = SynthesisStorage(File(tmp.root, "stage")),
             phoneStore = { phone }, synthesisCredentialAccessible = { true },
             saveVtt = { task, bytes -> phone.files[task.vttName] = bytes },
-            prepareRequested = { names, request -> TranscriptionPreparation.prepare(phone, "content://folder", sttSettings, emptyMap(), names, mdSettings, request) { "id-${id++}" } })
+            prepareRequested = { names, request, active -> TranscriptionPreparation.prepare(phone, "content://folder", sttSettings, emptyMap(), names, mdSettings, request, active) { "id-${id++}" } })
         val first = coordinator.start(setOf("20261111120000"), RequestedWork.REDO_VTT_AND_MD).single()
         coordinator.runBounded(first)
         assertNull(sent)
@@ -79,8 +79,8 @@ class SynthesisIntegrationTest {
         val coordinator = TranscriptionCoordinator(repo, stt, TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
             verifyAudio = { true }, schedule = {}, synthesisClient = md, synthesisStorage = SynthesisStorage(File(tmp.root, "stage")),
             phoneStore = { phone }, synthesisCredentialAccessible = { true }, saveVtt = { task, bytes -> phone.files[task.vttName] = bytes },
-            prepareRequested = { names, request -> TranscriptionPreparation.prepare(phone, "content://folder", sttSettings, emptyMap(), names,
-                if (configured) mdSettings else SynthesisSettings(), request) { "id-${id++}" } })
+            prepareRequested = { names, request, active -> TranscriptionPreparation.prepare(phone, "content://folder", sttSettings, emptyMap(), names,
+                if (configured) mdSettings else SynthesisSettings(), request, active) { "id-${id++}" } })
         val first = coordinator.start(null).single()
         coordinator.runBounded(first)
         assertArrayEquals(validVtt, phone.files["Note-20261111120000.vtt"])
@@ -93,15 +93,116 @@ class SynthesisIntegrationTest {
         assertEquals(1, mdCalls)
     }
 
-    @Test fun existingVttDoesNotRequireSttSettings() {
+    @Test fun existingVttDoesNotRequireSttSettings() = runBlocking {
         val phone = MemoryStore().apply {
             files["Note-20261111120000.mp3"] = "audio synthétique".toByteArray()
-            files["Note-20261111120000.vtt"] = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nBonjour\n".toByteArray()
+            files["Note-20261111120000.vtt"] = validVtt
         }
-        val tasks = TranscriptionPreparation.prepare(phone, "content://folder", TranscriptionSettings(), emptyMap(), null,
-            SynthesisSettings("https://example.invalid/v1", "model", "ref"), RequestedWork.MISSING) { "id" }
-        assertEquals(1, tasks.size)
-        assertEquals(TranscriptionPhase.SYNTHESIZING, tasks.single().phase)
-        assertEquals(SynthesisPhase.READY, tasks.single().synthesis!!.phase)
+        val store = LocalStateStore(File(tmp.root, "state.json"))
+        val repo = LocalStateRepository(store)
+        val stt = object : TranscriptionClient {
+            override suspend fun submit(task: TranscriptionTask): SubmitResult = error("unexpected STT")
+            override suspend fun get(task: TranscriptionTask): ServerTask = error("unexpected STT")
+            override suspend fun cancel(task: TranscriptionTask): ServerTask = error("unexpected STT")
+            override suspend fun test(settings: TranscriptionSettings) = Unit
+        }
+        var calls = 0
+        val md = object : SynthesisClient {
+            override suspend fun complete(context: SynthesisContext, vtt: ByteArray): ByteArray {
+                calls++; assertArrayEquals(validVtt, vtt); return "md".toByteArray()
+            }
+            override suspend fun test(settings: SynthesisSettings, secret: String) = Unit
+        }
+        val coordinator = TranscriptionCoordinator(repo, stt, TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
+            verifyAudio = { error("unexpected audio verification") }, schedule = {}, synthesisClient = md,
+            synthesisStorage = SynthesisStorage(File(tmp.root, "stage")), phoneStore = { phone }, synthesisCredentialAccessible = { true },
+            prepareRequested = { names, request, active -> TranscriptionPreparation.prepare(phone, "content://folder", TranscriptionSettings(),
+                emptyMap(), names, mdSettings, request, active) { "id" } })
+        val id = coordinator.start(null).single()
+        assertEquals(RunOutcome.Finished, coordinator.runBounded(id))
+        assertEquals(1, calls)
+        assertEquals("md", phone.files["Note-20261111120000.md"]!!.toString(Charsets.UTF_8))
     }
+
+    @Test fun existingVttSnapshotUsesSameBytesForPromptAndHash() {
+        val first = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n<v Alice>Bonjour\n".toByteArray()
+        val second = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n<v Bob>Bonjour\n".toByteArray()
+        val memory = MemoryStore().apply {
+            files["Note-20261111120000.mp3"] = "audio".toByteArray()
+            files["Note-20261111120000.vtt"] = first
+        }
+        var opens = 0
+        val phone = object : PhoneStore by memory {
+            override fun open(fileName: String): java.io.InputStream = if (fileName.endsWith(".vtt")) {
+                (++opens).let { if (it == 1) first else second }.inputStream()
+            } else memory.open(fileName)
+        }
+        val task = TranscriptionPreparation.prepare(phone, "content://folder", TranscriptionSettings(), emptyMap(), null,
+            mdSettings.copy(prompt = "{{intervenants}}"), RequestedWork.MISSING) { "id" }.single()
+        assertTrue(task.synthesis!!.context!!.systemPrompt!!.contains("Alice"))
+        assertEquals(TranscriptionAudio.sha256(memory, "Note-20261111120000.vtt"), task.synthesis!!.context!!.vttSha256)
+        assertEquals(1, opens)
+    }
+
+    @Test fun savingResumeReconcilesMatchingVttWithoutReplacingDifferentVtt() = runBlocking {
+        val phone = MemoryStore().apply { files["Note-20261111120000.mp3"] = "audio".toByteArray() }
+        val initial = TranscriptionPreparation.prepare(phone, "content://folder", sttSettings, emptyMap(), null,
+            mdSettings, RequestedWork.MISSING) { "id" }.single().copy(phase = TranscriptionPhase.SAVING, serverId = "server")
+        val store = LocalStateStore(File(tmp.root, "state.json"))
+        val client = object : TranscriptionClient {
+            override suspend fun get(task: TranscriptionTask) = ServerTask("server", ServerStatus.COMPLETED, 1.0, validVtt)
+            override suspend fun submit(task: TranscriptionTask): SubmitResult = error("unexpected")
+            override suspend fun cancel(task: TranscriptionTask): ServerTask = error("unexpected")
+            override suspend fun test(settings: TranscriptionSettings) = Unit
+        }
+        var writes = 0
+        var crashAfterPromotion = true
+        fun coordinator(repo: LocalStateRepository) = TranscriptionCoordinator(repo, client, TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
+            verifyAudio = { true }, phoneStore = { phone }, saveVtt = { task, bytes ->
+                writes++; if (phone.files.containsKey(task.vttName)) throw PhoneStoreException("existe")
+                phone.files[task.vttName] = bytes
+                if (crashAfterPromotion) { crashAfterPromotion = false; throw java.io.IOException("crash synthétique") }
+            })
+        store.save(LocalState(transcriptionTasks = listOf(initial)))
+        assertEquals(RunOutcome.Resume, coordinator(LocalStateRepository(store)).runBounded("id"))
+        assertEquals(TranscriptionPhase.SAVING, store.load().transcriptionTasks.single().phase)
+        assertArrayEquals(validVtt, phone.files[initial.vttName])
+        assertEquals(RunOutcome.Resume, coordinator(LocalStateRepository(store)).runBounded("id"))
+        assertEquals(TranscriptionPhase.SYNTHESIZING, store.load().transcriptionTasks.single().phase)
+        assertEquals(1, writes)
+        phone.files[initial.vttName] = "extérieur".toByteArray()
+        store.save(LocalState(transcriptionTasks = listOf(initial)))
+        assertEquals(RunOutcome.Suspended, coordinator(LocalStateRepository(store)).runBounded("id"))
+        assertEquals("extérieur", phone.files[initial.vttName]!!.toString(Charsets.UTF_8))
+        phone.files[initial.vttName] = validVtt
+        store.save(LocalState(transcriptionTasks = listOf(initial.copy(replaceVtt = true))))
+        assertEquals(RunOutcome.Resume, coordinator(LocalStateRepository(store)).runBounded("id"))
+        assertEquals(TranscriptionPhase.SYNTHESIZING, store.load().transcriptionTasks.single().phase)
+        assertEquals(2, writes)
+    }
+
+    @Test fun activeSttExcludedBeforeValidationAllowsOtherMd() = runBlocking {
+        val phone = MemoryStore().apply {
+            files["Note-20261111120000.mp3"] = "audio".toByteArray()
+            files["Note-20261111130000.mp3"] = "audio".toByteArray()
+            files["Note-20261111130000.vtt"] = validVtt
+        }
+        val active = TranscriptionPreparation.prepare(phone, "content://folder", sttSettings, emptyMap(), setOf("20261111120000"),
+            mdSettings, RequestedWork.MISSING) { "active" }.single()
+        val store = LocalStateStore(File(tmp.root, "state.json"))
+        store.save(LocalState(transcriptionTasks = listOf(active)))
+        val repo = LocalStateRepository(store)
+        val stt = object : TranscriptionClient {
+            override suspend fun get(task: TranscriptionTask): ServerTask = error("unexpected")
+            override suspend fun submit(task: TranscriptionTask): SubmitResult = error("unexpected")
+            override suspend fun cancel(task: TranscriptionTask): ServerTask = error("unexpected")
+            override suspend fun test(settings: TranscriptionSettings) = Unit
+        }
+        val coordinator = TranscriptionCoordinator(repo, stt, TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
+            verifyAudio = { true }, schedule = {}, prepareRequested = { names, request, active ->
+                TranscriptionPreparation.prepare(phone, "content://folder", TranscriptionSettings(), emptyMap(), names, mdSettings, request, active) { "other" }
+            })
+        assertEquals(listOf("other"), coordinator.start(null))
+    }
+
 }

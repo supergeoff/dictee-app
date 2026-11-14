@@ -17,6 +17,9 @@ object TranscriptionAudio {
         return digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
     }
 
+    fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(bytes)
+        .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+
     /** Un MP3 absent ou illisible ne doit pas être envoyé. */
     fun matches(store: PhoneStore, task: TranscriptionTask): Boolean =
         try { sha256(store, task.mp3Name) == task.mp3Sha256 } catch (_: Exception) { false }

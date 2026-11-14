@@ -27,6 +27,15 @@ class SynthesisStorage(private val privateDir: File) {
         }
     }
 
+    /** Un stage publié atomiquement reste récupérable si state.json n'a pas été écrit. */
+    fun stagedSha256(localId: String): String? {
+        val target = file(localId)
+        clearTemporaryFiles(localId)
+        if (!target.exists()) return null
+        if (!target.isFile) throw IOException("Synthèse privée inaccessible")
+        return sha256(target)
+    }
+
     fun staged(localId: String, expectedSha256: String): File {
         val target = file(localId)
         clearTemporaryFiles(localId)

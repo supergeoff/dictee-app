@@ -155,11 +155,11 @@ class AppModel(
             verifyAudio = { task -> withContext(Dispatchers.IO) {
                 TranscriptionAudio.matches(PhoneFolder(app, task.folderUri.toUri()), task)
             } },
-            prepareRequested = { names, request -> withContext(Dispatchers.IO) {
+            prepareRequested = { names, request, active -> withContext(Dispatchers.IO) {
                 val state = localRepository.awaitInitialized()
                 val folder = state.phoneTreeUri ?: throw PhoneStoreException(PHONE_FOLDER_LOST)
                 TranscriptionPreparation.prepare(PhoneFolder(app, folder.toUri()), folder,
-                    state.transcriptionSettings, state.errors, names, state.synthesisSettings, request) { java.util.UUID.randomUUID().toString() }
+                    state.transcriptionSettings, state.errors, names, state.synthesisSettings, request, active) { java.util.UUID.randomUUID().toString() }
             } },
             synthesisClient = synthesisClient,
             synthesisStorage = SynthesisStorage(File(app.filesDir, "synthesis")),

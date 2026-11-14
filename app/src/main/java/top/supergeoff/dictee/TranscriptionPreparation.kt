@@ -14,10 +14,10 @@ internal object TranscriptionPreparation {
     fun prepare(
         phone: PhoneStore, folderUri: String, settings: TranscriptionSettings,
         errors: Map<String, Map<Step, String>>, selectedNames: Set<String>?,
-        synthesisSettings: SynthesisSettings, request: RequestedWork, newId: (String) -> String,
+        synthesisSettings: SynthesisSettings, request: RequestedWork, activeNames: Set<String> = emptySet(), newId: (String) -> String,
     ): List<TranscriptionTask> {
         val recordings = Recordings.merge(emptyList(), phone.list(), null, errors, Busy())
-        val (plans, _) = SynthesisSelection.plan(recordings, selectedNames, errors, emptySet(), request)
+        val (plans, _) = SynthesisSelection.plan(recordings, selectedNames, errors, activeNames, request)
         return plans.map { plan ->
             prepare(plan, settings)
             val recording = plan.recording
@@ -35,7 +35,7 @@ internal object TranscriptionPreparation {
             val ready = if (!plan.makeVtt && context != null) {
                 val bytes = phone.open(vtt).use { it.readBytes() }
                 val values = SynthesisPrompt.variables(recording, bytes)
-                context.copy(systemPrompt = SynthesisPrompt.render(context.promptTemplate, values), vttSha256 = TranscriptionAudio.sha256(phone, vtt))
+                context.copy(systemPrompt = SynthesisPrompt.render(context.promptTemplate, values), vttSha256 = TranscriptionAudio.sha256(bytes))
             } else context
             val reason = if (context == null) "Configure la synthèse puis crée explicitement un travail MD." else null
             val work = if (!plan.makeMd) null else SynthesisWork(

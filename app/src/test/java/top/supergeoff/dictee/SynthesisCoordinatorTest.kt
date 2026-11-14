@@ -45,9 +45,9 @@ class SynthesisCoordinatorTest {
         val work = SynthesisWork(SynthesisPhase.READY, "Note-20261111120000.md", false, context, 0, null, null, null)
         return TranscriptionTask("id", "20261111120000", "Note-20261111120000.mp3", "Note-20261111120000.vtt", "content://folder", "", "", "", "", "", TranscriptionPhase.SYNTHESIZING, synthesis = work)
     }
-    private fun coordinator(repo: LocalStateRepository) = TranscriptionCoordinator(repo, stt, TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
+    private fun coordinator(repo: LocalStateRepository, guard: java.util.concurrent.locks.ReentrantLock = java.util.concurrent.locks.ReentrantLock()) = TranscriptionCoordinator(repo, stt, TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
         verifyAudio = { true }, schedule = {}, synthesisClient = md, synthesisStorage = SynthesisStorage(File(tmp.root, "stage")),
-        phoneStore = { folder }, synthesisCredentialAccessible = { accessible }, clock = { now })
+        phoneStore = { folder }, synthesisCredentialAccessible = { accessible }, clock = { now }, promotionGuard = guard)
 
     @Test fun attemptBudgetSurvivesRestart() = runBlocking {
         store.save(LocalState(transcriptionTasks = listOf(task())))
@@ -155,23 +155,29 @@ class SynthesisCoordinatorTest {
         store.save(LocalState(transcriptionTasks = listOf(original)))
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
+        val guard = java.util.concurrent.locks.ReentrantLock()
+        var phaseAtPromotion: TranscriptionPhase? = null
         folder = object : PhoneStore by phone {
             override fun writeGuarded(fileName: String, source: File, replace: Boolean, promote: ((() -> Unit) -> Unit)) {
                 phone.writeGuarded(fileName, source, replace) { action -> promote {
                     entered.countDown()
                     check(release.await(10, TimeUnit.SECONDS))
+                    phaseAtPromotion = store.load().transcriptionTasks.single().phase
                     action()
                 } }
             }
         }
-        val coordinator = coordinator(LocalStateRepository(store))
+        val coordinator = coordinator(LocalStateRepository(store), guard)
         val run = async(Dispatchers.Default) { coordinator.runBounded("id") }
         assertTrue(entered.await(10, TimeUnit.SECONDS))
         val cancel = async(Dispatchers.Default) { coordinator.requestCancel("id") }
+        kotlinx.coroutines.withTimeout(5000) { while (!guard.hasQueuedThreads()) kotlinx.coroutines.delay(1) }
+        assertEquals(TranscriptionPhase.SYNTHESIZING, store.load().transcriptionTasks.single().phase)
         release.countDown()
         run.await(); cancel.await()
         val finished = store.load().transcriptionTasks.single()
         assertTrue(finished.phase == TranscriptionPhase.COMPLETED || finished.phase == TranscriptionPhase.CANCELLED)
+        assertEquals(TranscriptionPhase.SYNTHESIZING, phaseAtPromotion)
         assertEquals("# Synthèse", phone.files["Note-20261111120000.md"]!!.toString(Charsets.UTF_8))
     }
 
@@ -269,4 +275,141 @@ class SynthesisCoordinatorTest {
         assertEquals(TranscriptionPhase.COMPLETED, store.load().transcriptionTasks.single().phase)
         assertEquals(1, store.load().synthesisProvenance.size)
     }
+    @Test fun lateCallingRestartWaitsFromInterruption() = runBlocking {
+        val initial = task()
+        store.save(LocalState(transcriptionTasks = listOf(initial.copy(synthesis = initial.synthesis!!.copy(
+            phase = SynthesisPhase.CALLING, attempts = 1, nextAttemptAtMillis = now - 1)))))
+        val coordinator = coordinator(LocalStateRepository(store))
+        coordinator.runBounded("id")
+        assertEquals(0, calls)
+        assertEquals(now + 60_000, store.load().transcriptionTasks.single().synthesis!!.nextAttemptAtMillis)
+        now += 60_000
+        coordinator.runBounded("id")
+        assertEquals(1, calls)
+        assertEquals(2, store.load().transcriptionTasks.single().synthesis!!.attempts)
+    }
+
+    @Test fun stagePersistedBeforeStateFailureResumesWithoutNetwork() = runBlocking {
+        val initial = task()
+        var failNext = false
+        val failingStore = LocalStateStore(stateFile) { from, to ->
+            if (failNext) { failNext = false; false } else from.renameTo(to)
+        }
+        failingStore.save(LocalState(transcriptionTasks = listOf(initial)))
+        response = { failNext = true; "résultat durable".toByteArray() }
+        val coordinator = coordinator(LocalStateRepository(failingStore))
+        coordinator.runBounded("id")
+        assertTrue(File(tmp.root, "stage/synthesis-id.md").exists())
+        assertEquals(SynthesisPhase.SUSPENDED, store.load().transcriptionTasks.single().synthesis!!.phase)
+        val restarted = coordinator(LocalStateRepository(store))
+        restarted.retrySynthesis("id")
+        restarted.runBounded("id")
+        assertEquals(1, calls)
+        assertEquals("résultat durable", phone.files["Note-20261111120000.md"]!!.toString(Charsets.UTF_8))
+    }
+
+    @Test fun cancellationInterruptsOnlyWaitingSynthesisAndReleasesQueue() = runBlocking {
+        val initial = task()
+        val second = initial.copy(localId = "id2", recordingName = "20261111130000", synthesis = initial.synthesis!!.copy(mdName = "Note-20261111130000.md"))
+        store.save(LocalState(transcriptionTasks = listOf(initial, second)))
+        val entered = CompletableDeferred<Unit>()
+        val stopped = CompletableDeferred<Unit>()
+        response = { entered.complete(Unit); try { kotlinx.coroutines.awaitCancellation() } finally { stopped.complete(Unit) } }
+        val coordinator = coordinator(LocalStateRepository(store))
+        val run = async(Dispatchers.Default) { coordinator.runBounded("id") }
+        kotlinx.coroutines.withTimeout(5000) { entered.await() }
+        kotlinx.coroutines.withTimeout(5000) { coordinator.requestCancel("id"); stopped.await(); run.await() }
+        assertEquals(TranscriptionPhase.CANCELLED, store.load().transcriptionTasks.first().phase)
+        response = { "second".toByteArray() }
+        assertEquals(RunOutcome.Finished, kotlinx.coroutines.withTimeout(5000) { coordinator.runBounded("id2") })
+        assertEquals(2, calls)
+    }
+
+    @Test fun contradictoryFinalAfterPromotionStartedIsNeverReplaced() = runBlocking {
+        val original = task()
+        val stage = SynthesisStorage(File(tmp.root, "stage"))
+        val expected = stage.stage("id", "nouveau".toByteArray())
+        phone.files["Note-20261111120000.md"] = "extérieur".toByteArray()
+        store.save(LocalState(transcriptionTasks = listOf(original.copy(synthesis = original.synthesis!!.copy(
+            phase = SynthesisPhase.SAVE_PENDING, replaceMd = true, stagedSha256 = expected,
+            promotionStarted = true, previousMdSha256 = "a".repeat(64))))))
+        coordinator(LocalStateRepository(store)).runBounded("id")
+        assertEquals("extérieur", phone.files["Note-20261111120000.md"]!!.toString(Charsets.UTF_8))
+        assertEquals(SynthesisPhase.SUSPENDED, store.load().transcriptionTasks.single().synthesis!!.phase)
+        assertEquals(0, calls)
+        assertTrue(store.load().synthesisProvenance.isEmpty())
+    }
+
+    @Test fun callingWithDurableStageRecoversAutomaticallyBeforeAnyRetry() = runBlocking {
+        val initial = task()
+        val hash = SynthesisStorage(File(tmp.root, "stage")).stage("id", "stage durable".toByteArray())
+        store.save(LocalState(transcriptionTasks = listOf(initial.copy(synthesis = initial.synthesis!!.copy(
+            phase = SynthesisPhase.CALLING, attempts = 3, nextAttemptAtMillis = now - 300_000)))))
+        assertEquals(RunOutcome.Finished, coordinator(LocalStateRepository(store)).runBounded("id"))
+        assertEquals(0, calls)
+        assertEquals("stage durable", phone.files["Note-20261111120000.md"]!!.toString(Charsets.UTF_8))
+        assertEquals(hash, store.load().synthesisProvenance.single().mdSha256)
+    }
+
+    @Test fun inaccessibleStageNeverStartsAnotherBillableCall() = runBlocking {
+        val initial = task()
+        File(tmp.root, "stage").writeText("not a directory")
+        store.save(LocalState(transcriptionTasks = listOf(initial.copy(synthesis = initial.synthesis!!.copy(
+            phase = SynthesisPhase.CALLING, attempts = 1, nextAttemptAtMillis = now - 1)))))
+        assertEquals(RunOutcome.Suspended, coordinator(LocalStateRepository(store)).runBounded("id"))
+        assertEquals(0, calls)
+        assertEquals(1, store.load().transcriptionTasks.single().synthesis!!.attempts)
+    }
+
+    @Test fun secondInterruptedCallWaitsTwoMinutesAndThirdSuspends() = runBlocking {
+        val initial = task()
+        store.save(LocalState(transcriptionTasks = listOf(initial.copy(synthesis = initial.synthesis!!.copy(
+            phase = SynthesisPhase.CALLING, attempts = 2, nextAttemptAtMillis = now - 1)))))
+        var coordinator = coordinator(LocalStateRepository(store))
+        coordinator.runBounded("id")
+        assertEquals(now + 120_000, store.load().transcriptionTasks.single().synthesis!!.nextAttemptAtMillis)
+        coordinator = coordinator(LocalStateRepository(store))
+        now += 119_999; coordinator.runBounded("id"); assertEquals(0, calls)
+        now++; response = { throw SynthesisClientException(SynthesisFailureKind.TRANSIENT) }
+        coordinator.runBounded("id")
+        assertEquals(1, calls)
+        assertEquals(3, store.load().transcriptionTasks.single().synthesis!!.attempts)
+        assertEquals(SynthesisPhase.SUSPENDED, store.load().transcriptionTasks.single().synthesis!!.phase)
+    }
+
+    @Test fun inconsistentCallingStageHashIsNotDiscardedOrRetried() = runBlocking {
+        val initial = task()
+        store.save(LocalState(transcriptionTasks = listOf(initial.copy(synthesis = initial.synthesis!!.copy(
+            phase = SynthesisPhase.CALLING, attempts = 1, stagedSha256 = "a".repeat(64), nextAttemptAtMillis = now - 1)))))
+        assertEquals(RunOutcome.Suspended, coordinator(LocalStateRepository(store)).runBounded("id"))
+        assertEquals(0, calls)
+        assertEquals("a".repeat(64), store.load().transcriptionTasks.single().synthesis!!.stagedSha256)
+    }
+
+    @Test fun cancellationWinsBeforeLateNonCooperativeResponse() = runBlocking {
+        val initial = task().copy(synthesis = task().synthesis!!.copy(replaceMd = true))
+        phone.files["Note-20261111120000.md"] = "ancien".toByteArray()
+        store.save(LocalState(transcriptionTasks = listOf(initial)))
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        response = {
+            entered.complete(Unit)
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { release.await() }
+            "tardif".toByteArray()
+        }
+        val coordinator = coordinator(LocalStateRepository(store))
+        val run = async(Dispatchers.Default) { coordinator.runBounded("id") }
+        kotlinx.coroutines.withTimeout(5000) { entered.await() }
+        val cancel = async(Dispatchers.Default) { coordinator.requestCancel("id") }
+        kotlinx.coroutines.withTimeout(5000) {
+            while (store.load().transcriptionTasks.single().phase != TranscriptionPhase.CANCELLED) kotlinx.coroutines.delay(1)
+        }
+        assertEquals("ancien", phone.files["Note-20261111120000.md"]!!.toString(Charsets.UTF_8))
+        release.complete(Unit)
+        kotlinx.coroutines.withTimeout(5000) { run.await(); cancel.await() }
+        assertEquals("ancien", phone.files["Note-20261111120000.md"]!!.toString(Charsets.UTF_8))
+        assertFalse(File(tmp.root, "stage/synthesis-id.md").exists())
+        assertTrue(store.load().synthesisProvenance.isEmpty())
+    }
+
 }
