@@ -33,7 +33,7 @@ data class KnownFolder(val id: String, val name: String, val origin: FolderOrigi
 /** Étape de traitement d'un enregistrement, dont l'erreur est gardée jusqu'à une réussite. */
 enum class Step { RECOVER, SEND, TRANSCRIBE }
 
-/** État local tenu dans `state.json`, version 3. */
+/** État local tenu dans `state.json`, version 4. */
 data class LocalState(
     val deviceAddress: String? = null,
     val deviceName: String? = null,
@@ -49,6 +49,8 @@ data class LocalState(
     val transcriptionTasks: List<TranscriptionTask> = emptyList(),
     val transcriptionSettings: TranscriptionSettings = TranscriptionSettings(),
     val transcriptionAddressNeedsReview: Boolean = false,
+    val synthesisSettings: SynthesisSettings = SynthesisSettings(),
+    val synthesisProvenance: List<SynthesisProvenance> = emptyList(),
 ) {
     /** Ajoute l'erreur de cette étape, ou remplace celle qu'elle avait déjà pour ce nom. */
     fun withError(name: String, step: Step, message: String): LocalState =
@@ -96,7 +98,10 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
     @Synchronized
     fun save(state: LocalState) {
         if (!isValidTranscriptionBaseUrl(state.transcriptionSettings.baseUrl) ||
-            state.transcriptionTasks.any { !isSafeStoredTaskAddress(it) }) throw InvalidTranscriptionAddressException()
+            !isValidTranscriptionBaseUrl(state.synthesisSettings.baseUrl) ||
+            state.transcriptionTasks.any { !isSafeStoredTaskAddress(it) || !isSafeStoredSynthesisAddress(it.synthesis) })
+            throw InvalidTranscriptionAddressException()
+        require(state.transcriptionTasks.all { it.synthesis?.let(::hasValidSynthesisContext) != false })
         val json = JSONObject()
             .put("version", VERSION)
             .put("deviceAddress", state.deviceAddress ?: JSONObject.NULL)
@@ -123,6 +128,17 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
                 .put("language", state.transcriptionSettings.language)
                 .put("model", state.transcriptionSettings.model)
                 .put("credentialRef", state.transcriptionSettings.credentialRef ?: JSONObject.NULL))
+            .put("synthesisSettings", JSONObject()
+                .put("baseUrl", state.synthesisSettings.baseUrl)
+                .put("model", state.synthesisSettings.model)
+                .put("credentialRef", state.synthesisSettings.credentialRef ?: JSONObject.NULL)
+                .put("prompt", state.synthesisSettings.prompt))
+            .put("synthesisProvenance", JSONArray().apply {
+                state.synthesisProvenance.forEach { provenance ->
+                    put(JSONObject().put("folderUri", provenance.folderUri).put("mdName", provenance.mdName)
+                        .put("model", provenance.model).put("vttSha256", provenance.vttSha256).put("mdSha256", provenance.mdSha256))
+                }
+            })
             .put("transcriptionTasks", JSONArray().apply {
                 state.transcriptionTasks.forEach { task ->
                     put(JSONObject()
@@ -141,7 +157,9 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
                         .put("progress", task.progress ?: JSONObject.NULL)
                         .put("error", task.error ?: JSONObject.NULL)
                         .put("suspended", task.suspended)
-                        .put("suspensionReason", task.suspensionReason ?: JSONObject.NULL))
+                        .put("suspensionReason", task.suspensionReason ?: JSONObject.NULL)
+                        .put("replaceVtt", task.replaceVtt)
+                        .put("synthesis", task.synthesis?.let { writeSynthesis(it) } ?: JSONObject.NULL))
                 }
             })
         file.parentFile?.mkdirs()
@@ -156,6 +174,9 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
     private fun read(json: JSONObject): LocalState {
         val settings = json.objectOrNull("transcriptionSettings")?.let { readSettings(it) } ?: TranscriptionSettings()
         val invalidAddress = !isValidTranscriptionBaseUrl(settings.baseUrl)
+        val version = json.getInt("version")
+        val synthesisSettings = if (version >= 4) json.objectOrNull("synthesisSettings")?.let { readSynthesisSettings(it) }
+            ?: SynthesisSettings() else SynthesisSettings()
         return LocalState(
             deviceAddress = json.stringOrNull("deviceAddress"),
             deviceName = json.stringOrNull("deviceName"),
@@ -167,9 +188,11 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
             chosenFolderId = json.stringOrNull("chosenFolderId"),
             errors = json.objectOrNull("errors")?.let { readErrors(it) }.orEmpty(),
             theme = json.stringOrNull("theme").toEnumOr(ThemeChoice.SYSTEM),
-            transcriptionTasks = json.arrayOrNull("transcriptionTasks")?.let { readTasks(it) }.orEmpty(),
+            transcriptionTasks = json.arrayOrNull("transcriptionTasks")?.let { readTasks(it, version) }.orEmpty(),
             transcriptionSettings = if (invalidAddress) settings.copy(baseUrl = "/v1") else settings,
             transcriptionAddressNeedsReview = invalidAddress || json.booleanOr("transcriptionAddressNeedsReview", false),
+            synthesisSettings = if (isValidTranscriptionBaseUrl(synthesisSettings.baseUrl)) synthesisSettings else synthesisSettings.copy(baseUrl = "/v1"),
+            synthesisProvenance = if (version >= 4) json.arrayOrNull("synthesisProvenance")?.let { readSynthesisProvenance(it) }.orEmpty() else emptyList(),
         )
     }
 
@@ -208,7 +231,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
         )
     }
 
-    private fun readTasks(array: JSONArray): List<TranscriptionTask> = List(array.length()) { i ->
+    private fun readTasks(array: JSONArray, version: Int): List<TranscriptionTask> = List(array.length()) { i ->
         val o = array.getJSONObject(i)
         val phaseName = o.getString("phase")
         val phase = TranscriptionPhase.entries.firstOrNull { it.name == phaseName }
@@ -222,6 +245,8 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
             serverId = o.stringOrNull("serverId"), progress = if (o.isNull("progress")) null else o.getDouble("progress"),
             error = o.stringOrNull("error"), suspended = o.booleanOr("suspended", false),
             suspensionReason = o.stringOrNull("suspensionReason"),
+            synthesis = if (version >= 4) o.objectOrNull("synthesis")?.let { readSynthesis(it) } else null,
+            replaceVtt = if (version >= 4) o.booleanOr("replaceVtt", true) else true,
         )
         when {
             // Corrige les suspensions terminales enregistrées par la migration précédente.
@@ -232,6 +257,50 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
             task.phase.isTerminal() -> task.copy(serverAddress = "")
             else -> task.copy(serverAddress = "", suspended = true, suspensionReason = INVALID_TASK_ADDRESS_REASON)
         }
+    }
+
+    private fun writeSynthesis(work: SynthesisWork): JSONObject = JSONObject()
+        .put("phase", work.phase.name).put("mdName", work.mdName).put("replaceMd", work.replaceMd)
+        .put("context", work.context?.let { context -> JSONObject()
+            .put("baseUrl", context.baseUrl).put("credentialRef", context.credentialRef).put("model", context.model)
+            .put("promptTemplate", context.promptTemplate)
+            .put("metadata", JSONObject().put("type", context.metadata.type).put("date", context.metadata.date).put("duree", context.metadata.duree))
+            .put("systemPrompt", context.systemPrompt ?: JSONObject.NULL).put("vttSha256", context.vttSha256 ?: JSONObject.NULL)
+        } ?: JSONObject.NULL)
+        .put("attempts", work.attempts).put("nextAttemptAtMillis", work.nextAttemptAtMillis ?: JSONObject.NULL)
+        .put("stagedSha256", work.stagedSha256 ?: JSONObject.NULL).put("suspensionReason", work.suspensionReason ?: JSONObject.NULL)
+
+    private fun readSynthesisSettings(o: JSONObject): SynthesisSettings {
+        val defaults = SynthesisSettings()
+        return SynthesisSettings(o.stringOrNull("baseUrl") ?: defaults.baseUrl, o.stringOrNull("model") ?: defaults.model,
+            o.stringOrNull("credentialRef"), o.stringOrNull("prompt") ?: defaults.prompt)
+    }
+
+    private fun readSynthesisProvenance(array: JSONArray): List<SynthesisProvenance> = List(array.length()) { i ->
+        val o = array.getJSONObject(i)
+        SynthesisProvenance(o.getString("folderUri"), o.getString("mdName"), o.getString("model"),
+            o.getString("vttSha256"), o.getString("mdSha256"))
+    }
+
+    private fun readSynthesis(o: JSONObject): SynthesisWork {
+        val phaseName = o.getString("phase")
+        val phase = SynthesisPhase.entries.firstOrNull { it.name == phaseName }
+            ?: throw JSONException("Phase de synthèse inconnue : $phaseName")
+        val context = o.objectOrNull("context")?.let { c ->
+            val metadata = c.getJSONObject("metadata")
+            SynthesisContext(c.getString("baseUrl"), c.getString("credentialRef"), c.getString("model"),
+                c.getString("promptTemplate"), PromptMetadata(metadata.getString("type"), metadata.getString("date"), metadata.getString("duree")),
+                c.stringOrNull("systemPrompt"), c.stringOrNull("vttSha256"))
+        }
+        val work = SynthesisWork(phase, o.getString("mdName"), o.getBoolean("replaceMd"), context,
+            o.getInt("attempts"), if (o.isNull("nextAttemptAtMillis")) null else o.getLong("nextAttemptAtMillis"),
+            o.stringOrNull("stagedSha256"), o.stringOrNull("suspensionReason"))
+        if (!hasValidSynthesisContext(work)) throw JSONException("Contexte de synthèse absent pour la phase $phaseName")
+        if (isSafeStoredSynthesisAddress(work)) return work
+        if (phase == SynthesisPhase.COMPLETED || phase == SynthesisPhase.CANCELLED)
+            return work.copy(context = context?.copy(baseUrl = ""))
+        return work.copy(phase = SynthesisPhase.SUSPENDED, context = context?.copy(baseUrl = ""),
+            suspensionReason = INVALID_SYNTHESIS_ADDRESS_REASON)
     }
 
     /** Les noms et les étapes inconnus sont ignorés, de même que les erreurs sans message. */
@@ -250,7 +319,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
     }
 
     private companion object {
-        const val VERSION = 3
+        const val VERSION = 4
     }
 }
 

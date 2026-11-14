@@ -2,7 +2,7 @@ package top.supergeoff.dictee
 
 /** Phases conservées entre les lancements, sans présumer du résultat d'une soumission interrompue. */
 enum class TranscriptionPhase {
-    PENDING, SUBMITTING, UNKNOWN_SUBMISSION, TRACKING, CANCEL_REQUESTED, SAVING, COMPLETED, FAILED, CANCELLED
+    PENDING, SUBMITTING, UNKNOWN_SUBMISSION, TRACKING, CANCEL_REQUESTED, SAVING, COMPLETED, FAILED, CANCELLED, SYNTHESIZING
 }
 
 internal fun TranscriptionPhase.isTerminal(): Boolean = when (this) {
@@ -29,6 +29,8 @@ data class TranscriptionTask(
     val error: String? = null,
     val suspended: Boolean = false,
     val suspensionReason: String? = null,
+    val synthesis: SynthesisWork? = null,
+    val replaceVtt: Boolean = true,
 )
 
 enum class TranscriptionExclusion { MISSING_MP3, RECOVERY_FAILED, ALREADY_ACTIVE }

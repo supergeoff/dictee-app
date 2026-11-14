@@ -54,7 +54,7 @@ class TranscriptionCoordinator(
     suspend fun requestCancel(localId: String) {
         repository.updateDurably { current ->
             current.copy(transcriptionTasks = current.transcriptionTasks.map { task ->
-                if (task.localId != localId || task.phase.isTerminal()) task
+                if (task.localId != localId || task.phase.isTerminal() || task.phase == TranscriptionPhase.SYNTHESIZING) task
                 else task.copy(
                     phase = TranscriptionPhase.CANCEL_REQUESTED, suspended = false, suspensionReason = null,
                     error = if (task.serverId == null && task.phase in MAYBE_SENT) CANNOT_CONFIRM else task.error,

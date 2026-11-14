@@ -237,6 +237,18 @@ class TranscriptionCoordinatorTest {
 
     private fun tracking() = task(phase = TranscriptionPhase.TRACKING).copy(serverId = "server-1")
 
+    @Test fun `synthesis cancellation does not call transcription even with a server id`() = runBlocking {
+        val synthesis = SynthesisWork(SynthesisPhase.READY, "Note.md", false,
+            SynthesisContext("https://example.invalid/v1", "synth-ref", "synthetic-model", "template",
+                PromptMetadata("Note", "date", "durée"), "prompt", "a".repeat(64)), 0, null, null, null)
+        val task = task(phase = TranscriptionPhase.SYNTHESIZING).copy(serverId = "server-1", synthesis = synthesis)
+        store.save(LocalState(transcriptionTasks = listOf(task)))
+        val client = FakeClient().apply { onCancel = { ServerTask("server-1", ServerStatus.CANCELLED, null, null) } }
+        coordinator(LocalStateRepository(store), client).requestCancel("local-1")
+        assertEquals(0, client.cancels + client.submissions + client.reads)
+        assertEquals(task, store.load().transcriptionTasks.single())
+    }
+
     @Test fun `cancel intent is durable before the network call and server confirmation ends the task`() = runBlocking {
         store.save(LocalState(transcriptionTasks = listOf(tracking())))
         val client = FakeClient().apply {

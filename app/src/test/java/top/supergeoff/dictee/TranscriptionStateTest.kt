@@ -5,7 +5,7 @@ import org.junit.Test
 
 class TranscriptionStateTest {
     @Test fun `les phases et la suspension sont representables`() {
-        assertEquals(listOf("PENDING", "SUBMITTING", "UNKNOWN_SUBMISSION", "TRACKING", "CANCEL_REQUESTED", "SAVING", "COMPLETED", "FAILED", "CANCELLED"), TranscriptionPhase.entries.map { it.name })
+        assertEquals(listOf("PENDING", "SUBMITTING", "UNKNOWN_SUBMISSION", "TRACKING", "CANCEL_REQUESTED", "SAVING", "COMPLETED", "FAILED", "CANCELLED", "SYNTHESIZING"), TranscriptionPhase.entries.map { it.name })
         val task = sampleTask().copy(suspended = true, suspensionReason = "connexion absente")
         assertEquals("connexion absente", task.suspensionReason)
     }

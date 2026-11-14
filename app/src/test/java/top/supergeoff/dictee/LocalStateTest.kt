@@ -16,6 +16,169 @@ class LocalStateTest {
     private fun file() = File(tmp.root, "state.json")
 
     @Test
+    fun version3TasksRemainVttOnly() {
+        val phases = listOf(TranscriptionPhase.PENDING, TranscriptionPhase.TRACKING, TranscriptionPhase.SAVING, TranscriptionPhase.COMPLETED)
+        val tasks = phases.mapIndexed { index, phase -> sampleTask().copy(localId = "old-$index", phase = phase, serverId = "server-$index") }
+        val settings = TranscriptionSettings("https://example.invalid/v1", "en", "synthetic-model", "old-ref")
+        val taskJson = phases.mapIndexed { index, phase ->
+            """{"localId":"old-$index","recordingName":"20261030160502","mp3Name":"Note-20261030160502.mp3",
+                "vttName":"Note-20261030160502.vtt","folderUri":"content://test/tree","mp3Sha256":"${"a".repeat(64)}",
+                "serverAddress":"https://example.invalid/v1","encryptedKeyRef":"encrypted-key-ref","language":"fr",
+                "model":"test-model","phase":"${phase.name}","serverId":"server-$index"}"""
+        }.joinToString(",")
+        file().writeText("""{"version":3,"transcriptionSettings":{"baseUrl":"https://example.invalid/v1",
+            "language":"en","model":"synthetic-model","credentialRef":"old-ref"},"transcriptionTasks":[$taskJson]}""")
+        val loaded = LocalStateStore(file()).load()
+        assertEquals(tasks, loaded.transcriptionTasks)
+        assertTrue(loaded.transcriptionTasks.all { it.synthesis == null && it.replaceVtt })
+        assertEquals(settings, loaded.transcriptionSettings)
+        assertEquals(SynthesisSettings(), loaded.synthesisSettings)
+        assertTrue(loaded.synthesisProvenance.isEmpty())
+    }
+
+    @Test
+    fun version4RoundTripKeepsBudgetAndProvenance() {
+        val secret = "synthetic-cleartext-key"
+        val credentials = object : CredentialStore {
+            var stored = ""
+            override fun save(secret: String): String { stored = secret; return "synthetic-ref" }
+            override fun read(ref: String): String = stored
+            override fun remove(ref: String) { stored = "" }
+        }
+        val ref = credentials.save(secret)
+        assertEquals(secret, credentials.read(ref))
+        val context = SynthesisContext("https://example.invalid/v1", ref, "synthetic-model", "template {{type}}",
+            PromptMetadata("Note", "date", "2 min"), "prompt résolu", "a".repeat(64))
+        val work = SynthesisWork(SynthesisPhase.CALLING, "Note.md", false, context, 2, 120000L, "b".repeat(64), null)
+        val provenance = SynthesisProvenance("content://test/tree", "Note.md", "synthetic-model", "a".repeat(64), "b".repeat(64))
+        val state = LocalState(transcriptionTasks = listOf(sampleTask().copy(synthesis = work, replaceVtt = false)),
+            synthesisSettings = SynthesisSettings("https://example.invalid/v1", "synthetic-model", ref, "template"),
+            synthesisProvenance = listOf(provenance))
+        val store = LocalStateStore(file())
+        store.save(state)
+        assertEquals(4, org.json.JSONObject(file().readText()).getInt("version"))
+        assertEquals(state, store.load())
+        assertFalse(file().readText().contains(secret))
+    }
+
+    @Test
+    fun synthesisOnlyTaskAcceptsEmptySttAddress() {
+        val work = SynthesisWork(SynthesisPhase.SUSPENDED, "Note.md", false, null, 0, null, null, "Service non configuré")
+        val task = sampleTask().copy(phase = TranscriptionPhase.SYNTHESIZING, mp3Sha256 = "", serverAddress = "",
+            encryptedKeyRef = "", language = "", model = "", synthesis = work)
+        val store = LocalStateStore(file())
+        store.save(LocalState(transcriptionTasks = listOf(task)))
+        assertEquals(task, store.load().transcriptionTasks.single())
+        try {
+            store.save(LocalState(transcriptionTasks = listOf(task.copy(phase = TranscriptionPhase.PENDING))))
+            org.junit.Assert.fail("Une adresse STT vide ne doit pas être acceptée pour PENDING")
+        } catch (_: InvalidTranscriptionAddressException) { }
+    }
+
+    @Test
+    fun invalidFrozenSynthesisAddressIsScrubbedAndSuspended() {
+        val store = LocalStateStore(file())
+        val context = SynthesisContext("https://example.invalid/v1", "ref", "model", "template",
+            PromptMetadata("Note", "date", "durée"), "prompt", "a".repeat(64))
+        val work = SynthesisWork(SynthesisPhase.CALLING, "Note.md", false, context, 2, 120000L, null, null)
+        val state = LocalState(transcriptionTasks = listOf(sampleTask().copy(synthesis = work)))
+        try {
+            store.save(state.copy(transcriptionTasks = listOf(sampleTask().copy(synthesis = work.copy(context = context.copy(baseUrl = "/v1"))))))
+            org.junit.Assert.fail("Une adresse figée relative ne doit pas être enregistrée")
+        } catch (_: InvalidTranscriptionAddressException) { }
+        store.save(state)
+        val json = org.json.JSONObject(file().readText())
+        val secret = "synthetic-address-secret"
+        json.getJSONArray("transcriptionTasks").getJSONObject(0).getJSONObject("synthesis").getJSONObject("context")
+            .put("baseUrl", "https://user:$secret@example.invalid/v1")
+        file().writeText(json.toString())
+        val loaded = store.load()
+        val migrated = loaded.transcriptionTasks.single().synthesis!!
+        assertEquals(SynthesisPhase.SUSPENDED, migrated.phase)
+        assertEquals("", migrated.context!!.baseUrl)
+        assertTrue(migrated.suspensionReason != null)
+        assertFalse(loaded.toString().contains(secret))
+        store.save(loaded)
+        assertFalse(file().readText().contains(secret))
+        assertEquals(loaded, store.load())
+    }
+
+    @Test
+    fun invalidSynthesisAddressesDoNotReviveTerminalWork() {
+        val context = SynthesisContext("https://example.invalid/v1", "ref", "model", "template",
+            PromptMetadata("Note", "date", "durée"), "prompt", "a".repeat(64))
+        val phases = listOf(SynthesisPhase.COMPLETED, SynthesisPhase.CANCELLED)
+        val tasks = phases.map { phase -> sampleTask().copy(localId = phase.name,
+            synthesis = SynthesisWork(phase, "Note.md", false, context, 2, null, null, null)) }
+        val store = LocalStateStore(file())
+        store.save(LocalState(transcriptionTasks = tasks))
+        val json = org.json.JSONObject(file().readText())
+        val secret = "synthetic-secret-in-url"
+        json.put("synthesisSettings", org.json.JSONObject().put("baseUrl", "https://user:$secret@example.invalid/v1"))
+        val array = json.getJSONArray("transcriptionTasks")
+        repeat(array.length()) { array.getJSONObject(it).getJSONObject("synthesis").getJSONObject("context").put("baseUrl", "https://user:$secret@example.invalid/v1") }
+        file().writeText(json.toString())
+        val loaded = store.load()
+        assertEquals("/v1", loaded.synthesisSettings.baseUrl)
+        assertEquals(phases, loaded.transcriptionTasks.map { it.synthesis!!.phase })
+        assertTrue(loaded.transcriptionTasks.all { it.synthesis!!.context!!.baseUrl == "" })
+        assertFalse(loaded.toString().contains(secret))
+        store.save(loaded)
+        assertEquals(loaded, store.load())
+        assertFalse(file().readText().contains(secret))
+    }
+
+    @Test
+    fun missingContextIsAllowedOnlyBeforeOrAfterUnconfiguredWork() {
+        val store = LocalStateStore(file())
+        val work = SynthesisWork(SynthesisPhase.WAITING_VTT, "Note.md", false, null, 0, null, null, null)
+        for (phase in listOf(SynthesisPhase.WAITING_VTT, SynthesisPhase.SUSPENDED, SynthesisPhase.CANCELLED)) {
+            val state = LocalState(transcriptionTasks = listOf(sampleTask().copy(synthesis = work.copy(phase = phase))))
+            store.save(state)
+            assertEquals(state, store.load())
+        }
+        for (phase in listOf(SynthesisPhase.READY, SynthesisPhase.CALLING, SynthesisPhase.SAVE_PENDING, SynthesisPhase.COMPLETED)) {
+            try {
+                store.save(LocalState(transcriptionTasks = listOf(sampleTask().copy(synthesis = work.copy(phase = phase)))))
+                org.junit.Assert.fail("La phase $phase exige un contexte")
+            } catch (_: IllegalArgumentException) { }
+        }
+    }
+
+    @Test
+    fun callingWithoutContextCannotBeSavedOrLoaded() {
+        val work = SynthesisWork(SynthesisPhase.CALLING, "Note.md", false, null, 1, null, null, null)
+        val store = LocalStateStore(file())
+        try {
+            store.save(LocalState(transcriptionTasks = listOf(sampleTask().copy(synthesis = work))))
+            org.junit.Assert.fail("Un appel ne peut pas être enregistré sans contexte")
+        } catch (_: IllegalArgumentException) { }
+        store.save(LocalState(transcriptionTasks = listOf(sampleTask().copy(synthesis = work.copy(phase = SynthesisPhase.SUSPENDED)))))
+        val json = org.json.JSONObject(file().readText())
+        json.getJSONArray("transcriptionTasks").getJSONObject(0).getJSONObject("synthesis").put("phase", "CALLING")
+        file().writeText(json.toString())
+        try { store.load(); org.junit.Assert.fail("Un appel sans contexte doit empêcher le chargement") }
+        catch (_: org.json.JSONException) { }
+    }
+
+    @Test
+    fun unknownSynthesisPhaseFailsLoadingWithoutChangingFile() {
+        val store = LocalStateStore(file())
+        store.save(LocalState(transcriptionTasks = listOf(sampleTask())))
+        val json = org.json.JSONObject(file().readText()).put("version", 4)
+        json.getJSONArray("transcriptionTasks").getJSONObject(0).put("synthesis", org.json.JSONObject()
+            .put("phase", "FUTURE_PHASE").put("mdName", "Note.md").put("replaceMd", false)
+            .put("context", org.json.JSONObject.NULL).put("attempts", 0))
+        file().writeText(json.toString())
+        val before = file().readText()
+        try {
+            store.load()
+            org.junit.Assert.fail("Une phase MD inconnue doit empêcher le chargement")
+        } catch (_: org.json.JSONException) { }
+        assertEquals(before, file().readText())
+    }
+
+    @Test
     fun `l'etat se relit a l'identique`() {
         val s = LocalState("AA:BB", "MECHEN V05", listOf(ListItem.Entry("20261030160502", 9_880_000, 0)),
             "content://tree/primary%3ADownload%2FDict%C3%A9e", true, "user@example.com",
@@ -126,7 +289,7 @@ class LocalStateTest {
         assertEquals(state, LocalStateStore(file()).load())
         assertTrue(file().readText().contains("encrypted-key-ref"))
         assertFalse(file().readText().contains("cleartext-api-key"))
-        assertTrue(file().readText().contains("\"version\": 3"))
+        assertTrue(file().readText().contains("\"version\": 4"))
     }
 
     @Test

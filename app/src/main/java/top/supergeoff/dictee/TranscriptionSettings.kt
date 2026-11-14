@@ -38,7 +38,9 @@ fun isValidTranscriptionBaseUrl(value: String): Boolean {
 const val INVALID_TASK_ADDRESS_REASON = "Adresse de serveur invalide. Cette tâche ne peut pas changer de serveur ; crée une nouvelle tâche après avoir vérifié les réglages."
 
 internal fun isSafeStoredTaskAddress(task: TranscriptionTask): Boolean =
-    (task.serverAddress != "/v1" && isValidTranscriptionBaseUrl(task.serverAddress)) ||
+    (task.phase == TranscriptionPhase.SYNTHESIZING && task.synthesis != null && task.serverAddress.isEmpty() &&
+        task.mp3Sha256.isEmpty() && task.encryptedKeyRef.isEmpty() && task.language.isEmpty() && task.model.isEmpty()) ||
+        (task.serverAddress != "/v1" && isValidTranscriptionBaseUrl(task.serverAddress)) ||
         (task.serverAddress.isEmpty() && (task.phase.isTerminal() ||
             (task.suspended && task.suspensionReason == INVALID_TASK_ADDRESS_REASON)))
 
