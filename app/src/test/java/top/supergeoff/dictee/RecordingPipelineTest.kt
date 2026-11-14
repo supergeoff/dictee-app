@@ -1,0 +1,118 @@
+package top.supergeoff.dictee
+
+import org.junit.Assert.*
+import org.junit.Test
+
+class RecordingPipelineTest {
+    private val name = "20261111120000"
+    private fun recording(vararg kinds: FileKind, onBox: Boolean = true) = Recording(
+        name, RecordType.NOTE, 100, onBox,
+        kinds.associateWith { PhoneFile("Note-$name.${it.ext}", 100) }, DisplayState.OnBox,
+    )
+    private fun task(
+        phase: TranscriptionPhase = TranscriptionPhase.TRACKING,
+        name: String = this.name,
+        suspended: Boolean = false,
+        work: SynthesisWork? = null,
+        error: String? = null,
+    ) = TranscriptionTask("id-$name", name, "Note-$name.mp3", "Note-$name.vtt", "folder", "hash", "url", "ref", "fr", "model", phase,
+        error = error, suspended = suspended, suspensionReason = if (suspended) "suspendue" else null, synthesis = work)
+    private fun work(phase: SynthesisPhase = SynthesisPhase.CALLING) =
+        SynthesisWork(phase, "Note-$name.md", false, null, 1, null, null, if (phase == SynthesisPhase.SUSPENDED) "suspendue" else null)
+    private fun input(
+        r: Recording = recording(), tasks: List<TranscriptionTask> = emptyList(),
+        errors: Map<Step, String> = emptyMap(), busy: Busy = Busy(), drive: DriveListing? = null,
+        driveEnabled: Boolean = false, configured: Boolean = true, connected: Boolean = true,
+        provenance: ProvenanceStatus = ProvenanceStatus.UNKNOWN,
+    ) = PipelineInput(r, LocalState(transcriptionTasks = tasks, errors = mapOf(name to errors), driveEnabled = driveEnabled),
+        busy, drive, connected, configured, provenance)
+    private fun result(i: PipelineInput) = RecordingPipeline.calculate(i)
+    private fun status(i: PipelineInput, stage: PipelineStage) = result(i).steps.single { it.stage == stage }.status
+
+    @Test fun stageTableMatchesSpec() {
+        data class Case(val stage: PipelineStage, val input: PipelineInput, val expected: PipelineStatus)
+        val mp3 = recording(FileKind.MP3)
+        val vtt = recording(FileKind.MP3, FileKind.VTT)
+        val all = recording(FileKind.MP3, FileKind.VTT, FileKind.MD)
+        val cases = listOf(
+            Case(PipelineStage.PHONE, input(r = mp3, busy = Busy(recovering = name), errors = mapOf(Step.RECOVER to "erreur")), PipelineStatus.DONE),
+            Case(PipelineStage.PHONE, input(busy = Busy(recovering = name)), PipelineStatus.RUNNING),
+            Case(PipelineStage.PHONE, input(errors = mapOf(Step.RECOVER to "coupure")), PipelineStatus.ERROR),
+            Case(PipelineStage.PHONE, input(), PipelineStatus.TODO),
+            Case(PipelineStage.PHONE, input(r = recording(onBox = false)), PipelineStatus.TODO),
+            Case(PipelineStage.VTT, input(r = vtt, tasks = listOf(task())), PipelineStatus.RUNNING),
+            Case(PipelineStage.VTT, input(r = mp3, tasks = listOf(task(TranscriptionPhase.CANCEL_REQUESTED))), PipelineStatus.RUNNING),
+            Case(PipelineStage.VTT, input(r = mp3, tasks = listOf(task(name = "20261110120000"), task())), PipelineStatus.WAITING),
+            Case(PipelineStage.VTT, input(r = mp3, tasks = listOf(task(TranscriptionPhase.FAILED, error = "échec"))), PipelineStatus.ERROR),
+            Case(PipelineStage.VTT, input(r = vtt), PipelineStatus.DONE),
+            Case(PipelineStage.VTT, input(r = mp3), PipelineStatus.TODO),
+            Case(PipelineStage.MD, input(r = all, tasks = listOf(task(TranscriptionPhase.SYNTHESIZING, work = work()))), PipelineStatus.RUNNING),
+            Case(PipelineStage.MD, input(r = vtt, tasks = listOf(task(name = "20261110120000"), task(TranscriptionPhase.SYNTHESIZING, work = work()))), PipelineStatus.WAITING),
+            Case(PipelineStage.MD, input(r = vtt, tasks = listOf(task(TranscriptionPhase.SYNTHESIZING, suspended = true, work = work(SynthesisPhase.SUSPENDED)))), PipelineStatus.ERROR),
+            Case(PipelineStage.MD, input(r = all, provenance = ProvenanceStatus.STALE), PipelineStatus.TODO),
+            Case(PipelineStage.MD, input(r = all, provenance = ProvenanceStatus.CURRENT), PipelineStatus.DONE),
+            Case(PipelineStage.MD, input(r = vtt, configured = false), PipelineStatus.TODO),
+            Case(PipelineStage.MD, input(r = vtt), PipelineStatus.TODO),
+            Case(PipelineStage.DRIVE, input(r = all, driveEnabled = true, busy = Busy(sending = name)), PipelineStatus.RUNNING),
+            Case(PipelineStage.DRIVE, input(r = all, driveEnabled = true, errors = mapOf(Step.SEND to "erreur")), PipelineStatus.ERROR),
+            Case(PipelineStage.DRIVE, input(r = all, driveEnabled = true, drive = DriveListing(all.phoneFiles.values.associate { it.fileName to it.size })), PipelineStatus.DONE),
+            Case(PipelineStage.DRIVE, input(r = all), PipelineStatus.TODO),
+            Case(PipelineStage.DRIVE, input(r = all, driveEnabled = true), PipelineStatus.TODO),
+        )
+        cases.forEachIndexed { index, c -> assertEquals("case $index ${c.stage}", c.expected, status(c.input, c.stage)) }
+        assertNotEquals("Ancien VTT", result(input(r = all)).steps.single { it.stage == PipelineStage.MD }.label)
+    }
+
+    @Test fun primaryActionTableMatchesSpec() {
+        val mp3 = recording(FileKind.MP3)
+        val vtt = recording(FileKind.MP3, FileKind.VTT)
+        val all = recording(FileKind.MP3, FileKind.VTT, FileKind.MD)
+        val cases = listOf(
+            input(r = mp3, tasks = listOf(task())) to PipelineAction.CANCEL_VTT,
+            input(r = vtt, tasks = listOf(task(TranscriptionPhase.SYNTHESIZING, work = work()))) to PipelineAction.CANCEL_MD,
+            input(r = mp3, tasks = listOf(task(name = "20261110120000"), task())) to PipelineAction.REMOVE_FROM_QUEUE,
+            input(busy = Busy(recovering = name)) to null,
+            input(errors = mapOf(Step.RECOVER to "coupure")) to PipelineAction.RETRY_RECOVERY,
+            input() to PipelineAction.RECOVER,
+            input(r = mp3, tasks = listOf(task(TranscriptionPhase.FAILED, error = "échec"))) to PipelineAction.RETRY_VTT,
+            input(r = mp3) to PipelineAction.CREATE_VTT_AND_MD,
+            input(r = recording(FileKind.MP3, FileKind.MD)) to PipelineAction.CREATE_VTT,
+            input(r = vtt, tasks = listOf(task(TranscriptionPhase.SYNTHESIZING, suspended = true, work = work(SynthesisPhase.SUSPENDED)))) to PipelineAction.RETRY_MD,
+            input(r = vtt, configured = false) to PipelineAction.OPEN_SETTINGS,
+            input(r = vtt) to PipelineAction.CREATE_MD,
+            input(r = all, provenance = ProvenanceStatus.STALE) to PipelineAction.REDO_MD,
+            input(r = all, driveEnabled = true, errors = mapOf(Step.SEND to "erreur")) to PipelineAction.RETRY_SEND,
+            input(r = all, driveEnabled = true) to PipelineAction.SEND,
+            input(r = all) to null,
+            input(r = recording(onBox = false)) to null,
+        )
+        cases.forEachIndexed { index, (i, expected) -> assertEquals("case $index", expected, result(i).button?.action) }
+        assertFalse(result(input(connected = false)).button!!.enabled)
+    }
+
+    @Test fun queueRankIgnoresSuspendedAndTerminalTasks() {
+        val names = listOf("20261109120000", "20261110120000", name)
+        val tasks = listOf(task(name = "20261101120000", suspended = true), task(TranscriptionPhase.COMPLETED, name = "20261102120000")) + names.map { task(name = it) }
+        names.forEachIndexed { index, n ->
+            val r = recording(FileKind.MP3).copy(name = n)
+            assertEquals(index + 1, result(input(r = r, tasks = tasks)).queueRank)
+        }
+    }
+
+    @Test fun firstReasonFollowsPipelineOrder() {
+        val i = input(r = recording(), errors = mapOf(Step.RECOVER to "boîtier", Step.SEND to "drive"), driveEnabled = true)
+        assertEquals(PipelineStage.PHONE, result(i).reason?.stage)
+    }
+
+    @Test fun badgePrioritizesErrorThenRunningThenWaiting() {
+        val mp3 = recording(FileKind.MP3)
+        assertEquals("Erreur", result(input(r = mp3, errors = mapOf(Step.SEND to "erreur"), busy = Busy(recovering = name), driveEnabled = true)).badge)
+        assertTrue(result(input(r = mp3, busy = Busy(sending = name), driveEnabled = true)).badge.startsWith("Envoi"))
+        assertEquals("En attente", result(input(r = mp3, tasks = listOf(task(name = "20261110120000"), task()))).badge)
+    }
+
+    @Test fun synthesisProgressIsNotTranscription() {
+        val current = TranscriptionProgress.current(listOf(task(TranscriptionPhase.SYNTHESIZING, work = work())))!!.second
+        assertEquals("Synthèse 1/1", current.label())
+    }
+}

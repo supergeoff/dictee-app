@@ -49,7 +49,9 @@ object TranscriptionProgress {
     fun current(tasks: List<TranscriptionTask>): Pair<String, Progress>? {
         val active = tasks.filter { !it.phase.isTerminal() && !it.suspended }.sortedBy { it.recordingName }
         val first = active.firstOrNull() ?: return null
-        val percent = first.progress?.let { (it * 100).toInt().coerceIn(0, 100) } ?: Progress.UNKNOWN
-        return first.recordingName to Progress(ProgressKind.TRANSCRIPTION, 1, active.size, percent)
+        val kind = if (first.phase == TranscriptionPhase.SYNTHESIZING) ProgressKind.SYNTHESIS else ProgressKind.TRANSCRIPTION
+        val percent = if (kind == ProgressKind.SYNTHESIS) Progress.UNKNOWN else
+            first.progress?.let { (it * 100).toInt().coerceIn(0, 100) } ?: Progress.UNKNOWN
+        return first.recordingName to Progress(kind, 1, active.size, percent)
     }
 }

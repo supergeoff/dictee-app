@@ -355,7 +355,8 @@ class TranscriptionWorkerRunnerTest {
         val md = synthesisTask()
         val progress = TranscriptionProgress.current(listOf(md))!!.second
         assertTrue(transcriptionNotificationLabel(progress, listOf(md)).startsWith("Synthèse"))
-        assertTrue(transcriptionNotificationLabel(progress, listOf(task())).startsWith("Transcription"))
+        val transcription = TranscriptionProgress.current(listOf(task()))!!.second
+        assertTrue(transcriptionNotificationLabel(transcription, listOf(task())).startsWith("Transcription"))
     }
 
     @Test fun `service cancellation during call leaves durable calling for worker`() = runBlocking {
