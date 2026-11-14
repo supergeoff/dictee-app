@@ -143,6 +143,9 @@ class AppModel(
     val recoverySafety = RecoverySafety(localRepository)
     private val transcriptionCredentials = AndroidCredentialStore(app)
     val transcriptionSettings = TranscriptionSettingsManager(localRepository, transcriptionCredentials)
+    private val synthesisCredentials = AndroidCredentialStore(app, "synthesis-credentials-v1", "synthesis-credentials")
+    val synthesisSettings = SynthesisSettingsManager(localRepository, synthesisCredentials)
+    private val synthesisClient = UrlSynthesisClient(synthesisCredentials)
     internal val transcriptionCoordinator: TranscriptionCoordinator by lazy {
         val scheduler = TranscriptionSchedule(androidx.work.WorkManager.getInstance(app))
         val client = UrlTranscriptionClient(transcriptionCredentials, { task ->
@@ -740,6 +743,10 @@ class AppModel(
     val transcriptionForm = TranscriptionSettingsForm(scope) { settings, secret ->
         withContext(Dispatchers.IO) { transcriptionSettings.save(settings, secret) }
     }
+    val synthesisForm = SynthesisSettingsForm(scope,
+        save = { settings, secret -> withContext(Dispatchers.IO) { synthesisSettings.save(settings, secret) } },
+        test = { settings, secret -> withContext(Dispatchers.IO) { synthesisSettings.test(settings, secret, synthesisClient) } },
+    )
 
     /** Adresse du fichier dans le dossier du téléphone, null s'il est absent ou inaccessible. Lit le dossier : à appeler hors du fil principal. */
     suspend fun phoneUri(fileName: String): Uri? {

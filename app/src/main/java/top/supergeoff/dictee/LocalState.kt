@@ -98,7 +98,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
     @Synchronized
     fun save(state: LocalState) {
         if (!isValidTranscriptionBaseUrl(state.transcriptionSettings.baseUrl) ||
-            !isValidTranscriptionBaseUrl(state.synthesisSettings.baseUrl) ||
+            !isValidSynthesisBaseUrl(state.synthesisSettings.baseUrl) ||
             state.transcriptionTasks.any { !isSafeStoredTaskAddress(it) || !isSafeStoredSynthesisAddress(it.synthesis) })
             throw InvalidTranscriptionAddressException()
         require(state.transcriptionTasks.all(::isSafeStoredTaskContext)) { "Contexte de transcription incomplet" }
@@ -192,7 +192,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
             transcriptionTasks = json.arrayOrNull("transcriptionTasks")?.let { readTasks(it, version) }.orEmpty(),
             transcriptionSettings = if (invalidAddress) settings.copy(baseUrl = "/v1") else settings,
             transcriptionAddressNeedsReview = invalidAddress || json.booleanOr("transcriptionAddressNeedsReview", false),
-            synthesisSettings = if (isValidTranscriptionBaseUrl(synthesisSettings.baseUrl)) synthesisSettings else synthesisSettings.copy(baseUrl = "/v1"),
+            synthesisSettings = if (isValidSynthesisBaseUrl(synthesisSettings.baseUrl)) synthesisSettings else synthesisSettings.copy(baseUrl = "/v1"),
             synthesisProvenance = if (version >= 4) json.arrayOrNull("synthesisProvenance")?.let { readSynthesisProvenance(it) }.orEmpty() else emptyList(),
         )
     }
