@@ -27,6 +27,8 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.Tab
+import androidx.compose.material3.SecondaryTabRow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.produceState
 import kotlinx.coroutines.Dispatchers
@@ -59,6 +61,13 @@ import top.supergeoff.dictee.PhoneFile
 import top.supergeoff.dictee.R
 import top.supergeoff.dictee.RecordName
 import top.supergeoff.dictee.Recording
+import top.supergeoff.dictee.RequestedWork
+import top.supergeoff.dictee.SynthesisSelection
+import top.supergeoff.dictee.SynthesisPhase
+import top.supergeoff.dictee.ProvenanceStatus
+import top.supergeoff.dictee.SynthesisDocument
+import top.supergeoff.dictee.TranscriptionPhase
+import top.supergeoff.dictee.TranscriptionTask
 import top.supergeoff.dictee.UiState
 import top.supergeoff.dictee.isTerminal
 import top.supergeoff.dictee.transcriptionCancellationMessage
@@ -77,13 +86,18 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
     }
     val canRecover = ui.local.boxList.any { it.name == name } && ui.link == LinkStatus.CONNECTED && !ui.recovering
     Column(modifier = Modifier.fillMaxSize().background(Dictee.colors.background)) {
+        val task = ui.local.transcriptionTasks.lastOrNull { it.recordingName == name && it.synthesis != null }
         val activeTask = ui.local.transcriptionTasks.firstOrNull { it.recordingName == name && !it.phase.isTerminal() }
         val cancellable = activeTask != null
+        val activeNames = ui.local.transcriptionTasks.filter { !it.phase.isTerminal() }.mapTo(mutableSetOf()) { it.recordingName }
+        fun canRequest(request: RequestedWork) = SynthesisSelection.plan(listOf(recording), setOf(name), ui.local.errors, activeNames, request).first.isNotEmpty()
+        val canRedoVtt = canRequest(RequestedWork.REDO_VTT_AND_MD)
+        val canRedoMd = canRequest(RequestedWork.REDO_MD)
         var confirmCancel by remember { mutableStateOf(false) }
         if (confirmCancel) {
             DicteeDialog(
-                title = "Annuler la transcription ?",
-                confirm = "Annuler la transcription",
+                title = if (activeTask?.phase == TranscriptionPhase.SYNTHESIZING) "Annuler la synthèse ?" else "Annuler la transcription ?",
+                confirm = if (activeTask?.phase == TranscriptionPhase.SYNTHESIZING) "Annuler la synthèse" else "Annuler la transcription",
                 destructive = true,
                 onConfirm = { confirmCancel = false; model.cancelTranscription(name) },
                 onDismiss = { confirmCancel = false },
@@ -95,7 +109,10 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
             }
         }
         RecordingBar(recording, canRecover, onBack, onRecover = { model.recover(listOf(name)) },
-            canCancelTranscription = cancellable, onCancelTranscription = { confirmCancel = true })
+            canCancelTranscription = cancellable, cancellingSynthesis = activeTask?.phase == TranscriptionPhase.SYNTHESIZING,
+            onCancelTranscription = { confirmCancel = true }, canRedoVtt = canRedoVtt, canRedoMd = canRedoMd,
+            onRedoVtt = { model.transcribe(setOf(name), RequestedWork.REDO_VTT_AND_MD) },
+            onRedoMd = { model.transcribe(setOf(name), RequestedWork.REDO_MD) })
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -105,14 +122,79 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             (recording.state as? DisplayState.Error)?.let { ErrorBanner(it.message, onRetry = { model.retry(name) }) }
+            SynthesisTaskNotice(task) { model.retrySynthesis(it) }
             val mp3 = recording.phoneFiles[FileKind.MP3]
-            if (mp3 == null) {
-                MissingMp3()
-            } else {
-                val playback = rememberPlayback(model, mp3.fileName, mp3.size)
-                Player(playback)
+            val playback = if (mp3 == null) null else rememberPlayback(model, mp3.fileName, mp3.size)
+            if (mp3 == null) MissingMp3() else {
+                Player(playback!!)
                 FileLine(mp3.fileName, ui.phoneFolder)
-                recording.phoneFiles[FileKind.VTT]?.let { Transcript(model, it, playback) }
+            }
+            val md = recording.phoneFiles[FileKind.MD]
+            val vtt = recording.phoneFiles[FileKind.VTT]
+            val document by produceState<Result<SynthesisDocument>?>(null, md, vtt, ui.local.synthesisProvenance, ui.local.transcriptionTasks, ui.refreshing) {
+                value = null
+                value = if (md == null) null else withContext(Dispatchers.IO) { model.readSynthesis(md.fileName, vtt?.fileName) }
+            }
+            val current = document?.getOrNull()
+            val label = current?.let {
+                when (it.status) {
+                    ProvenanceStatus.UNKNOWN -> "Modèle et provenance inconnus."
+                    ProvenanceStatus.STALE -> "Cette synthèse utilise l'ancien VTT. Modèle utilisé : ${it.model}"
+                    ProvenanceStatus.CURRENT -> "Modèle utilisé : ${it.model}"
+                }
+            }
+            if (current?.status == ProvenanceStatus.STALE) {
+                Notice("Cette synthèse utilise l'ancien VTT. Le MD précédent reste lisible jusqu'à son remplacement.")
+            }
+            RecordingDocuments(markdown = current?.markdown, provenanceLabel = label, canCreate = vtt != null && canRedoMd,
+                onCreate = { model.transcribe(setOf(name), RequestedWork.REDO_MD) }, mdPresent = md != null, mdError = document?.isFailure == true,
+                hasVtt = vtt != null, stale = current?.status == ProvenanceStatus.STALE) {
+                if (vtt == null) Notice("La transcription n'est pas encore disponible.") else Transcript(model, vtt, playback)
+            }
+        }
+    }
+}
+
+@Composable
+internal fun SynthesisTaskNotice(task: TranscriptionTask?, onRetry: (String) -> Unit) {
+    val work = task?.synthesis ?: return
+    if (work.phase == SynthesisPhase.SUSPENDED) {
+        val resumable = task.phase == TranscriptionPhase.SYNTHESIZING && work.context != null &&
+            (work.stagedSha256 != null || (!work.context.vttSha256.isNullOrBlank() && !work.context.systemPrompt.isNullOrBlank()))
+        Notice(work.suspensionReason ?: "La synthèse est suspendue.", NoticeTone.Destructive,
+            action = if (resumable) ({ CompactButton("Relancer le MD") { onRetry(task.localId) } }) else null)
+    } else if (task.phase == TranscriptionPhase.SYNTHESIZING) {
+        Notice(if (work.nextAttemptAtMillis != null) "Relance automatique prévue. La tâche est conservée."
+            else "Synthèse en cours. Le MD sera enregistré dès réception.")
+    }
+}
+
+@Composable
+internal fun RecordingDocuments(
+    markdown: String?, provenanceLabel: String?, canCreate: Boolean, onCreate: () -> Unit,
+    mdPresent: Boolean = markdown != null, mdError: Boolean = false, hasVtt: Boolean = canCreate, stale: Boolean = false,
+    transcript: @Composable () -> Unit,
+) {
+    var synthesis by remember { mutableStateOf(true) }
+    SecondaryTabRow(selectedTabIndex = if (synthesis) 0 else 1, containerColor = Dictee.colors.background, contentColor = Dictee.colors.text) {
+        Tab(selected = synthesis, onClick = { synthesis = true }, text = { Text("Synthèse", style = Dictee.type.control) })
+        Tab(selected = !synthesis, onClick = { synthesis = false }, text = { Text("Transcription", style = Dictee.type.control) })
+    }
+    if (!synthesis) transcript() else Column(Modifier.fillMaxWidth().card().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        when {
+            markdown != null -> {
+                MarkdownView(markdown, Modifier.fillMaxWidth())
+                if (provenanceLabel != null) Text(provenanceLabel, style = Dictee.type.caption, color = Dictee.colors.textSecondary)
+                if (stale && canCreate) {
+                    CompactButton("Relancer le MD", onClick = onCreate)
+                }
+            }
+            mdError -> Text("Le fichier MD n'est pas lisible.", style = Dictee.type.body, color = Dictee.colors.destructive)
+            mdPresent -> Text("Lecture…", style = Dictee.type.caption, color = Dictee.colors.textSecondary)
+            else -> {
+                Text("La synthèse reste à créer", style = Dictee.type.rowTitle, color = Dictee.colors.text)
+                Text(if (hasVtt) "Le VTT présent sera utilisé sans retranscrire l'audio." else "La synthèse pourra être créée lorsque le VTT sera disponible.", style = Dictee.type.caption, color = Dictee.colors.textSecondary)
+                if (canCreate) PrimaryButton("Créer le MD", onClick = onCreate)
             }
         }
     }
@@ -122,7 +204,8 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
 @Composable
 private fun RecordingBar(
     recording: Recording, canRecover: Boolean, onBack: () -> Unit, onRecover: () -> Unit,
-    canCancelTranscription: Boolean, onCancelTranscription: () -> Unit,
+    canCancelTranscription: Boolean, cancellingSynthesis: Boolean, onCancelTranscription: () -> Unit,
+    canRedoVtt: Boolean, canRedoMd: Boolean, onRedoVtt: () -> Unit, onRedoMd: () -> Unit,
 ) {
     val colors = Dictee.colors
     Row(
@@ -147,7 +230,7 @@ private fun RecordingBar(
                 StateBadge(recording.state)
             }
         }
-        RecordingMenu(canRecover, onRecover, canCancelTranscription, onCancelTranscription)
+        RecordingMenu(canRecover, onRecover, canCancelTranscription, cancellingSynthesis, onCancelTranscription, canRedoVtt, canRedoMd, onRedoVtt, onRedoMd)
     }
 }
 
@@ -157,7 +240,8 @@ private fun duration(recording: Recording): String =
 
 /** Menu de la fiche : « Récupérer à nouveau », grisé sans liaison avec le boîtier ou pendant une récupération. */
 @Composable
-private fun RecordingMenu(canRecover: Boolean, onRecover: () -> Unit, canCancelTranscription: Boolean, onCancelTranscription: () -> Unit) {
+internal fun RecordingMenu(canRecover: Boolean, onRecover: () -> Unit, canCancelTranscription: Boolean, cancellingSynthesis: Boolean,
+    onCancelTranscription: () -> Unit, canRedoVtt: Boolean, canRedoMd: Boolean, onRedoVtt: () -> Unit, onRedoMd: () -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
         IconAction(R.drawable.ic_more, "Plus d'actions") { open = true }
@@ -168,6 +252,10 @@ private fun RecordingMenu(canRecover: Boolean, onRecover: () -> Unit, canCancelT
             containerColor = Dictee.colors.surface,
             border = BorderStroke(1.dp, Dictee.colors.border),
         ) {
+            DropdownMenuItem(text = { Text("Refaire le VTT et le MD", style = Dictee.type.rowTitle) }, enabled = canRedoVtt,
+                onClick = { open = false; onRedoVtt() })
+            DropdownMenuItem(text = { Text("Refaire le MD", style = Dictee.type.rowTitle) }, enabled = canRedoMd,
+                onClick = { open = false; onRedoMd() })
             DropdownMenuItem(
                 text = { Text(text = "Récupérer à nouveau", style = Dictee.type.rowTitle) },
                 enabled = canRecover,
@@ -177,7 +265,7 @@ private fun RecordingMenu(canRecover: Boolean, onRecover: () -> Unit, canCancelT
                 },
             )
             if (canCancelTranscription) DropdownMenuItem(
-                text = { Text(text = "Annuler la transcription", style = Dictee.type.rowTitle) },
+                text = { Text(text = if (cancellingSynthesis) "Annuler la synthèse" else "Annuler la transcription", style = Dictee.type.rowTitle) },
                 onClick = {
                     open = false
                     onCancelTranscription()
@@ -203,7 +291,7 @@ private fun MissingMp3() {
 
 /** Segments du VTT : un toucher place la lecture du MP3 au début du segment et la lance. Un fichier illisible n'affecte que cette carte. */
 @Composable
-private fun Transcript(model: AppModel, vtt: PhoneFile, playback: Playback) {
+private fun Transcript(model: AppModel, vtt: PhoneFile, playback: Playback?) {
     val colors = Dictee.colors
     val cues by produceState<Result<List<VttCue>>?>(null, vtt.fileName, vtt.size) {
         value = withContext(Dispatchers.IO) { model.readTranscript(vtt.fileName) }
@@ -218,7 +306,7 @@ private fun Transcript(model: AppModel, vtt: PhoneFile, playback: Playback) {
             else -> result.getOrThrow().forEach { cue ->
                 Column(
                     modifier = Modifier.fillMaxWidth()
-                        .pressable(radius = 0.dp, enabled = playback.status != PlaybackStatus.FAILED, onClick = { playback.playFrom(cue.startMs) })
+                        .pressable(radius = 0.dp, enabled = playback != null && playback.status != PlaybackStatus.FAILED, onClick = { playback?.playFrom(cue.startMs) })
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                 ) {
                     Text(

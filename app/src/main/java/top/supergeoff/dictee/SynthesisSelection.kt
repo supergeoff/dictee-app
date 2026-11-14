@@ -43,3 +43,21 @@ object SynthesisSelection {
         return plans to excluded
     }
 }
+
+internal fun synthesisSelectionMessage(
+    recordings: List<Recording>, selectedNames: Set<String>?, errors: Map<String, Map<Step, String>>, activeNames: Set<String>,
+): String? {
+    if (selectedNames == null) return if (Recordings.toTranscribe(recordings, null, errors, activeNames).candidates.isEmpty())
+        "Aucun VTT ou MD à créer pour les enregistrements exploitables." else null
+    val excluded = Recordings.toTranscribe(recordings, selectedNames, errors, activeNames).excluded
+    val missing = excluded.filterValues { it == TranscriptionExclusion.MISSING_MP3 || it == TranscriptionExclusion.RECOVERY_FAILED }.keys
+    val active = selectedNames.intersect(activeNames)
+    val complete = recordings.filter { it.name in selectedNames && it.name !in active &&
+        FileKind.VTT in it.phoneFiles && FileKind.MD in it.phoneFiles }.map { it.name }
+    val nothingToDo = Recordings.toTranscribe(recordings, selectedNames, errors, activeNames).candidates.isEmpty()
+    return listOfNotNull(
+        missing.takeIf { it.isNotEmpty() }?.let { "Sans MP3 exploitable sur le téléphone : ${it.sorted().joinToString(", ")}." },
+        active.takeIf { it.isNotEmpty() }?.let { "Déjà en cours : ${it.sorted().joinToString(", ")}." },
+        complete.takeIf { nothingToDo && it.isNotEmpty() }?.let { "VTT et MD déjà présents : ${it.sorted().joinToString(", ")}." },
+    ).joinToString(" ").ifEmpty { null }
+}

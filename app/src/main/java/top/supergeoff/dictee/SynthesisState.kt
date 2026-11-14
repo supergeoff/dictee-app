@@ -30,6 +30,8 @@ data class SynthesisWork(
 internal fun hasValidSynthesisContext(work: SynthesisWork): Boolean = work.context != null ||
     work.phase in setOf(SynthesisPhase.WAITING_VTT, SynthesisPhase.SUSPENDED, SynthesisPhase.CANCELLED)
 
+data class SynthesisDocument(val markdown: String, val status: ProvenanceStatus, val model: String?)
+
 data class SynthesisProvenance(
     val folderUri: String,
     val mdName: String,

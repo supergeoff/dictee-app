@@ -335,7 +335,7 @@ private fun ActionBar(ui: UiState, model: AppModel, checked: Set<String>?, onDon
             }
             SecondaryButton(
                 text = "VTT + MD (${transcribe.size})",
-                enabled = transcribe.isNotEmpty(),
+                enabled = true,
                 modifier = Modifier.weight(1f),
             ) {
                 model.transcribe(checked)

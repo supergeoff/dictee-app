@@ -438,7 +438,7 @@ class AppModel(
         scope.launch {
             jobs.track {
                 try {
-                    announceExclusions(names)
+                    if (request == RequestedWork.MISSING) announceExclusions(names)
                     val started = transcriptionCoordinator.start(names, request)
                     if (started.isNotEmpty()) transcriptionLifecycle.request().join()
                 } catch (e: CancellationException) {
@@ -453,13 +453,10 @@ class AppModel(
 
     /** Signale les éléments choisis qui ne seront pas transcrits : sans MP3 sur le téléphone ou en erreur de récupération. */
     private suspend fun announceExclusions(names: Set<String>?) {
-        if (names == null) return
         val state = localRepository.awaitInitialized()
         val current = buildUi(state, phoneFlow.value, driveFlow.value, box.status.value, liveFlow.value)
         val active = state.transcriptionTasks.filter { !it.phase.isTerminal() }.mapTo(mutableSetOf()) { it.recordingName }
-        val excluded = Recordings.toTranscribe(current.recordings, names, state.errors, active).excluded
-        val missing = excluded.filterValues { it == TranscriptionExclusion.MISSING_MP3 || it == TranscriptionExclusion.RECOVERY_FAILED }.keys
-        if (missing.isNotEmpty()) say("Sans MP3 exploitable sur le téléphone, non transcrit : ${missing.sorted().joinToString(", ")}.")
+        synthesisSelectionMessage(current.recordings, names, state.errors, active)?.let { say(it) }
     }
 
     private suspend fun followTranscriptions(): InteractiveRun {
@@ -482,6 +479,22 @@ class AppModel(
             } catch (e: Exception) {
                 journal.error(Source.APP, "annulation de transcription : ${reasonOf(e)}")
                 say(reasonOf(e))
+            }
+        }
+    }
+
+    /** Reprend la tâche de synthèse suspendue sans changer son contexte figé. */
+    fun retrySynthesis(localId: String) {
+        scope.launch {
+            jobs.track {
+                try {
+                    transcriptionCoordinator.retrySynthesis(localId)
+                    transcriptionLifecycle.request().join()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    say(reasonOf(e))
+                }
             }
         }
     }
@@ -756,6 +769,25 @@ class AppModel(
         val tree = localFlow.phoneTreeUri ?: return Result.failure(PhoneStoreException(PHONE_FOLDER_LOST))
         return try {
             Result.success(WebVtt.parse(PhoneFolder(app, tree.toUri()).open(fileName).use { it.readBytes() }))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /** Lit le MD et vérifie sa provenance depuis le dossier courant, hors du fil principal. */
+    suspend fun readSynthesis(mdName: String, vttName: String?): Result<SynthesisDocument> {
+        val state = localRepository.awaitInitialized()
+        val tree = state.phoneTreeUri ?: return Result.failure(PhoneStoreException(PHONE_FOLDER_LOST))
+        return try {
+            val folder = PhoneFolder(app, tree.toUri())
+            val md = folder.open(mdName).use { it.readBytes() }
+            val mdHash = java.security.MessageDigest.getInstance("SHA-256").digest(md).joinToString("") { "%02x".format(it.toInt() and 0xff) }
+            val vttHash = vttName?.let { runCatching { TranscriptionAudio.sha256(folder, it) }.getOrNull() }
+            val provenance = state.synthesisProvenance.firstOrNull { it.folderUri == tree && it.mdName == mdName }
+            val status = provenanceStatus(provenance, tree, vttHash, mdHash)
+            Result.success(SynthesisDocument(md.toString(Charsets.UTF_8), status, if (status == ProvenanceStatus.UNKNOWN) null else provenance?.model))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
