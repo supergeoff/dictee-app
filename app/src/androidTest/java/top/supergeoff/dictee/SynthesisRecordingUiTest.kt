@@ -5,7 +5,7 @@ import io.noties.markwon.core.spans.BulletListItemSpan
 import io.noties.markwon.core.spans.HeadingSpan
 import android.widget.TextView
 import androidx.compose.material3.Text
-import androidx.compose.ui.platform.LocalContext
+import androidx.activity.compose.LocalActivity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.runtime.mutableStateOf
@@ -47,7 +47,7 @@ class SynthesisRecordingUiTest {
     @Test fun markdownIsRenderedAsNativeSpansWithoutRawMarkers() {
         lateinit var activity: android.app.Activity
         compose.setContent {
-            activity = LocalContext.current as android.app.Activity
+            activity = requireNotNull(LocalActivity.current)
             DicteeTheme(false) { MarkdownView("## Résumé\n\n- Élément synthétique") }
         }
         compose.runOnIdle {
