@@ -9,10 +9,45 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SynthesisSettingsFormTest {
+    @Test fun emptyPromptCannotBeSaved() = runTest {
+        var saves = 0
+        val form = SynthesisSettingsForm(backgroundScope, { _, _ -> saves++ }, { _, _ -> }, { _ -> })
+        form.initialize(SynthesisSettings())
+        form.setPrompt("   ")
+        assertFalse(form.submitPrompt())
+        runCurrent()
+        assertEquals(0, saves)
+        assertEquals("Le prompt ne peut pas être vide.", form.state.value.message)
+    }
+
+    @Test fun promptAndServiceActionsAreIndependentAndKeepDrafts() = runTest {
+        val services = mutableListOf<Pair<SynthesisSettings, String>>()
+        val prompts = mutableListOf<String>()
+        val form = SynthesisSettingsForm(backgroundScope, { settings, secret -> services += settings to secret },
+            { _, _ -> }, { prompts += it })
+        form.initialize(SynthesisSettings(model = "ancien", prompt = "ancien prompt"))
+        form.setModel("nouveau")
+        form.setSecret("synthetic-key")
+        form.setPrompt("nouveau prompt {{type}}")
+        form.setBaseUrl("adresse invalide")
+        assertTrue(form.submitPrompt())
+        runCurrent()
+        assertEquals(listOf("nouveau prompt {{type}}"), prompts)
+        assertTrue(services.isEmpty())
+        assertEquals("synthetic-key", form.state.value.secret)
+        assertEquals("nouveau", form.state.value.model)
+        form.setBaseUrl("https://example.invalid/v1")
+        assertTrue(form.submit())
+        runCurrent()
+        assertEquals(1, services.size)
+        assertEquals("nouveau prompt {{type}}", form.state.value.prompt)
+        assertEquals("", form.state.value.secret)
+    }
+
     @Test fun submitIsSerializedAndClearsKeyOnlyOnSuccess() = runTest {
         val release = CompletableDeferred<Unit>()
         val calls = mutableListOf<Pair<SynthesisSettings, String>>()
-        val form = SynthesisSettingsForm(backgroundScope, { settings, secret -> calls += settings to secret; release.await() }, { _, _ -> })
+        val form = SynthesisSettingsForm(backgroundScope, { settings, secret -> calls += settings to secret; release.await() }, { _, _ -> }, { _ -> })
         form.initialize(SynthesisSettings())
         form.setBaseUrl("https://example.invalid/v1")
         form.setModel("model")
@@ -39,7 +74,7 @@ class SynthesisSettingsFormTest {
         val form = SynthesisSettingsForm(backgroundScope, { _, _ -> saves++ }, { settings, secret ->
             calls += settings to secret
             if (failTest) error("synthetic-key")
-        })
+        }, { _ -> })
         form.initialize(SynthesisSettings(baseUrl = "https://example.invalid/v1", model = "old", credentialRef = "saved-ref"))
         form.setBaseUrl("https://new.example.invalid/v1")
         form.setModel("new-model")
@@ -66,7 +101,7 @@ class SynthesisSettingsFormTest {
 
     @Test fun testExposesOnlyCategorizedSafeFailures() = runTest {
         var failure: Exception = SynthesisClientException(SynthesisFailureKind.TRANSIENT)
-        val form = SynthesisSettingsForm(backgroundScope, { _, _ -> throw failure }, { _, _ -> throw failure })
+        val form = SynthesisSettingsForm(backgroundScope, { _, _ -> throw failure }, { _, _ -> throw failure }, { _ -> })
         form.initialize(SynthesisSettings())
         form.setSecret("synthetic-key")
         for (kind in SynthesisFailureKind.entries) {
@@ -89,7 +124,7 @@ class SynthesisSettingsFormTest {
     @Test fun testingBlocksConcurrentOperationsUntilFinished() = runTest {
         val release = CompletableDeferred<Unit>()
         var calls = 0
-        val form = SynthesisSettingsForm(backgroundScope, { _, _ -> calls++ }, { _, _ -> calls++; release.await() })
+        val form = SynthesisSettingsForm(backgroundScope, { _, _ -> calls++ }, { _, _ -> calls++; release.await() }, { _ -> })
         form.initialize(SynthesisSettings())
         form.setSecret("synthetic-key")
         assertTrue(form.test())
@@ -108,7 +143,7 @@ class SynthesisSettingsFormTest {
 
     @Test fun invalidAddressDoesNotCallSaveOrTestAndFailureKeepsKey() = runTest {
         var calls = 0
-        val form = SynthesisSettingsForm(backgroundScope, { _, _ -> calls++; error("synthetic-key") }, { _, _ -> calls++ })
+        val form = SynthesisSettingsForm(backgroundScope, { _, _ -> calls++; error("synthetic-key") }, { _, _ -> calls++ }, { _ -> })
         form.initialize(SynthesisSettings())
         form.setSecret("synthetic-key")
         form.setBaseUrl("https://user:synthetic-key@example.invalid/v1")

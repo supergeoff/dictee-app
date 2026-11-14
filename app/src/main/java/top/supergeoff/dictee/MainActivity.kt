@@ -48,6 +48,7 @@ import top.supergeoff.dictee.ui.DicteeTheme
 import top.supergeoff.dictee.ui.DriveFolderScreen
 import top.supergeoff.dictee.ui.JournalScreen
 import top.supergeoff.dictee.ui.PrimaryButton
+import top.supergeoff.dictee.ui.PromptScreen
 import top.supergeoff.dictee.ui.RecordingScreen
 import top.supergeoff.dictee.ui.RecordingsScreen
 import top.supergeoff.dictee.ui.SettingsScreen
@@ -58,6 +59,7 @@ sealed class Screen {
     data object Home : Screen()
     data class Detail(val name: String) : Screen()
     data object Settings : Screen()
+    data object Prompt : Screen()
     data object DriveFolders : Screen()
     data object Journal : Screen()
 }
@@ -245,7 +247,9 @@ private fun Navigation(ui: UiState, model: AppModel, stack: SnapshotStateList<Sc
                 onAssociate = onSearch,
                 onDriveFolders = { push(Screen.DriveFolders) },
                 onJournal = { push(Screen.Journal) },
+                onPrompt = { push(Screen.Prompt) },
             )
+            Screen.Prompt -> PromptScreen(model.synthesisForm, back)
             Screen.DriveFolders -> DriveFolderScreen(ui, model, back)
             Screen.Journal -> JournalScreen(model, back)
         }

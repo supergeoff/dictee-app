@@ -79,6 +79,9 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("com.google.android.gms:play-services-auth:22.0.0")
 
+    androidTestImplementation(platform("androidx.compose:compose-bom:2026.06.01"))
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
     androidTestCompileOnly(files(android.sdkDirectory.resolve("platforms/android-35/optional/android.test.mock.jar")))
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.work:work-testing:2.10.1")

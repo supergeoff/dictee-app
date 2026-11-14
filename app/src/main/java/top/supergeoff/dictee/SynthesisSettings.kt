@@ -36,14 +36,21 @@ fun isValidSynthesisBaseUrl(value: String): Boolean = isValidTranscriptionBaseUr
 class SynthesisSettingsManager(private val repository: LocalStateRepository, private val credentials: CredentialStore) {
     private val mutex = Mutex()
 
-    suspend fun save(settings: SynthesisSettings, newSecret: String?): Unit = mutex.withLock {
+    suspend fun save(settings: SynthesisSettings, newSecret: String?): Unit = save(settings, newSecret, preservePrompt = false)
+
+    suspend fun saveService(settings: SynthesisSettings, secret: String?): Unit = save(settings, secret, preservePrompt = true)
+
+    private suspend fun save(settings: SynthesisSettings, newSecret: String?, preservePrompt: Boolean): Unit = mutex.withLock {
         if (!isValidSynthesisBaseUrl(settings.baseUrl)) throw InvalidTranscriptionAddressException()
         try {
             repository.awaitInitialized()
             val newRef = newSecret?.takeIf { it.isNotEmpty() }?.let { credentials.save(it) }
             try {
                 repository.updateDurably { state ->
-                    state.copy(synthesisSettings = settings.copy(credentialRef = newRef ?: state.synthesisSettings.credentialRef))
+                    state.copy(synthesisSettings = settings.copy(
+                        credentialRef = newRef ?: state.synthesisSettings.credentialRef,
+                        prompt = if (preservePrompt) state.synthesisSettings.prompt else settings.prompt,
+                    ))
                 }
             } catch (e: LocalStateWriteNotPublishedException) {
                 if (newRef != null) try { credentials.remove(newRef) }
@@ -54,6 +61,11 @@ class SynthesisSettingsManager(private val repository: LocalStateRepository, pri
             Unit
         } catch (e: CancellationException) { throw e }
         catch (_: Exception) { throw SynthesisClientException(SynthesisFailureKind.CREDENTIAL) }
+    }
+
+    suspend fun savePrompt(prompt: String) {
+        require(prompt.isNotBlank())
+        repository.updateDurably { state -> state.copy(synthesisSettings = state.synthesisSettings.copy(prompt = prompt)) }
     }
 
     /** Le test lit la clé enregistrée uniquement si le brouillon ne fournit pas de clé. */

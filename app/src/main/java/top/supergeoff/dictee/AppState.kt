@@ -739,8 +739,9 @@ class AppModel(
         withContext(Dispatchers.IO) { transcriptionSettings.save(settings, secret) }
     }
     val synthesisForm = SynthesisSettingsForm(scope,
-        save = { settings, secret -> withContext(Dispatchers.IO) { synthesisSettings.save(settings, secret) } },
+        save = { settings, secret -> withContext(Dispatchers.IO) { synthesisSettings.saveService(settings, secret) } },
         test = { settings, secret -> withContext(Dispatchers.IO) { synthesisSettings.test(settings, secret, synthesisClient) } },
+        savePrompt = { prompt -> withContext(Dispatchers.IO) { synthesisSettings.savePrompt(prompt) } },
     )
 
     /** Adresse du fichier dans le dossier du téléphone, null s'il est absent ou inaccessible. Lit le dossier : à appeler hors du fil principal. */

@@ -25,6 +25,7 @@ class SynthesisSettingsForm(
     private val scope: CoroutineScope,
     private val save: suspend (SynthesisSettings, String) -> Unit,
     private val test: suspend (SynthesisSettings, String) -> Unit,
+    private val savePrompt: suspend (String) -> Unit,
 ) {
     private val lock = Any()
     private val mutableState = MutableStateFlow(SynthesisSettingsDraft())
@@ -45,25 +46,41 @@ class SynthesisSettingsForm(
     fun setPrompt(value: String) = edit { it.copy(prompt = value) }
     fun setSecret(value: String) = edit { it.copy(secret = value) }
 
-    fun submit(): Boolean = operate(testing = false)
-    fun test(): Boolean = operate(testing = true)
+    fun submit(): Boolean = operate(Operation.SERVICE)
+    fun submitPrompt(): Boolean = operate(Operation.PROMPT)
+    fun test(): Boolean = operate(Operation.TEST)
 
-    private fun operate(testing: Boolean): Boolean = synchronized(lock) {
+    private enum class Operation { SERVICE, PROMPT, TEST }
+
+    private fun operate(operation: Operation): Boolean = synchronized(lock) {
+        val testing = operation == Operation.TEST
         val draft = mutableState.value
         if (!draft.initialized || draft.saving || draft.testing) return@synchronized false
         val settings = SynthesisSettings(baseUrl = draft.baseUrl.trim(), model = draft.model.trim(), prompt = draft.prompt)
-        if (!isValidSynthesisBaseUrl(settings.baseUrl)) {
+        if (operation != Operation.PROMPT && !isValidSynthesisBaseUrl(settings.baseUrl)) {
             mutableState.value = draft.copy(message = InvalidTranscriptionAddressException().message)
+            return@synchronized false
+        }
+        if (operation == Operation.PROMPT && settings.prompt.isBlank()) {
+            mutableState.value = draft.copy(message = "Le prompt ne peut pas être vide.")
             return@synchronized false
         }
         mutableState.value = draft.copy(saving = !testing, testing = testing, message = null)
         scope.launch {
             try {
-                if (testing) test(settings, draft.secret) else save(settings, draft.secret)
+                when (operation) {
+                    Operation.TEST -> test(settings, draft.secret)
+                    Operation.SERVICE -> save(settings, draft.secret)
+                    Operation.PROMPT -> savePrompt(settings.prompt)
+                }
                 synchronized(lock) {
                     mutableState.value = mutableState.value.copy(
-                        secret = if (testing) draft.secret else "", saving = false, testing = false,
-                        message = if (testing) "Test de synthèse réussi." else "Réglages de synthèse enregistrés",
+                        secret = if (operation == Operation.SERVICE) "" else draft.secret, saving = false, testing = false,
+                        message = when (operation) {
+                            Operation.TEST -> "Test de synthèse réussi."
+                            Operation.SERVICE -> "Réglages de synthèse enregistrés"
+                            Operation.PROMPT -> "Prompt enregistré pour les prochaines synthèses."
+                        },
                     )
                 }
             } catch (e: CancellationException) {
@@ -73,7 +90,8 @@ class SynthesisSettingsForm(
                 val message = if (testing) {
                     val reason = if (e is SynthesisClientException) e.message else "Vérifie les réglages."
                     "Test de synthèse échoué. $reason"
-                } else "Impossible d’enregistrer les réglages de synthèse. Réessaie."
+                } else if (operation == Operation.PROMPT) "Impossible d’enregistrer le prompt. Réessaie."
+                else "Impossible d’enregistrer les réglages de synthèse. Réessaie."
                 synchronized(lock) {
                     mutableState.value = mutableState.value.copy(saving = false, testing = false, message = message)
                 }

@@ -38,11 +38,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
 import top.supergeoff.dictee.transcriptionTaskSettingsMessages
 import top.supergeoff.dictee.TranscriptionSettingsForm
+import top.supergeoff.dictee.SynthesisSettings
+import top.supergeoff.dictee.SynthesisSettingsForm
 import androidx.compose.ui.unit.dp
 import top.supergeoff.dictee.AppModel
 import top.supergeoff.dictee.BuildConfig
@@ -58,8 +61,7 @@ private val SegmentShape = RoundedCornerShape(Tokens.RADIUS_INNER_DP.dp)
 private val Themes = listOf(ThemeChoice.LIGHT to "Clair", ThemeChoice.DARK to "Sombre", ThemeChoice.SYSTEM to "Système")
 
 /**
- * Réglages du lot 1, une page découpée en rubriques : le boîtier, le stockage sur le téléphone, Google Drive, l'apparence et
- * « À propos ». Les rubriques d'automatisation, de transcription et de synthèse arrivent avec les lots suivants.
+ * Réglages découpés en rubriques, dont les services de transcription et de synthèse indépendants.
  * L'écran n'affiche que [ui] ; ce que demandent les boutons passe par [model] ou par les rappels de l'activité.
  */
 @Composable
@@ -70,6 +72,7 @@ fun SettingsScreen(
     onAssociate: () -> Unit,
     onDriveFolders: () -> Unit,
     onJournal: () -> Unit,
+    onPrompt: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize().background(Dictee.colors.background)) {
         TopBar("Réglages", onBack)
@@ -85,6 +88,7 @@ fun SettingsScreen(
             StorageSection(ui.phoneFolder, busy = ui.recovering || ui.sending, onChange = model::choosePhoneFolder)
             DriveSection(ui.local, model, onDriveFolders)
             TranscriptionSection(ui.local, model.transcriptionForm)
+            SynthesisSection(ui.local.synthesisSettings, model.synthesisForm, onPrompt)
             AppearanceSection(ui.local.theme, model::setTheme)
             AboutSection(onJournal)
         }
@@ -218,6 +222,30 @@ private fun TranscriptionSection(local: LocalState, form: TranscriptionSettingsF
                 Text(message, color = Dictee.colors.textSecondary)
             }
             Text("Le test de connexion sera disponible ultérieurement.", color = Dictee.colors.textSecondary)
+        }
+    }
+}
+
+@Composable
+internal fun SynthesisSection(settings: SynthesisSettings, form: SynthesisSettingsForm, onPrompt: () -> Unit) {
+    LaunchedEffect(form) { form.initialize(settings) }
+    val draft by form.state.collectAsState()
+    val enabled = draft.initialized && !draft.saving && !draft.testing
+    Section("Synthèse") {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Service compatible OpenAI. Le VTT et le prompt sont envoyés au service que tu configures.", style = Dictee.type.caption, color = Dictee.colors.textSecondary)
+            OutlinedTextField(draft.baseUrl, form::setBaseUrl, enabled = enabled, label = { Text("Adresse du serveur (/v1)") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.fillMaxWidth().testTag("synthesis-address"), textStyle = Dictee.type.body)
+            OutlinedTextField(draft.secret, form::setSecret, enabled = enabled, label = { Text("Nouvelle clé") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth().testTag("synthesis-secret"), textStyle = Dictee.type.body)
+            Text(if (settings.credentialRef == null) "Aucune clé enregistrée. La clé est protégée par Android Keystore." else "Une clé est enregistrée. Laisse ce champ vide pour la conserver. La clé est protégée par Android Keystore.", style = Dictee.type.caption, color = Dictee.colors.textSecondary)
+            OutlinedTextField(draft.model, form::setModel, enabled = enabled, label = { Text("Modèle") }, singleLine = true, modifier = Modifier.fillMaxWidth().testTag("synthesis-model"), textStyle = Dictee.type.body)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SecondaryButton(if (draft.testing) "Test…" else "Tester", enabled = enabled, modifier = Modifier.weight(1f)) { form.test() }
+                PrimaryButton(if (draft.saving) "Enregistrement…" else "Enregistrer", enabled = enabled, modifier = Modifier.weight(1f).testTag("synthesis-save")) { form.submit() }
+            }
+            Text("« Tester » envoie une courte requête au modèle et peut entraîner un coût. Ce test ne vérifie pas qu’un VTT de deux heures tient dans son contexte.", style = Dictee.type.caption, color = Dictee.colors.textSecondary)
+            draft.message?.let { Text(it, style = Dictee.type.bodySm, color = Dictee.colors.text) }
+            GroupCard { ListRow(title = "Prompt et format", subtitle = "Instructions et structure du Markdown", enabled = enabled, onClick = onPrompt) { Chevron() } }
+            Text("En cas d’interruption, la tâche est conservée. Dictée effectue au plus deux relances automatiques, puis attend une relance manuelle. Une tentative interrompue peut être facturée.", style = Dictee.type.caption, color = Dictee.colors.textSecondary)
         }
     }
 }

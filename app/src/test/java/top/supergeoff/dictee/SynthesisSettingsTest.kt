@@ -77,6 +77,32 @@ class SynthesisSettingsTest {
         assertFalse(file().readText().contains("synthetic-replacement"))
     }
 
+    @Test fun concurrentPromptAndServiceSavesPreserveEachOtherAndFrozenTask() = runBlocking {
+        val credentials = FakeCredentials()
+        val repository = LocalStateRepository(LocalStateStore(file()))
+        val manager = SynthesisSettingsManager(repository, credentials)
+        manager.save(SynthesisSettings(model = "old", prompt = "old prompt"), secret)
+        val ref = repository.state.value!!.synthesisSettings.credentialRef!!
+        val frozen = task(ref)
+        repository.updateDurably { it.copy(transcriptionTasks = listOf(frozen)) }
+        val service = async(Dispatchers.Default) { manager.saveService(SynthesisSettings(baseUrl = "https://example.invalid/v1", model = "new", prompt = "unsaved prompt"), "") }
+        val prompt = async(Dispatchers.Default) { manager.savePrompt("new prompt {{type}}") }
+        service.await(); prompt.await()
+        val state = LocalStateStore(file()).load()
+        assertEquals("new", state.synthesisSettings.model)
+        assertEquals("new prompt {{type}}", state.synthesisSettings.prompt)
+        assertEquals(ref, state.synthesisSettings.credentialRef)
+        assertEquals(frozen, state.transcriptionTasks.single())
+        assertEquals(secret, credentials.read(ref))
+        manager.savePrompt("autre prompt")
+        manager.saveService(SynthesisSettings(model = "new", prompt = "brouillon non enregistré"), "")
+        assertEquals("autre prompt", LocalStateStore(file()).load().synthesisSettings.prompt)
+        manager.savePrompt(SynthesisPrompt.DEFAULT)
+        assertEquals(SynthesisPrompt.DEFAULT, LocalStateStore(file()).load().synthesisSettings.prompt)
+        assertEquals("new", LocalStateStore(file()).load().synthesisSettings.model)
+        assertFalse(file().readText().contains(secret))
+    }
+
     @Test fun concurrentSavesAndTaskUpdatePreserveReferences() = runBlocking {
         val credentials = FakeCredentials()
         val repository = LocalStateRepository(LocalStateStore(file()))
