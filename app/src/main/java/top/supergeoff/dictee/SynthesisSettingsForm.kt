@@ -69,10 +69,13 @@ class SynthesisSettingsForm(
             } catch (e: CancellationException) {
                 synchronized(lock) { mutableState.value = mutableState.value.copy(saving = false, testing = false, message = "Opération interrompue. Réessaie.") }
                 throw e
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                val message = if (testing) {
+                    val reason = if (e is SynthesisClientException) e.message else "Vérifie les réglages."
+                    "Test de synthèse échoué. $reason"
+                } else "Impossible d’enregistrer les réglages de synthèse. Réessaie."
                 synchronized(lock) {
-                    mutableState.value = mutableState.value.copy(saving = false, testing = false,
-                        message = if (testing) "Test de synthèse échoué. Vérifie les réglages." else "Impossible d’enregistrer les réglages de synthèse. Réessaie.")
+                    mutableState.value = mutableState.value.copy(saving = false, testing = false, message = message)
                 }
             }
         }

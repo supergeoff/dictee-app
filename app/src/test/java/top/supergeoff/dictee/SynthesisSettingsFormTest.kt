@@ -64,6 +64,28 @@ class SynthesisSettingsFormTest {
         assertFalse(form.state.value.toString().contains("synthetic-key"))
     }
 
+    @Test fun testExposesOnlyCategorizedSafeFailures() = runTest {
+        var failure: Exception = SynthesisClientException(SynthesisFailureKind.TRANSIENT)
+        val form = SynthesisSettingsForm(backgroundScope, { _, _ -> throw failure }, { _, _ -> throw failure })
+        form.initialize(SynthesisSettings())
+        form.setSecret("synthetic-key")
+        for (kind in SynthesisFailureKind.entries) {
+            failure = SynthesisClientException(kind)
+            assertTrue(form.test())
+            runCurrent()
+            assertEquals("Test de synthèse échoué. ${failure.message}", form.state.value.message)
+            assertEquals("synthetic-key", form.state.value.secret)
+        }
+        failure = IllegalStateException("synthetic-key fournisseur")
+        assertTrue(form.test())
+        runCurrent()
+        assertEquals("Test de synthèse échoué. Vérifie les réglages.", form.state.value.message)
+        failure = SynthesisClientException(SynthesisFailureKind.TRANSIENT)
+        assertTrue(form.submit())
+        runCurrent()
+        assertEquals("Impossible d’enregistrer les réglages de synthèse. Réessaie.", form.state.value.message)
+    }
+
     @Test fun testingBlocksConcurrentOperationsUntilFinished() = runTest {
         val release = CompletableDeferred<Unit>()
         var calls = 0

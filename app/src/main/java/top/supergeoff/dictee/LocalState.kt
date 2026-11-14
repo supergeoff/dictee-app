@@ -73,6 +73,10 @@ internal fun MutableStateFlow<LocalState>.updateChanged(change: (LocalState) -> 
     return changed
 }
 
+/** L'écriture a échoué avant publication certaine de l'état. */
+internal class LocalStateWriteNotPublishedException(cause: Exception? = null) :
+    IOException("Impossible de remplacer state.json", cause)
+
 /** Lit et écrit `state.json`. */
 class LocalStateStore(private val file: File, private val rename: (File, File) -> Boolean = { from, to -> from.renameTo(to) }) {
 
@@ -95,8 +99,29 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
     }
 
     /** Écrit l'état dans `state.json.tmp`, puis le renomme sur `state.json`. */
+    fun save(state: LocalState) = write(state, markPreparationFailure = false)
+
+    internal fun saveForRepository(state: LocalState) = write(state, markPreparationFailure = true)
+
     @Synchronized
-    fun save(state: LocalState) {
+    private fun write(state: LocalState, markPreparationFailure: Boolean) {
+        val json = try { prepareJson(state) }
+        catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (e: Exception) { if (markPreparationFailure) throw LocalStateWriteNotPublishedException(e) else throw e }
+        val tmp = File(file.parentFile, file.name + ".tmp")
+        try {
+            file.parentFile?.mkdirs()
+            FileOutputStream(tmp).use { output ->
+                output.write(json.toByteArray(Charsets.UTF_8))
+                output.fd.sync()
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+          catch (e: Exception) { throw LocalStateWriteNotPublishedException(e) }
+        // Une exception pendant le renommage ne garantit pas que celui-ci n'a pas eu lieu.
+        if (!rename(tmp, file)) throw LocalStateWriteNotPublishedException()
+    }
+
+    private fun prepareJson(state: LocalState): String {
         if (!isValidTranscriptionBaseUrl(state.transcriptionSettings.baseUrl) ||
             !isValidSynthesisBaseUrl(state.synthesisSettings.baseUrl) ||
             state.transcriptionTasks.any { !isSafeStoredTaskAddress(it) || !isSafeStoredSynthesisAddress(it.synthesis) })
@@ -163,13 +188,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
                         .put("synthesis", task.synthesis?.let { writeSynthesis(it) } ?: JSONObject.NULL))
                 }
             })
-        file.parentFile?.mkdirs()
-        val tmp = File(file.parentFile, file.name + ".tmp")
-        FileOutputStream(tmp).use { output ->
-            output.write(json.toString(2).toByteArray(Charsets.UTF_8))
-            output.fd.sync()
-        }
-        if (!rename(tmp, file)) throw IOException("Impossible de remplacer state.json")
+        return json.toString(2)
     }
 
     private fun read(json: JSONObject): LocalState {
@@ -365,7 +384,7 @@ class LocalStateRepository(
                     val old = checkNotNull(mutableState.value)
                     val next = change.transform(old)
                     if (change.forceSave || next != old) {
-                        store.save(next)
+                        store.saveForRepository(next)
                         mutableState.value = next
                     }
                     Result.success(next)

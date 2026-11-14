@@ -41,8 +41,15 @@ class SynthesisSettingsManager(private val repository: LocalStateRepository, pri
         try {
             repository.awaitInitialized()
             val newRef = newSecret?.takeIf { it.isNotEmpty() }?.let { credentials.save(it) }
-            repository.updateDurably { state ->
-                state.copy(synthesisSettings = settings.copy(credentialRef = newRef ?: state.synthesisSettings.credentialRef))
+            try {
+                repository.updateDurably { state ->
+                    state.copy(synthesisSettings = settings.copy(credentialRef = newRef ?: state.synthesisSettings.credentialRef))
+                }
+            } catch (e: LocalStateWriteNotPublishedException) {
+                if (newRef != null) try { credentials.remove(newRef) }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { }
+                throw e
             }
             Unit
         } catch (e: CancellationException) { throw e }
