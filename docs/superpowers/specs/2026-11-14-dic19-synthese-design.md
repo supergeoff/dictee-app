@@ -2,6 +2,13 @@
 
 **État : conception approuvée par Geoff le 14 novembre 2026. Le plan d'implémentation reste à relire avant la construction.**
 
+**Ajustements DIC-25 (debug et recette, 14 novembre 2026).** La recette sur téléphone a révélé des défauts ; le détail et les preuves sont dans `2026-11-14-dic25-debug-recette.md`. Les comportements de cette spec modifiés par DIC-25 :
+
+- La création d'une tâche ne tient plus de verrou pendant les appels réseau : une intervention à la fois par tâche, le coordinateur ne sérialise plus toute la file pendant un envoi ou un appel de synthèse. La règle « la plus ancienne tâche active d'abord » ne change pas, ni le message d'attente avec le rang dans la file.
+- Sans réglages de synthèse, une demande de MD seul ne crée aucune tâche ; l'app affiche « Réglages de synthèse à compléter. Ouvre Réglages, rubrique Synthèse. » au lieu d'empiler des tâches déjà terminées.
+- Une réponse 429, 502, 503 ou 504 à l'envoi du MP3 déclenche jusqu'à trois tentatives espacées d'une puis deux minutes, puis une suspension avec message ; les autres erreurs HTTP gardent l'échec immédiat.
+- La transcription et la synthèse écrivent au journal en source STT et LLM (demandes, phases, envois, progressions, réponses, écritures, suspensions, échecs, annulations), sans clé ni contenu.
+
 ## But et périmètre
 
 La version 0.4.0 de Dictée transforme un enregistrement local en transcription VTT et en synthèse Markdown. Un appui sur « VTT + MD » suffit à lancer le parcours, qui continue si l'application est retirée des applications récentes. La synthèse est enregistrée sans étape de relecture. Le critère de clôture de DIC-19 est une réunion réelle produisant son VTT et son MD en un appui.

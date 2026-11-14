@@ -158,7 +158,7 @@ L'app reprend l'état de la version 0.1.5 au premier lancement : elle garde l'ad
 
 - Un service de premier plan exécute les récupérations, les envois et le suivi des transcriptions et synthèses. Il déclare le type `dataSync`, et `connectedDevice` quand la permission Bluetooth est accordée. Il garde le processeur éveillé une heure au plus.
 - Sa notification, sur le canal « Travaux en cours », reprend le texte de la barre d'avancement. Sur Android 13 et plus, l'app demande la permission de notification au premier travail long de chaque lancement. Un refus n'arrête pas le travail : seule la notification manque.
-- Une récupération et un envoi peuvent tourner en même temps, mais jamais deux récupérations ni deux envois. Les transcriptions et synthèses partagent une file et un coordinateur avec la reprise WorkManager ; les tâches DIC-4 déjà persistées restent VTT uniquement.
+- Une récupération et un envoi peuvent tourner en même temps, mais jamais deux récupérations ni deux envois. Les transcriptions et synthèses partagent une file et un coordinateur avec la reprise WorkManager ; les tâches DIC-4 déjà persistées restent VTT uniquement. La création d'une tâche ne tient aucun verrou pendant les appels réseau (DIC-25) : une intervention à la fois par tâche, et la file traitée reste la plus ancienne tâche active, du plus ancien enregistrement au plus récent.
 
 ## Transcription
 
@@ -166,6 +166,7 @@ L'app reprend l'état de la version 0.1.5 au premier lancement : elle garde l'ad
 - Une reprise périodique WorkManager (15 minutes au plus court, réseau requis) est programmée avant le premier envoi et couvre le retrait de l'app des récents. Un seul enregistrement est traité à la fois, du plus ancien au plus récent, par le service de premier plan ou par le worker, qui partagent le même coordinateur. Après expiration ou interruption du suivi interactif, la reprise programmée prend le relais sans relancer ce suivi pour une demande déjà reçue. Android peut retarder la reprise, et un arrêt forcé depuis les réglages Android n'est pas couvert.
 - Le serveur garde le résultat 24 heures après sa fin. Une réponse 404 peut aussi venir d'un autre compte : l'app suspend la tâche sans la renvoyer.
 - Si la réponse à l'envoi est perdue, la tâche est suspendue et l'app ne renvoie rien sans action de l'utilisateur. Un MP3 modifié ou absent suspend aussi la tâche.
+- Une réponse 429, 502, 503 ou 504 à l'envoi signale un serveur occupé : la tâche reste en attente et le MP3 repart au plus trois fois, après 60 puis 120 secondes, puis se suspend avec le message « Le serveur de transcription est occupé. Relance quand il est disponible. ». Renvoyer le même MP3 rejoint la tâche existante côté serveur, sans doublon.
 - Le VTT reçu est validé en entier (UTF-8, en-tête `WEBVTT`, horodatages), puis écrit tel quel par le mécanisme `.part` / `.old`. Un VTT invalide n'est jamais écrit. Une annulation demandée avant la promotion l'empêche. Une récupération ne peut pas écraser un MP3 suivi par une tâche active.
 - Si le serveur refuse explicitement le champ `background`, l'app l'indique ; le mode synchrone ne permet pas de reprendre une réponse perdue.
 
@@ -186,7 +187,7 @@ L'app reprend l'état de la version 0.1.5 au premier lancement : elle garde l'ad
 
 ### Réglages, requête et confidentialité
 
-L'adresse de synthèse est une base HTTP(S) dont le chemin est `/v1`, sans identifiants, requête ni fragment. Aucun service ou modèle personnel n'est préconfiguré. La clé est chiffrée dans les préférences privées à l'aide d'Android Keystore ; `state.json` ne contient que sa référence. Les anciennes références restent disponibles pour les tâches qui les utilisent. Seuls les réglages nécessaires aux étapes demandées sont requis : une synthèse sur VTT existant ne nécessite pas de réglages de transcription. Si la synthèse manque de configuration, le VTT produit reste disponible et l'app invite à configurer le service puis à créer explicitement le travail MD.
+L'adresse de synthèse est une base HTTP(S) dont le chemin est `/v1`, sans identifiants, requête ni fragment. Aucun service ou modèle personnel n'est préconfiguré. La clé est chiffrée dans les préférences privées à l'aide d'Android Keystore ; `state.json` ne contient que sa référence. Les anciennes références restent disponibles pour les tâches qui les utilisent. Seuls les réglages nécessaires aux étapes demandées sont requis : une synthèse sur VTT existant ne nécessite pas de réglages de transcription. Si la synthèse manque de configuration, aucune tâche de MD seul n'est créée : l'app affiche « Réglages de synthèse à compléter. Ouvre Réglages, rubrique Synthèse. » et note une ligne LLM par enregistrement concerné. Quand la transcription a déjà produit le VTT, celui-ci reste disponible et l'app invite à configurer le service puis à créer explicitement le travail MD.
 
 L'app envoie `POST <base>/chat/completions` au service choisi, avec le modèle figé, le prompt résolu dans `system` et le VTT complet UTF-8 dans `user` : ni découpage ni troncature silencieuse. Le type et la date viennent du nom de l'enregistrement, la durée est estimée selon la taille et les intervenants proviennent des étiquettes du VTT ; une valeur indisponible est indiquée comme telle, sans inférer d'identité. Les synthèses complètes ont un délai de deux heures. Le premier choix doit contenir un texte assistant non vide, sans refus, appel d'outil ni indication de fin autre que `stop` si elle est présente ; une réponse invalide ou tronquée signalée ne remplace pas le MD. Le texte accepté est enregistré tel quel.
 
@@ -205,6 +206,7 @@ Les empreintes du VTT et du MD et le modèle sont conservés en privé pour un M
 ## Journal
 
 - Chaque ligne a la forme `HH:mm:ss SOURCE message`.
+- Les demandes reçues ou écartées, les tâches créées avec leur rang dans la file, les changements de phase, les envois de MP3, les progressions serveur à chaque pourcentage entier, les appels et réponses de synthèse, les écritures de VTT et de MD, les nouvelles tentatives, les suspensions, les échecs et les annulations sont journalisés en source STT (transcription) ou LLM (synthèse), précédés du nom de l'enregistrement quand il existe. Seuls y figurent les codes HTTP, durées et pourcentages : jamais de clé, d'adresse complète, de contenu de fichier, de corps d'erreur ni de texte de prompt. Une attente de verrou de plus de deux secondes est aussi notée.
 - Les requêtes Drive sont journalisées sans en-têtes ni corps : méthode, chemin, statut, durée et taille.
 - Les trames Bluetooth sont journalisées en hexadécimal, précédées de TX ou RX.
 
@@ -219,6 +221,7 @@ Les empreintes du VTT et du MD et le modèle sont conservés en privé pour un M
 | Erreur 401 de Drive après le nouvel essai | L'envoi s'arrête avec le message « Accès Google à renouveler ». Les fichiers restent à envoyer. |
 | Dossier Drive inaccessible | L'envoi est annulé avec un message. L'app ne remplace jamais le dossier choisi sans action de l'utilisateur. |
 | Réponse perdue à l'envoi d'une transcription, 404 du serveur, MP3 modifié | La tâche est suspendue avec un message, sans renvoi automatique. |
+| Réponse 429, 502, 503 ou 504 à l'envoi | La tâche attend 60 puis 120 secondes et renvoie le MP3, au plus trois tentatives, puis se suspend avec un message. |
 | Synthèse interrompue ou erreur transitoire | Reprise bornée à trois tentatives au total, avec délais persistés ; un appel interrompu peut être facturé. |
 | Synthèse refusée ou invalide, VTT changé, clé ou dossier inaccessible | Suspension visible ; aucun MD invalide ne remplace le fichier existant. |
 | Dossier du téléphone inaccessible ou plein | L'écriture échoue, l'enregistrement passe en erreur, la file s'arrête et le message renvoie vers Réglages. |
