@@ -7,8 +7,11 @@ data class PromptVariables(val type: String, val date: String, val duree: String
 
 object SynthesisPrompt {
     val DEFAULT: String = DEFAULT_SYNTHESIS_PROMPT
-    private val dateFormat = DateTimeFormatter.ofPattern("dd/MM/uuuu HH:mm", Locale.FRENCH)
-    private val variablePattern = Regex("\\{\\{(type|date|duree|intervenants)}}")
+    // Sans état statique : un initialiseur de classe a déjà fait échouer tout le parcours MD sous Android (DIC-25).
+    private val dateFormat: DateTimeFormatter
+        get() = DateTimeFormatter.ofPattern("dd/MM/uuuu HH:mm", Locale.FRENCH)
+    private val variablePattern: Regex
+        get() = Regex("\\{\\{(type|date|duree|intervenants)}}")
     private const val UNAVAILABLE = "Non disponible"
 
     fun variables(recording: Recording, vtt: ByteArray): PromptVariables {

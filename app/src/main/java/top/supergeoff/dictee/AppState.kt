@@ -115,7 +115,21 @@ private inline fun <T> attempt(block: () -> T): Result<T> =
         Result.failure(e)
     }
 
-private fun reasonOf(e: Throwable): String = e.message ?: e.javaClass.simpleName
+/**
+ * Message d'une erreur, en déballant les enveloppes qui cachent la cause (initialiseur statique,
+ * réflexion, classe rendue fautive par un premier échec) : le journal doit nommer l'erreur réelle.
+ */
+private fun reasonOf(e: Throwable): String {
+    var cause: Throwable = e
+    var depth = 0
+    while (cause.cause != null && depth < 6 &&
+        (cause is ExceptionInInitializerError || cause is java.lang.reflect.InvocationTargetException ||
+            cause is NoClassDefFoundError || cause is ClassNotFoundException)) {
+        cause = cause.cause!!
+        depth++
+    }
+    return cause.message ?: cause.javaClass.simpleName
+}
 
 /**
  * Modèle de l'app : l'état local, la liste du téléphone, celle de Drive, la liaison et les travaux, réunis dans [ui].
