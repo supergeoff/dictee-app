@@ -49,6 +49,7 @@ import top.supergeoff.dictee.Recording
 import top.supergeoff.dictee.Recordings
 import top.supergeoff.dictee.UiState
 import top.supergeoff.dictee.isTerminal
+import top.supergeoff.dictee.transcriptionNotificationLabel
 import java.time.LocalDate
 
 /**
@@ -122,7 +123,8 @@ fun RecordingsScreen(ui: UiState, model: AppModel, onOpen: (name: String) -> Uni
         } else {
             SelectionBar(checked.size, onClose = selection::clear, onAll = { selection.addAll(shown.map { it.name }) })
         }
-        ProgressBars(ui.recovery, ui.send, ui.transcription)
+        ProgressBars(ui.recovery, ui.send, ui.transcription,
+            ui.transcription?.let { transcriptionNotificationLabel(it, ui.local.transcriptionTasks) })
         Filters(ui.recordings, filter) { filter = it }
         PullToRefreshBox(isRefreshing = ui.refreshing, onRefresh = model::refresh, modifier = Modifier.weight(1f)) {
             when {

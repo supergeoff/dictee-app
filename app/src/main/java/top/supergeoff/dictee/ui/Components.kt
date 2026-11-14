@@ -303,7 +303,7 @@ private fun ButtonBox(
 
 /** Une ligne et sa barre fine par traitement en cours ; rien ne s'affiche sans récupération ni envoi. */
 @Composable
-fun ProgressBars(recovery: Progress?, send: Progress?, transcription: Progress? = null) {
+fun ProgressBars(recovery: Progress?, send: Progress?, transcription: Progress? = null, transcriptionLabel: String? = null) {
     if (recovery == null && send == null && transcription == null) return
     Column(
         modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
@@ -311,15 +311,15 @@ fun ProgressBars(recovery: Progress?, send: Progress?, transcription: Progress? 
     ) {
         recovery?.let { ProgressLine(it) }
         send?.let { ProgressLine(it) }
-        transcription?.let { ProgressLine(it) }
+        transcription?.let { ProgressLine(it, transcriptionLabel) }
     }
 }
 
 @Composable
-private fun ProgressLine(progress: Progress) {
+private fun ProgressLine(progress: Progress, label: String? = null) {
     val colors = Dictee.colors
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(text = progress.label(), style = Dictee.type.caption, color = colors.textSecondary)
+        Text(text = label ?: progress.label(), style = Dictee.type.caption, color = colors.textSecondary)
         Box(
             modifier = Modifier
                 .fillMaxWidth()

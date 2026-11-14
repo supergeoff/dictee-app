@@ -124,7 +124,7 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             (recording.state as? DisplayState.Error)?.let { ErrorBanner(it.message, onRetry = { model.retry(name) }) }
-            SynthesisTaskNotice(task) { model.retrySynthesis(it) }
+            SynthesisTaskNotice(task, ui.local.transcriptionTasks) { model.retrySynthesis(it) }
             val mp3 = recording.phoneFiles[FileKind.MP3]
             val playback = if (mp3 == null) null else rememberPlayback(model, mp3.fileName, mp3.size)
             if (mp3 == null) MissingMp3() else {
@@ -159,7 +159,7 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
 }
 
 @Composable
-internal fun SynthesisTaskNotice(task: TranscriptionTask?, onRetry: (String) -> Unit) {
+internal fun SynthesisTaskNotice(task: TranscriptionTask?, tasks: List<TranscriptionTask>, onRetry: (String) -> Unit) {
     val work = task?.synthesis ?: return
     if (work.phase == SynthesisPhase.SUSPENDED) {
         val resumable = task.phase == TranscriptionPhase.SYNTHESIZING && work.context != null &&
@@ -167,7 +167,7 @@ internal fun SynthesisTaskNotice(task: TranscriptionTask?, onRetry: (String) -> 
         Notice(work.suspensionReason ?: "La synthèse est suspendue.", NoticeTone.Destructive,
             action = if (resumable) ({ CompactButton("Relancer le MD") { onRetry(task.localId) } }) else null)
     } else {
-        synthesisProgressMessage(task)?.let { Notice(it) }
+        synthesisProgressMessage(task, tasks)?.let { Notice(it) }
     }
 }
 

@@ -43,12 +43,22 @@ internal fun requestJournalEvents(
     }
 }
 
-internal fun synthesisProgressMessage(task: TranscriptionTask): String? {
+internal fun synthesisProgressMessage(task: TranscriptionTask, tasks: List<TranscriptionTask> = listOf(task)): String? {
     if (task.phase != TranscriptionPhase.SYNTHESIZING) return null
     val work = task.synthesis ?: return null
+    // La tête de file suit la même règle que le coordinateur : active, non suspendue, pas en annulation.
+    val head = tasks.filter { !it.phase.isTerminal() && !it.suspended && it.phase != TranscriptionPhase.CANCEL_REQUESTED }
+        .minByOrNull { it.recordingName }
     return when (work.phase) {
-        SynthesisPhase.READY -> if (work.nextAttemptAtMillis != null) "Relance automatique prévue. La tâche est conservée."
-            else "Synthèse en cours. Le MD sera enregistré dès réception."
+        SynthesisPhase.READY -> when {
+            work.nextAttemptAtMillis != null -> "Relance automatique prévue. La tâche est conservée."
+            head?.localId != task.localId -> {
+                val rank = tasks.filter { !it.phase.isTerminal() && !it.suspended }
+                    .sortedBy { it.recordingName }.indexOfFirst { it.localId == task.localId } + 1
+                "En attente : ${rank}e dans la file. Aucun appel n'est parti."
+            }
+            else -> "Synthèse en cours. Le MD sera enregistré dès réception."
+        }
         SynthesisPhase.CALLING -> "Synthèse en cours. Le MD sera enregistré dès réception."
         SynthesisPhase.SAVE_PENDING -> "Enregistrement de la synthèse en cours."
         else -> null

@@ -31,6 +31,10 @@ data class TranscriptionTask(
     val suspensionReason: String? = null,
     val synthesis: SynthesisWork? = null,
     val replaceVtt: Boolean = true,
+    /** Échecs d'envoi occupés (429, 502, 503, 504) : trois tentatives au plus, puis suspension. */
+    val submitAttempts: Int = 0,
+    /** Prochaine tentative d'envoi différée, ou null sans attente. */
+    val nextAttemptAtMillis: Long? = null,
 )
 
 enum class TranscriptionExclusion { MISSING_MP3, RECOVERY_FAILED, ALREADY_ACTIVE, MISSING_VTT }

@@ -208,6 +208,9 @@ class TranscriptionCoordinator(
             task.phase != TranscriptionPhase.SAVING) return RunOutcome.Resume
         if (settings.readForTask(localId) == null) return RunOutcome.Suspended
         if (task.phase == TranscriptionPhase.SAVING) return save(task.localId, null)
+        // Une nouvelle tentative occupée reste en file jusqu'à son heure, sans recontacter le serveur.
+        if (task.phase == TranscriptionPhase.PENDING && task.nextAttemptAtMillis != null && clock() < task.nextAttemptAtMillis)
+            return RunOutcome.Resume
 
         return if (task.phase == TranscriptionPhase.PENDING) submit(task) else track(task)
     }
@@ -244,6 +247,20 @@ class TranscriptionCoordinator(
         } catch (e: CancellationException) {
             throw e
         } catch (e: TranscriptionHttpException) {
+            // Un serveur occupé par un autre client n'est pas un échec : trois tentatives espacées, puis suspension.
+            if (e.code in BUSY_SUBMIT_CODES) {
+                val attempts = submitting.submitAttempts + 1
+                if (attempts >= 3) {
+                    update(task.localId) { it.copy(phase = TranscriptionPhase.PENDING, suspended = true,
+                        suspensionReason = BUSY_SUBMIT_SUSPENSION, submitAttempts = attempts, nextAttemptAtMillis = null) }
+                    return RunOutcome.Suspended
+                }
+                val delayMs = if (attempts == 1) 60_000 else 120_000
+                journal(Source.STT, task, "nouvelle tentative dans ${delayMs / 1_000} s")
+                update(task.localId) { it.copy(phase = TranscriptionPhase.PENDING, submitAttempts = attempts,
+                    nextAttemptAtMillis = clock() + delayMs) }
+                return RunOutcome.Resume
+            }
             update(task.localId) { it.copy(phase = TranscriptionPhase.FAILED, error = e.message) }
             RunOutcome.Failed
         } catch (e: CredentialException) {
@@ -647,6 +664,8 @@ class TranscriptionCoordinator(
     private companion object {
         fun sha256(bytes: ByteArray): String = TranscriptionAudio.sha256(bytes)
         val MAYBE_SENT = setOf(TranscriptionPhase.SUBMITTING, TranscriptionPhase.UNKNOWN_SUBMISSION)
+        val BUSY_SUBMIT_CODES = setOf(429, 502, 503, 504)
+        const val BUSY_SUBMIT_SUSPENSION = "Le serveur de transcription est occupé. Relance quand il est disponible."
         const val LOCK_WAIT_LOG_MS = 2_000L
         const val CANNOT_CONFIRM = "L'arrêt côté serveur ne peut pas être confirmé : l'envoi n'a pas reçu d'identifiant."
     }

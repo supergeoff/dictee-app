@@ -155,9 +155,13 @@ class Dic25FindingsTest {
         job.cancel()
     }
 
-    @Test fun `constat 8 une synthese pas en tete annonce deja en cours`() {
+    @Test fun `constat 8 corrige une synthese pas en tete annonce son attente`() {
         val waiting = synthesisOnly("20261111120000")
-        assertEquals("Synthèse en cours. Le MD sera enregistré dès réception.", synthesisProgressMessage(waiting))
+        val head = task("head", "20261111090000", TranscriptionPhase.TRACKING)
+        val tasks = listOf(head, waiting)
+        assertEquals("En attente : 2e dans la file. Aucun appel n'est parti.", synthesisProgressMessage(waiting, tasks))
+        // En tête, le message d'appel reprend la main.
+        assertEquals("Synthèse en cours. Le MD sera enregistré dès réception.", synthesisProgressMessage(waiting, listOf(waiting)))
     }
 
     @Test fun `constat 9 une annulation non confirmee ne bloque pas la tache suivante`() = runBlocking {
@@ -175,14 +179,45 @@ class Dic25FindingsTest {
         assertTrue("l'annulation est traitée au moins une fois", stt.cancels >= 1)
     }
 
-    @Test fun `constat 10 une 429 a l envoi met la tache en echec definitif`() = runBlocking {
+    @Test fun `constat 10 corrige une 429 a l envoi programme des tentatives espacees puis suspend`() = runBlocking {
         store.save(LocalState(transcriptionTasks = listOf(task("local-1", "20261111120000", TranscriptionPhase.PENDING))))
         val repository = LocalStateRepository(store)
+        var now = 0L
         val stt = FakeStt(onSubmit = { throw TranscriptionHttpException(429) })
+        val coordinator = baseCoordinator(repository, stt, RecoverySafety(repository), clock = { now })
+        assertEquals(RunOutcome.Resume, coordinator.runBounded("local-1"))
+        var saved = store.load().transcriptionTasks.single()
+        assertEquals(TranscriptionPhase.PENDING, saved.phase)
+        assertFalse(saved.suspended)
+        assertEquals(1, saved.submitAttempts)
+        assertEquals(60_000L, saved.nextAttemptAtMillis)
+        // La porte retient la nouvelle tentative avant l'heure prévue.
+        now = 30_000L
+        assertEquals(RunOutcome.Resume, coordinator.runBounded("local-1"))
+        assertEquals(1, stt.submissions)
+        // Deuxième tentative au moment prévu, puis deux minutes d'attente.
+        now = 60_000L
+        assertEquals(RunOutcome.Resume, coordinator.runBounded("local-1"))
+        saved = store.load().transcriptionTasks.single()
+        assertEquals(2, saved.submitAttempts)
+        assertEquals(60_000L + 120_000L, saved.nextAttemptAtMillis)
+        // Troisième échec : suspension avec la raison "serveur occupé".
+        now = 200_000L
+        assertEquals(RunOutcome.Suspended, coordinator.runBounded("local-1"))
+        saved = store.load().transcriptionTasks.single()
+        assertEquals(3, stt.submissions)
+        assertTrue(saved.suspended)
+        assertEquals("Le serveur de transcription est occupé. Relance quand il est disponible.", saved.suspensionReason)
+    }
+
+    @Test fun `constat 10 corrige les autres codes 4xx gardent l echec immediat`() = runBlocking {
+        store.save(LocalState(transcriptionTasks = listOf(task("local-1", "20261111120000", TranscriptionPhase.PENDING))))
+        val repository = LocalStateRepository(store)
+        val stt = FakeStt(onSubmit = { throw TranscriptionHttpException(401) })
         baseCoordinator(repository, stt, RecoverySafety(repository)).runBounded("local-1")
         val saved = store.load().transcriptionTasks.single()
         assertEquals(TranscriptionPhase.FAILED, saved.phase)
         assertFalse(saved.suspended)
-        assertTrue(saved.error!!.contains("429"))
+        assertTrue(saved.error!!.contains("401"))
     }
 }
