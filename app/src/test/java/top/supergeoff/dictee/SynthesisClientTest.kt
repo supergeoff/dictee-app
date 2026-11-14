@@ -10,6 +10,8 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 private class SynthesisFakeCredentials : CredentialStore {
     val refs = mutableListOf<String>()
@@ -173,6 +175,88 @@ class SynthesisClientTest {
         expect(SynthesisFailureKind.PERMANENT) { client.complete(context, byteArrayOf(0xc3.toByte())) }
         expect(SynthesisFailureKind.CREDENTIAL) { client.test(SynthesisSettings("https://example.invalid/v1", "model"), "bad\nsecret") }
         assertTrue(connections.isEmpty())
+    }
+
+    @Test fun deeplyNestedErrorPreservesContextCodeAndValidatesEntireJson() = runBlocking {
+        val client = client()
+        val nested = "[".repeat(10_000) + "null" + "]".repeat(10_000)
+        for (depth in listOf(64, 10_000)) {
+            val arrays = "[".repeat(depth) + "null" + "]".repeat(depth)
+            val objects = "{\"x\":".repeat(depth) + "null" + "}".repeat(depth)
+            for (status in listOf(429, 500, 503)) for (value in listOf(arrays, objects)) {
+                reply(status, "{\"error\":{\"code\":\"context_length_exceeded\"},\"other\":$value}")
+                expect(SynthesisFailureKind.PERMANENT) { client.complete(context, vtt) }
+                reply(status, "{\"other\":$value,\"error\":{\"code\":\"context_length_exceeded\"}}")
+                expect(SynthesisFailureKind.PERMANENT) { client.complete(context, vtt) }
+            }
+        }
+        reply(429, "{\"error\":{\"code\":\"context_length_exceeded\"},\"other\":$nested,\"error\":null}")
+        expect(SynthesisFailureKind.TRANSIENT) { client.complete(context, vtt) }
+        reply(429, "{\"error\":{\"code\":\"context_length_exceeded\"},\"other\":${nested.dropLast(1)}}")
+        expect(SynthesisFailureKind.TRANSIENT) { client.complete(context, vtt) }
+        val maxDepth = "[".repeat(65_536) + "null" + "]".repeat(65_536)
+        reply(429, "{\"error\":{\"code\":\"context_length_exceeded\"},\"other\":$maxDepth}")
+        expect(SynthesisFailureKind.PERMANENT) { client.complete(context, vtt) }
+        val tooDeep = "[".repeat(65_537) + "null" + "]".repeat(65_537)
+        reply(429, "{\"error\":{\"code\":\"context_length_exceeded\"},\"other\":$tooDeep}")
+        expect(SynthesisFailureKind.TRANSIENT) { client.complete(context, vtt) }
+        for (invalid in listOf("[1,]", "{\"x\":1,}", "[{} {}]", "{\"x\":[] \"y\":1}")) {
+            reply(429, "{\"error\":{\"code\":\"context_length_exceeded\"},\"other\":$invalid}")
+            expect(SynthesisFailureKind.TRANSIENT) { client.complete(context, vtt) }
+        }
+    }
+
+    @Test fun cancellationStopsGeneratedErrorStream() = runBlocking { generatedErrorStreamStops(cancel = true) }
+
+    @Test fun timeoutStopsGeneratedErrorStream() = runBlocking { generatedErrorStreamStops(cancel = false) }
+
+    private suspend fun generatedErrorStreamStops(cancel: Boolean) = coroutineScope {
+        val entered = CountDownLatch(1)
+        val closed = CountDownLatch(1)
+        val workerDisconnected = CountDownLatch(1)
+        val worker = AtomicReference<Thread>()
+        val stop = AtomicBoolean(false)
+        var attempts = 0
+        val client = UrlSynthesisClient(credentials, { url ->
+            attempts++
+            object : HttpURLConnection(url) {
+                override fun connect() {}
+                override fun usingProxy() = false
+                override fun disconnect() {
+                    if (Thread.currentThread() === worker.get()) workerDisconnected.countDown()
+                }
+                override fun getResponseCode() = 429
+                override fun getOutputStream(): OutputStream = ByteArrayOutputStream()
+                override fun getErrorStream(): InputStream = object : InputStream() {
+                    private val prefix = "{\"error\":{\"message\":\"".toByteArray()
+                    private var position = 0
+                    override fun read(): Int {
+                        worker.compareAndSet(null, Thread.currentThread())
+                        entered.countDown()
+                        if (stop.get()) return -1
+                        return if (position < prefix.size) prefix[position++].toInt() else 'x'.code
+                    }
+                    override fun close() { closed.countDown() }
+                }
+            }
+        }, if (cancel) 3000 else 500)
+        try {
+            if (cancel) {
+                val job = launch { client.complete(context, vtt) }
+                withContext(Dispatchers.IO) { assertTrue(entered.await(1, TimeUnit.SECONDS)) }
+                job.cancelAndJoin()
+            } else {
+                expect(SynthesisFailureKind.TRANSIENT) { client.complete(context, vtt) }
+                assertTrue(entered.await(1, TimeUnit.SECONDS))
+            }
+            withContext(Dispatchers.IO) {
+                assertTrue("error stream not closed", closed.await(1, TimeUnit.SECONDS))
+                assertTrue("worker did not finish cleanup", workerDisconnected.await(1, TimeUnit.SECONDS))
+            }
+            assertEquals(1, attempts)
+        } finally {
+            stop.set(true)
+        }
     }
 
     @Test fun cancellationAndTimeoutCloseConnectionWithoutRetry() = runBlocking {

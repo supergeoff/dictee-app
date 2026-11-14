@@ -77,19 +77,22 @@ class UrlSynthesisClient(
             .put(JSONObject().put("role", "user").put("content", user))
         val bytes = JSONObject().put("model", model).put("messages", messages).toString().toByteArray(Charsets.UTF_8)
         c.outputStream.use { it.write(bytes) }
-        return parseResponse(response(c))
+        return parseResponse(response(c, resources))
     }
 
-    private fun response(c: HttpURLConnection): ByteArray {
+    private fun response(c: HttpURLConnection, resources: Resources): ByteArray {
         val code = c.responseCode
         if (code !in 200..299) {
             val contextTooLong = if (code == 429 || code in 500..599) try {
                 c.errorStream?.use { input ->
                     val decoder = Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
                         .onUnmappableCharacter(CodingErrorAction.REPORT)
-                    ErrorCodeReader(InputStreamReader(input, decoder).buffered()).isContextTooLong()
+                    ErrorCodeReader(InputStreamReader(input, decoder).buffered()) {
+                        if (resources.cancelled.get() || Thread.currentThread().isInterrupted) throw CancellationException()
+                    }.isContextTooLong()
                 } ?: false
-            } catch (_: Exception) { false } else false
+            } catch (e: CancellationException) { throw e }
+              catch (_: Exception) { false } else false
             val kind = if (contextTooLong) SynthesisFailureKind.PERMANENT else when (code) {
                 429, in 500..599 -> SynthesisFailureKind.TRANSIENT
                 else -> SynthesisFailureKind.PERMANENT
@@ -166,23 +169,26 @@ class UrlSynthesisClient(
 }
 
 /** Lit l'erreur JSON sans conserver les chaînes fournisseur, potentiellement très longues. */
-private class ErrorCodeReader(private val input: Reader) {
-    private var next = input.read()
+private class ErrorCodeReader(private val input: Reader, private val checkCancellation: () -> Unit) {
+    private var next = read()
+    // Allocation paresseuse : seuls les objets ou tableaux ignorés ont besoin de cette pile.
+    private val stack by lazy { ByteArray(65_536) }
+
+    private fun read(): Int { checkCancellation(); return input.read() }
 
     fun isContextTooLong(): Boolean {
         whitespace()
-        val result = objectValue(0, root = true)
+        val result = objectValue(root = true)
         whitespace()
         require(next == -1)
         return result
     }
 
-    private fun advance(): Int = next.also { next = input.read() }
+    private fun advance(): Int = next.also { next = read() }
     private fun whitespace() { while (next == 32 || next == 9 || next == 10 || next == 13) advance() }
     private fun take(char: Char) { require(next == char.code); advance(); whitespace() }
 
-    private fun objectValue(depth: Int, root: Boolean = false, error: Boolean = false): Boolean {
-        require(depth < 64)
+    private fun objectValue(root: Boolean = false, error: Boolean = false): Boolean {
         take('{')
         var result = false
         if (next != '}'.code) while (true) {
@@ -190,10 +196,10 @@ private class ErrorCodeReader(private val input: Reader) {
             whitespace()
             take(':')
             if (root && key) {
-                result = if (next == '{'.code) objectValue(depth + 1, error = true) else { value(depth + 1); false }
+                result = if (next == '{'.code) objectValue(error = true) else { value(); false }
             } else if (error && key) {
-                result = if (next == '"'.code) string("context_length_exceeded") else { value(depth + 1); false }
-            } else value(depth + 1)
+                result = if (next == '"'.code) string("context_length_exceeded") else { value(); false }
+            } else value()
             whitespace()
             if (next != ','.code) break
             take(',')
@@ -202,25 +208,52 @@ private class ErrorCodeReader(private val input: Reader) {
         return result
     }
 
-    private fun value(depth: Int) {
-        require(depth < 64)
-        when (next) {
-            '{'.code -> objectValue(depth)
-            '['.code -> {
-                take('[')
-                if (next != ']'.code) while (true) {
-                    value(depth + 1)
-                    whitespace()
-                    if (next != ','.code) break
-                    take(',')
+    private fun value() {
+        // Une pile bornée évite à la fois la récursion et une allocation liée au corps fournisseur.
+        var depth = 0
+        fun readValue() {
+            when (next) {
+                '{'.code, '['.code -> {
+                    require(depth < stack.size)
+                    val objectStart = next == '{'.code
+                    take(if (objectStart) '{' else '[')
+                    stack[depth++] = if (objectStart) 2 else 0
                 }
-                take(']')
+                '"'.code -> string("")
+                't'.code -> literal("true")
+                'f'.code -> literal("false")
+                'n'.code -> literal("null")
+                else -> number()
             }
-            '"'.code -> string("")
-            't'.code -> literal("true")
-            'f'.code -> literal("false")
-            'n'.code -> literal("null")
-            else -> number()
+        }
+        readValue()
+        while (depth > 0) {
+            whitespace()
+            when (stack[depth - 1].toInt()) {
+                0, 5 -> { // Premier élément du tableau, ou élément après une virgule.
+                    if (stack[depth - 1].toInt() == 0 && next == ']'.code) {
+                        take(']'); depth--
+                    } else {
+                        stack[depth - 1] = 1
+                        readValue()
+                    }
+                }
+                1 -> if (next == ']'.code) { take(']'); depth-- } else {
+                    take(','); stack[depth - 1] = 5
+                }
+                2, 4 -> { // Première clé de l'objet, ou clé après une virgule.
+                    if (stack[depth - 1].toInt() == 2 && next == '}'.code) {
+                        take('}'); depth--
+                    } else {
+                        string(""); whitespace(); take(':')
+                        stack[depth - 1] = 3
+                        readValue()
+                    }
+                }
+                3 -> if (next == '}'.code) { take('}'); depth-- } else {
+                    take(','); stack[depth - 1] = 4
+                }
+            }
         }
     }
 
