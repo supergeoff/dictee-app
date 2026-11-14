@@ -1,6 +1,6 @@
 # DIC-19 : synthèse Markdown après transcription
 
-**État : document proposé à Geoff pour validation, avant plan et implémentation.**
+**État : conception approuvée par Geoff le 14 novembre 2026. Le plan d'implémentation reste à relire avant la construction.**
 
 ## But et périmètre
 
