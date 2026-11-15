@@ -99,6 +99,23 @@ class RecordingPipelineTest {
         }
     }
 
+    @Test fun cancellingTaskDoesNotOccupyQueueRank() {
+        val cancelling = task(TranscriptionPhase.CANCEL_REQUESTED, name = "20261110120000")
+        val current = result(input(r = recording(FileKind.MP3), tasks = listOf(cancelling, task())))
+        assertEquals(1, current.queueRank)
+        assertEquals(PipelineAction.CANCEL_VTT, current.button?.action)
+        val cancellingPresentation = result(input(r = recording(FileKind.MP3).copy(name = cancelling.recordingName), tasks = listOf(cancelling, task())))
+        assertNull(cancellingPresentation.queueRank)
+        assertEquals("Annulation", cancellingPresentation.steps.single { it.stage == PipelineStage.VTT }.label)
+        assertFalse(cancellingPresentation.button!!.enabled)
+    }
+
+    @Test fun callingSynthesisDoesNotShowRetryReason() {
+        val calling = work().copy(nextAttemptAtMillis = 123456789L)
+        val presentation = result(input(r = recording(FileKind.MP3, FileKind.VTT), tasks = listOf(task(TranscriptionPhase.SYNTHESIZING, work = calling))))
+        assertNull(presentation.steps.single { it.stage == PipelineStage.MD }.reason)
+    }
+
     @Test fun firstReasonFollowsPipelineOrder() {
         val i = input(r = recording(), errors = mapOf(Step.RECOVER to "boîtier", Step.SEND to "drive"), driveEnabled = true)
         assertEquals(PipelineStage.PHONE, result(i).reason?.stage)

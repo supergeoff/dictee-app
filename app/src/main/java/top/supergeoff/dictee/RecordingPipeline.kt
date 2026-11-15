@@ -26,7 +26,7 @@ object RecordingPipeline {
     fun calculate(input: PipelineInput): PipelinePresentation {
         val r = input.recording
         val errors = input.local.errors[r.name].orEmpty()
-        val active = input.local.transcriptionTasks.filter { !it.phase.isTerminal() && !it.suspended }.sortedBy { it.recordingName }
+        val active = input.local.transcriptionTasks.filter { !it.phase.isTerminal() && !it.suspended && it.phase != TranscriptionPhase.CANCEL_REQUESTED }.sortedBy { it.recordingName }
         val rank = active.indexOfFirst { it.recordingName == r.name }.let { if (it < 0) null else it + 1 }
         val task = active.firstOrNull { it.recordingName == r.name }
             ?: input.local.transcriptionTasks.lastOrNull { it.recordingName == r.name }
@@ -45,7 +45,7 @@ object RecordingPipeline {
         }
         val vttError = task?.takeIf { !inSynthesis && (it.phase == TranscriptionPhase.FAILED || it.suspended) }
         val vtt = when {
-            rank != null && !inSynthesis && (rank == 1 || task?.phase == TranscriptionPhase.CANCEL_REQUESTED) -> {
+            task?.phase == TranscriptionPhase.CANCEL_REQUESTED || (rank == 1 && !inSynthesis) -> {
                 val label = if (task?.phase == TranscriptionPhase.CANCEL_REQUESTED) "Annulation" else
                     task?.progress?.let { "${(it * 100).toInt().coerceIn(0, 100)} %" } ?: "Transcription"
                 step(PipelineStage.VTT, PipelineStatus.RUNNING, label)
@@ -60,7 +60,7 @@ object RecordingPipeline {
         val md = when {
             rank != null && inSynthesis && rank == 1 -> {
                 val attempt = synthesis?.attempts?.coerceAtLeast(1) ?: 1
-                val reason = synthesis?.nextAttemptAtMillis?.let {
+                val reason = synthesis?.takeIf { it.phase == SynthesisPhase.READY }?.nextAttemptAtMillis?.let {
                     "Nouvelle tentative à ${Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("HH:mm"))}"
                 }
                 step(PipelineStage.MD, PipelineStatus.RUNNING, "Synthèse $attempt/3", reason)
@@ -83,7 +83,7 @@ object RecordingPipeline {
         val steps = listOf(phone, vtt, md, drive)
         val reason = steps.firstOrNull { it.reason != null }?.let { PipelineReason(it.stage, it.reason!!) }
         val button = when {
-            rank != null && task?.phase == TranscriptionPhase.CANCEL_REQUESTED ->
+            task?.phase == TranscriptionPhase.CANCEL_REQUESTED ->
                 button(PipelineAction.CANCEL_VTT, "Annulation en cours", enabled = false, secondary = true)
             rank == 1 && inSynthesis -> button(PipelineAction.CANCEL_MD, "Annuler la synthèse", secondary = true)
             rank == 1 -> button(PipelineAction.CANCEL_VTT, "Annuler la transcription", secondary = true)
