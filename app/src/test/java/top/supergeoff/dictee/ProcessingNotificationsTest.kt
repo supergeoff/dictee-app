@@ -31,15 +31,18 @@ class ProcessingNotificationsTest {
         val first = task.copy(recordingName = "20261111120000", mp3Name = "Note-20261111120000.mp3",
             encryptedKeyRef = "clé secrète", synthesis = work.copy(context = SynthesisContext("url", "clé secrète", "model", "prompt secret",
                 PromptMetadata("type", "date", "durée"), "prompt secret", "hash")))
-        val second = first.copy(localId = "second", recordingName = "20261111130000", mp3Name = "Call-20261111130000.mp3")
-        val notices = listOf(first, second).map { recording ->
+        val second = first.copy(localId = "second", recordingName = "20261111120030", mp3Name = "Note-20261111120030.mp3")
+        val third = first.copy(localId = "third", recordingName = "20271111120000", mp3Name = "Note-20271111120000.mp3")
+        val notices = listOf(first, second, third).map { recording ->
             val completed = recording.copy(phase = TranscriptionPhase.COMPLETED,
                 synthesis = recording.synthesis!!.copy(phase = SynthesisPhase.COMPLETED))
             processingResultNotice(recording, completed)!!
         }
         assertNotEquals(notices[0].text, notices[1].text)
-        assertTrue(notices[0].text.contains("Note · 11 nov. 12:00"))
-        assertTrue(notices[1].text.contains("Call · 11 nov. 13:00"))
+        assertNotEquals(notices[0].text, notices[2].text)
+        assertTrue(notices[0].text.contains("Note · 11 nov. 2026 12:00:00"))
+        assertTrue(notices[1].text.contains("Note · 11 nov. 2026 12:00:30"))
+        assertTrue(notices[2].text.contains("Note · 11 nov. 2027 12:00:00"))
         for (notice in notices) {
             assertEquals("Traitement terminé", notice.title)
             assertTrue(notice.text.contains("VTT et MD créés."))
