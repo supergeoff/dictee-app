@@ -28,6 +28,8 @@ L'intention automatique est persistée avant le transfert, avec l'enregistrement
 
 Au redémarrage, l'application réconcilie ces demandes et les tâches persistantes, sans parcourir les autres MP3 pour créer des travaux. Un transfert interrompu conserve l'état d'erreur de récupération et n'autorise pas de transcription. Une demande issue d'une récupération validée reprend même si le réglage a ensuite été désactivé. WorkManager assure la reprise des tâches déjà programmées selon les mécanismes existants et les limites Android.
 
+Les tâches créées automatiquement démarrent le même suivi interactif unique que les demandes manuelles. Au premier plan, les tâches durables non suspendues reprennent ce suivi depuis leur phase enregistrée, sans soumettre à nouveau un MP3 déjà accepté ; le worker périodique reste le secours après interruption. Le service reste comptabilisé pendant le suivi.
+
 Cette garantie concerne la file VTT + MD, pas la reprise automatique d'un transfert Bluetooth interrompu.
 
 ## Réglages manquants et erreurs

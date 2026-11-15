@@ -4,6 +4,7 @@ import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.first
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -51,7 +52,7 @@ class AutomaticProcessingIntegrationTest {
             repo = LocalStateRepository(disk)
             safety = RecoverySafety(repo)
         }
-        fun coordinator(repository: LocalStateRepository = repo, guard: RecoverySafety = safety) =
+        fun coordinator(repository: LocalStateRepository = repo, guard: RecoverySafety = safety, launch: suspend () -> Unit = {}) =
             TranscriptionCoordinator(repository, stt, TranscriptionSettingsManager(repository, credentials), guard,
                 verifyAudio = { TranscriptionAudio.sha256(phone, it.mp3Name) == it.mp3Sha256 },
                 schedule = { if (failScheduling && scheduled.isEmpty()) { scheduled += it; throw java.io.IOException("scheduling") }; scheduled += it },
@@ -61,11 +62,12 @@ class AutomaticProcessingIntegrationTest {
                     val spool = File(tmp.root, "spool").apply { writeBytes(data) }
                     phone.writeGuarded(task.vttName, spool, task.replaceVtt, promote)
                 },
+                launch = launch,
                 prepareAutomatic = { name, uri ->
                     val state = repository.awaitInitialized()
                     TranscriptionPreparation.prepareAutomatic(phone, uri, state.transcriptionSettings, state.errors, name, state.synthesisSettings) { "unused" }
                 })
-        suspend fun recover(entered: CountDownLatch? = null, release: CountDownLatch? = null): List<RecoveryResult> {
+        suspend fun recover(entered: CountDownLatch? = null, release: CountDownLatch? = null, coordinator: TranscriptionCoordinator = coordinator()): List<RecoveryResult> {
             var files = 0
             val link = FakeLink { cmd, _ -> if (cmd == Cmd.FILE) {
                 if (++files == 2 && entered != null) {
@@ -74,7 +76,7 @@ class AutomaticProcessingIntegrationTest {
                 }
                 reply(Cmd.FILE, byteArrayOf(0) + u32(bytes.size.toLong())); audio(bytes); reply(Cmd.FILE, byteArrayOf(2))
             } }
-            val automatic = AutomaticProcessingCoordinator(repo, coordinator())
+            val automatic = AutomaticProcessingCoordinator(repo, coordinator)
             return RecoveryJob(V05Session(link, {}), phone, tmp.newFolder(), ListLog()).run(
                 names.map { ListItem.Entry(it, bytes.size.toLong(), 1) }, { _, _ -> }, { automatic.reconcile() },
                 beforeRecovery = { safety.begin(it.name, folder) }, validateResult = { safety.finish(it, folder) },
@@ -85,6 +87,101 @@ class AutomaticProcessingIntegrationTest {
                 repeat(3) { coordinator.runBounded(task.localId) }
             }
         }
+    }
+
+    @Test fun automaticRecoveryStartsInteractiveTrackingWithoutManualDrain() = runBlocking {
+        val h = Harness(true)
+        val jobs = ActiveWork()
+        lateinit var starter: InteractiveTranscriptionStarter
+        val coordinator = h.coordinator(launch = { starter.request() })
+        val worker = TranscriptionWorkerRunner(h.repo, coordinator, {})
+        val lifecycle = InteractiveTranscriptionLifecycle(this) {
+            TranscriptionInteractiveRunner(h.repo, coordinator, worker, wait = { _, _ -> }).run()
+        }
+        starter = InteractiveTranscriptionStarter(this, jobs, {}, lifecycle)
+        h.recover(coordinator = coordinator)
+        withTimeout(5_000) {
+            h.repo.state.first { state -> state != null && state.transcriptionTasks.size == 2 &&
+                state.transcriptionTasks.all { it.phase == TranscriptionPhase.COMPLETED } }
+        }
+        assertEquals(names, h.submits)
+        assertEquals(2, h.mdCalls)
+        withTimeout(5_000) { jobs.changes.first { it == 0 } }
+        Unit
+    }
+
+    @Test fun backgroundReconciliationSchedulesWithoutInteractiveService() = runBlocking {
+        val h = Harness(true)
+        val jobs = ActiveWork()
+        var foreground = false
+        var recovering = false
+        var services = 0
+        var follows = 0
+        val lifecycle = InteractiveTranscriptionLifecycle(this) { follows++; InteractiveRun.QueueEmpty }
+        val starter = InteractiveTranscriptionStarter(this, jobs, { services++ }, lifecycle,
+            canResume = { foreground }, canLaunchAutomatically = { foreground || recovering })
+        h.repo.updateDurably { it.copy(transcriptionTasks = listOf(sampleTask())) }
+        starter.resume(h.repo)
+        starter.requestAutomatic()
+        yield()
+        assertEquals(0, services)
+        assertEquals(0, follows)
+        recovering = true
+        starter.requestAutomatic()?.join()
+        assertEquals(1, follows)
+        recovering = false
+        foreground = true
+        starter.resume(h.repo)
+        withTimeout(5_000) { jobs.changes.first { it == 0 } }
+        assertEquals(2, follows)
+    }
+
+    @Test fun foregroundResumeTracksDurableServerTaskOnceAndBalancesJobs() = runBlocking {
+        val h = Harness(true)
+        val task = sampleTask().copy(phase = TranscriptionPhase.TRACKING, serverId = "server-1")
+        h.repo.updateDurably { it.copy(transcriptionTasks = listOf(task)) }
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var submits = 0
+        var gets = 0
+        val client = object : TranscriptionClient {
+            override suspend fun submit(task: TranscriptionTask): SubmitResult { submits++; error("MP3 renvoyé") }
+            override suspend fun get(task: TranscriptionTask): ServerTask {
+                gets++
+                entered.complete(Unit)
+                release.await()
+                return ServerTask("server-1", ServerStatus.COMPLETED, 1.0, vtt)
+            }
+            override suspend fun cancel(task: TranscriptionTask): ServerTask = error("unexpected")
+            override suspend fun test(settings: TranscriptionSettings) = Unit
+        }
+        val coordinator = TranscriptionCoordinator(h.repo, client, TranscriptionSettingsManager(h.repo, h.credentials), h.safety,
+            verifyAudio = { error("vérification MP3 inattendue") }, schedule = {},
+            saveVtt = { _, _, promote -> promote {} })
+        val worker = TranscriptionWorkerRunner(h.repo, coordinator, {})
+        var loops = 0
+        var maxLoops = 0
+        val lifecycle = InteractiveTranscriptionLifecycle(this) {
+            loops++
+            maxLoops = maxOf(maxLoops, loops)
+            try { TranscriptionInteractiveRunner(h.repo, coordinator, worker).run() } finally { loops-- }
+        }
+        val jobs = ActiveWork()
+        var services = 0
+        val starter = InteractiveTranscriptionStarter(this, jobs, { services++ }, lifecycle)
+        coordinator.reconcile()
+        starter.resume(h.repo)
+        withTimeout(5_000) { entered.await() }
+        starter.resume(h.repo)
+        assertEquals(2, jobs.value)
+        release.complete(Unit)
+        withTimeout(5_000) { jobs.changes.first { it == 0 } }
+        assertEquals(0, submits)
+        assertEquals(1, gets)
+        assertEquals(1, maxLoops)
+        assertEquals(2, services)
+        assertEquals(TranscriptionPhase.COMPLETED, h.disk.load().transcriptionTasks.single().phase)
+        Unit
     }
 
     @Test fun batchCompletesAndRestartDoesNotDuplicate() = runBlocking {

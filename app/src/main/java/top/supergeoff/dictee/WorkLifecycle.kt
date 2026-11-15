@@ -28,10 +28,33 @@ internal suspend fun <T> observeServiceWork(ui: StateFlow<T>, jobs: ActiveWork, 
     combine(ui, jobs.changes) { _, _ -> Unit }.collect { onUpdate(ui.value, jobs.value) }
 }
 
-/** Une demande arrivée avant la sortie sur file vide impose une nouvelle lecture de la file. */
+/** Garde le service actif pendant le suivi, sans retenir le verrou du coordinateur appelant. */
+internal class InteractiveTranscriptionStarter(
+    private val scope: CoroutineScope,
+    private val jobs: ActiveWork,
+    private val startService: () -> Unit,
+    private val lifecycle: InteractiveTranscriptionLifecycle,
+    private val canResume: () -> Boolean = { true },
+    private val canLaunchAutomatically: () -> Boolean = { true },
+) {
+    suspend fun resume(repository: LocalStateRepository) {
+        if (repository.awaitInitialized().transcriptionTasks.any { !it.phase.isTerminal() && !it.suspended } && canResume()) request()
+    }
+
+    fun requestAutomatic(): Job? = if (canLaunchAutomatically()) request() else null
+
+    fun request(): Job = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+        jobs.track {
+            startService()
+            lifecycle.request().join()
+        }
+    }
+}
+
+/** Une demande arrivée pendant le suivi impose une nouvelle lecture, sans reprendre les tâches confiées au worker. */
 internal class InteractiveTranscriptionLifecycle(
     private val scope: CoroutineScope,
-    private val follow: suspend () -> InteractiveRun,
+    private val follow: suspend (MutableSet<String>) -> InteractiveRun,
 ) {
     private val lock = Any()
     private var generation = 0L
@@ -40,13 +63,14 @@ internal class InteractiveTranscriptionLifecycle(
     fun request(): Job = synchronized(lock) {
         generation++
         loop?.takeIf { it.isActive } ?: scope.launch(start = CoroutineStart.LAZY) {
+            val excluded = mutableSetOf<String>()
             val self = currentCoroutineContext()[Job]
             try {
                 while (true) {
                     val observed = synchronized(lock) { generation }
-                    val outcome = follow()
+                    follow(excluded)
                     val done = synchronized(lock) {
-                        if (outcome == InteractiveRun.QueueEmpty && generation != observed) false else {
+                        if (generation != observed) false else {
                             if (loop === self) loop = null
                             true
                         }

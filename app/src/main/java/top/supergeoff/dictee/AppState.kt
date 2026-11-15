@@ -207,7 +207,7 @@ class AppModel(
             } },
             onFilesPromoted = { folder -> readPhoneAfterPromotion(folder) },
             onProcessingResult = ProcessingNotifications(app)::show,
-            launch = { startWork() })
+            launch = { transcriptionStarter.requestAutomatic() })
     }
 
     private val automaticProcessingCoordinator by lazy {
@@ -240,11 +240,17 @@ class AppModel(
     private val accountFailureNoted = AtomicBoolean(false)
     internal val jobs = ActiveWork()
 
+    private val foregroundBoxGate = ForegroundBoxGate()
+    private val transcriptionLifecycle by lazy { InteractiveTranscriptionLifecycle(scope, ::followTranscriptions) }
+    private val transcriptionStarter by lazy {
+        InteractiveTranscriptionStarter(scope, jobs, ::startWork, transcriptionLifecycle,
+            canResume = { foregroundBoxGate.isForeground },
+            canLaunchAutomatically = { foregroundBoxGate.isForeground || liveFlow.value.recovering })
+    }
+
     init {
         scope.launch { reconcileProcessing() }
     }
-
-    private val foregroundBoxGate = ForegroundBoxGate()
     @Volatile private var searching = false   // la feuille de recherche du boîtier est ouverte : le modèle ne rouvre pas la liaison
     @Volatile private var afterBluetooth: (() -> Unit)? = null
     @Volatile private var afterPhoneFolder: (() -> Unit)? = null
@@ -298,6 +304,9 @@ class AppModel(
         catch (e: CancellationException) { throw e }
         catch (e: Exception) { journal.error(Source.APP, "Reprise des traitements impossible : ${reasonOf(e)}") }
         reconcileAutomaticProcessing()
+        try { transcriptionStarter.resume(localRepository) }
+        catch (e: CancellationException) { throw e }
+        catch (e: Exception) { journal.error(Source.APP, "Reprise du suivi impossible : ${reasonOf(e)}") }
     }
 
     private suspend fun reconcileAutomaticProcessing() {
@@ -490,8 +499,6 @@ class AppModel(
         }
     }
 
-    private val transcriptionLifecycle = InteractiveTranscriptionLifecycle(scope, ::followTranscriptions)
-
     /**
      * Lance la transcription de [names] (null : tout ce qui est éligible). La planification WorkManager est confirmée avant
      * la tâche durable et le service ; la boucle interactive suit ensuite les tâches jusqu'à leur fin ou leur suspension.
@@ -555,10 +562,10 @@ class AppModel(
         synthesisSelectionMessage(current.recordings, names, state.errors, active)?.let { say(it) }
     }
 
-    private suspend fun followTranscriptions(): InteractiveRun {
+    private suspend fun followTranscriptions(excluded: MutableSet<String>): InteractiveRun {
         val scheduler = TranscriptionSchedule(androidx.work.WorkManager.getInstance(app))
         val runner = TranscriptionWorkerRunner(localRepository, transcriptionCoordinator, scheduler::cancel)
-        return TranscriptionInteractiveRunner(localRepository, transcriptionCoordinator, runner).run()
+        return TranscriptionInteractiveRunner(localRepository, transcriptionCoordinator, runner).run(excluded)
     }
 
     /** Demande l'annulation de la transcription de [name] ; l'intention est persistée avant tout appel au serveur. */

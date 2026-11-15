@@ -67,7 +67,7 @@ class TranscriptionWorkerRunnerTest {
         val service = launch { observeServiceWork(ui, jobs) { _, active -> if (active == 0) stopped.complete(Unit) } }
         val scheduler = TestCoroutineScheduler()
         val interactiveScope = kotlinx.coroutines.CoroutineScope(coroutineContext + UnconfinedTestDispatcher(scheduler))
-        val lifecycle = InteractiveTranscriptionLifecycle(interactiveScope) { runner.run() }
+        val lifecycle = InteractiveTranscriptionLifecycle(interactiveScope) { excluded -> runner.run(excluded) }
         val interactive = launch { try { lifecycle.request().join() } finally { jobs.end() } }
         withTimeout(5_000) { entered.await() }
         scheduler.advanceTimeBy(100)
@@ -108,7 +108,7 @@ class TranscriptionWorkerRunnerTest {
             })
         val scheduler = TestCoroutineScheduler()
         val interactiveScope = kotlinx.coroutines.CoroutineScope(coroutineContext + UnconfinedTestDispatcher(scheduler))
-        val lifecycle = InteractiveTranscriptionLifecycle(interactiveScope) { runner.run() }
+        val lifecycle = InteractiveTranscriptionLifecycle(interactiveScope) { excluded -> runner.run(excluded) }
         val first = lifecycle.request()
         withTimeout(5_000) { waiting.await() }
         val second = lifecycle.request()
@@ -155,6 +155,39 @@ class TranscriptionWorkerRunnerTest {
         assertEquals(listOf("local-1"), scheduled)
         assertEquals(TranscriptionPhase.COMPLETED, disk.load().transcriptionTasks.single().phase)
         assertEquals(listOf("local-1"), removed)
+    }
+
+    @Test fun `new request during handoff follows other work without retrying handed off task`() = runBlocking {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val seen = mutableListOf<Set<String>>()
+        val lifecycle = InteractiveTranscriptionLifecycle(this) { excluded ->
+            seen += excluded.toSet()
+            if (seen.size == 1) {
+                entered.complete(Unit)
+                release.await()
+                excluded.add("timed-out")
+                InteractiveRun.Handoff
+            } else InteractiveRun.QueueEmpty
+        }
+        val first = lifecycle.request()
+        withTimeout(5_000) { entered.await() }
+        val second = lifecycle.request()
+        release.complete(Unit)
+        withTimeout(5_000) { first.join(); second.join() }
+        assertEquals(listOf(emptySet<String>(), setOf("timed-out")), seen)
+    }
+
+    @Test fun `interactive handoff excludes timed out task from next read`() = runBlocking {
+        disk.save(LocalState(transcriptionTasks = listOf(synthesisTask())))
+        val repo = LocalStateRepository(disk)
+        val coordinator = synthesisCoordinator(repo, synthesisClient { CompletableDeferred<Unit>().await(); byteArrayOf() }) { 1_000L }
+        val worker = TranscriptionWorkerRunner(repo, coordinator, {})
+        val runner = TranscriptionInteractiveRunner(repo, coordinator, worker, timeoutMs = 100)
+        val excluded = mutableSetOf<String>()
+        assertEquals(InteractiveRun.Handoff, runner.run(excluded))
+        assertEquals(setOf("local-1"), excluded)
+        assertEquals(InteractiveRun.QueueEmpty, runner.run(excluded))
     }
 
     @Test fun `stopping interactive lifecycle leaves scheduled synthesis to worker`() = runBlocking {

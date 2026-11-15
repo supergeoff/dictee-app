@@ -48,47 +48,49 @@ internal class TranscriptionInteractiveRunner(
     private val worker: TranscriptionWorkerRunner,
     private val clock: () -> Long = System::currentTimeMillis,
     private val timeoutMs: Long = TRANSCRIPTION_TIMEOUT_MS,
-    private val wait: suspend (TranscriptionTask, Long) -> Unit = { task, millis ->
-        withTimeoutOrNull(millis) {
-            repository.state.filterNotNull().first { state ->
-                val active = state.transcriptionTasks.filter { !it.phase.isTerminal() && !it.suspended }
-                active.minByOrNull { it.recordingName } != task
-            }
-        }
-        Unit
-    },
+    private val wait: (suspend (TranscriptionTask, Long) -> Unit)? = null,
 ) {
-    suspend fun run(): InteractiveRun {
+    suspend fun run(excluded: MutableSet<String> = mutableSetOf()): InteractiveRun {
         while (true) {
-            val active = repository.awaitInitialized().transcriptionTasks.filter { !it.phase.isTerminal() && !it.suspended }
+            val active = repository.awaitInitialized().transcriptionTasks.filter { !it.phase.isTerminal() && !it.suspended && it.localId !in excluded }
             // L'annulation en attente est traitée en premier, puis la file reprend dans le même tour.
             val cancel = active.filter { it.phase == TranscriptionPhase.CANCEL_REQUESTED }.minByOrNull { it.recordingName }
             val next = active.filter { it.phase != TranscriptionPhase.CANCEL_REQUESTED }.minByOrNull { it.recordingName }
             if (cancel != null) {
-                withTimeoutOrNull(timeoutMs) { coordinator.runBounded(cancel.localId) } ?: return InteractiveRun.Handoff
+                withTimeoutOrNull(timeoutMs) { coordinator.runBounded(cancel.localId) } ?: run { excluded.add(cancel.localId); return InteractiveRun.Handoff }
                 worker.retireIfTerminal(cancel.localId)
                 if (next == null) {
                     val current = repository.awaitInitialized().transcriptionTasks.firstOrNull { it.localId == cancel.localId }
                     if (current == null || current.phase != TranscriptionPhase.CANCEL_REQUESTED) continue
                     // Seule en file, l'annulation est reprise sur un rythme borné plutôt qu'en boucle serrée.
-                    wait(current, TRANSCRIPTION_POLL_MS)
+                    waitForChange(current, TRANSCRIPTION_POLL_MS, excluded)
                     continue
                 }
             }
             val task = next ?: return InteractiveRun.QueueEmpty
-            val outcome = withTimeoutOrNull(timeoutMs) { coordinator.runBounded(task.localId) } ?: return InteractiveRun.Handoff
+            val outcome = withTimeoutOrNull(timeoutMs) { coordinator.runBounded(task.localId) } ?: run { excluded.add(task.localId); return InteractiveRun.Handoff }
             worker.retireIfTerminal(task.localId)
             val current = repository.awaitInitialized().transcriptionTasks.firstOrNull { it.localId == task.localId }
-            if (outcome == RunOutcome.Suspended && current != null && !current.suspended) return InteractiveRun.Handoff
+            if (outcome == RunOutcome.Suspended && current != null && !current.suspended) { excluded.add(task.localId); return InteractiveRun.Handoff }
             if (outcome == RunOutcome.Resume && current != null && !current.phase.isTerminal() && !current.suspended) {
                 val deadline = current.synthesis?.nextAttemptAtMillis.takeIf {
                     current.phase == TranscriptionPhase.SYNTHESIZING && current.synthesis?.phase == SynthesisPhase.READY
                 }
                 val delay = if (deadline == null) TRANSCRIPTION_POLL_MS else (deadline - clock()).coerceAtLeast(1_000L)
-                wait(current, delay)
+                waitForChange(current, delay, excluded)
             }
         }
     }
+    private suspend fun waitForChange(task: TranscriptionTask, millis: Long, excluded: Set<String>) {
+        if (wait != null) { wait.invoke(task, millis); return }
+        withTimeoutOrNull(millis) {
+            repository.state.filterNotNull().first { state ->
+                val active = state.transcriptionTasks.filter { !it.phase.isTerminal() && !it.suspended && it.localId !in excluded }
+                active.minByOrNull { it.recordingName } != task
+            }
+        }
+    }
+
 }
 
 internal fun transcriptionNotificationLabel(progress: Progress, tasks: List<TranscriptionTask>): String {

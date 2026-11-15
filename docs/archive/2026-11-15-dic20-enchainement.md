@@ -155,3 +155,7 @@ Les ajustements issus des revues sont intégrés : préparation automatique avec
 
 La recette sur téléphone reste à réaliser, dont notifications système, arrêt/reprise et absence d'envoi Drive. Le chemin automatique n'appelle pas Drive à la lecture du code, mais aucun espion Drive n'est raccordé à AppModel dans le test JVM. Ces limites ne sont pas des validations réussies. Aucun APK release signé n'a été construit ou publié. Aucun push ni fusion n'a eu lieu. La carte DIC-20 garde la recette et la livraison comme suite.
 
+## Correctif du suivi interactif
+
+Le diagnostic ultérieur a montré que la programmation automatique démarrait le service sans demander la boucle de suivi ; le worker périodique pouvait ainsi laisser attendre un résultat déjà prêt. Le correctif raccorde la création automatique et la reprise au premier plan à la boucle unique existante, avec comptabilisation du service. Les tests JVM couvrent la création après récupération et la reprise d'une tâche serveur sans nouvel envoi, les demandes simultanées et l'équilibre des travaux. La recette sur téléphone reste nécessaire.
+
