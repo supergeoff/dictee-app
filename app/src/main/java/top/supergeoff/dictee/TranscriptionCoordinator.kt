@@ -44,6 +44,8 @@ class TranscriptionCoordinator(
     private val promotionGuard: ReentrantLock = ReentrantLock(),
     private val prepareRequested: suspend (Set<String>?, RequestedWork, Set<String>) -> List<TranscriptionTask> = { names, _, _ -> prepare(names) },
     private val onFilesPromoted: suspend (String) -> Unit = {},
+    private val prepareAutomatic: suspend (Set<String>?, RequestedWork, Set<String>, String) -> List<TranscriptionTask> =
+        { names, work, active, _ -> prepareRequested(names, work, active) },
 ) {
     private val mutex = Mutex()
     /** Une seule tâche travaille à la fois : une tâche plus ancienne créée pendant un appel attend la fin de cet appel. */
@@ -95,6 +97,55 @@ class TranscriptionCoordinator(
                 commitPrepared(prepared)
             }
         } else commitPrepared(prepared)
+    }
+
+    /** Consomme l'intention dans la même écriture que la tâche, avant sa programmation. */
+    suspend fun startAutomatic(requestId: String): List<String> {
+        val state = repository.awaitInitialized()
+        val request = state.automaticProcessingRequests.firstOrNull { it.id == requestId && it.phase != AutomaticProcessingPhase.RECOVERING }
+            ?: return emptyList()
+        if (state.phoneTreeUri != request.folderUri) {
+            markAutomaticWaiting(requestId, "Le dossier du téléphone a changé.")
+            return emptyList()
+        }
+        val existing = state.transcriptionTasks.any { it.localId == requestId ||
+            (!it.phase.isTerminal() && it.folderUri == request.folderUri && it.recordingName == request.recordingName) }
+        val prepared = if (existing) emptyList() else try {
+            prepareAutomatic(setOf(request.recordingName), RequestedWork.MISSING, emptySet(), request.folderUri)
+        } catch (e: CancellationException) { throw e }
+          catch (e: InvalidTranscriptionAddressException) { markAutomaticWaiting(requestId, checkNotNull(e.message)); return emptyList() }
+          catch (e: CredentialException) { markAutomaticWaiting(requestId, checkNotNull(e.message)); return emptyList() }
+        val task = prepared.singleOrNull { it.recordingName == request.recordingName }?.copy(localId = requestId)
+        suspend fun commit(): List<String> = mutex.withLock {
+            var added: TranscriptionTask? = null
+            repository.updateDurably { current ->
+                val pending = current.automaticProcessingRequests.firstOrNull { it.id == requestId && it.phase != AutomaticProcessingPhase.RECOVERING }
+                when {
+                    pending == null -> current
+                    current.phoneTreeUri != pending.folderUri -> current.copy(automaticProcessingRequests = current.automaticProcessingRequests.map {
+                        if (it.id == requestId) it.copy(phase = AutomaticProcessingPhase.WAITING_SETTINGS, reason = "Le dossier du téléphone a changé.") else it
+                    })
+                    else -> {
+                        val duplicate = current.transcriptionTasks.any { it.localId == requestId ||
+                            (!it.phase.isTerminal() && it.folderUri == pending.folderUri && it.recordingName == pending.recordingName) }
+                        if (!duplicate && task != null) added = task
+                        current.copy(automaticProcessingRequests = current.automaticProcessingRequests.filterNot { it.id == requestId },
+                            transcriptionTasks = current.transcriptionTasks + listOfNotNull(added))
+                    }
+                }
+            }
+            added?.let { schedule(it.localId); launch() }
+            listOfNotNull(added?.localId)
+        }
+        return if (task?.mp3Sha256?.isNotBlank() == true) recoverySafety.withTransferLock(LOCK_WAIT_LOG_MS,
+            { journal(Source.STT, null, "en attente d'un transfert en cours") }) { commit() } else commit()
+    }
+
+    private suspend fun markAutomaticWaiting(id: String, reason: String) {
+        repository.updateDurably { state -> state.copy(automaticProcessingRequests = state.automaticProcessingRequests.map {
+            if (it.id == id && it.phase != AutomaticProcessingPhase.RECOVERING)
+                it.copy(phase = AutomaticProcessingPhase.WAITING_SETTINGS, reason = reason) else it
+        }) }
     }
 
     private suspend fun resumeSuspendedTranscriptions(names: Set<String>): List<String> = mutex.withLock {

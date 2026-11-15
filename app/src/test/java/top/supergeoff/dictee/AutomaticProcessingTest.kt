@@ -1,5 +1,7 @@
 package top.supergeoff.dictee
 
+import kotlinx.coroutines.*
+import org.junit.Assert.*
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -75,5 +77,128 @@ class AutomaticProcessingTest {
         val state = LocalState(autoProcessAfterRecovery = true, automaticProcessingRequests = requests)
         store.save(state)
         assertEquals(state, store.load())
+    }
+    private val credentials = object : CredentialStore {
+        override fun save(secret: String) = "ref"
+        override fun read(ref: String) = "key"
+        override fun remove(ref: String) = Unit
+    }
+    private val client = object : TranscriptionClient {
+        override suspend fun submit(task: TranscriptionTask): SubmitResult = error("unexpected network")
+        override suspend fun get(task: TranscriptionTask): ServerTask = error("unexpected network")
+        override suspend fun cancel(task: TranscriptionTask): ServerTask = error("unexpected network")
+        override suspend fun test(settings: TranscriptionSettings) = error("unexpected network")
+    }
+    private val name = "20261111120000"
+    private fun request(id: String = "request", phase: AutomaticProcessingPhase = AutomaticProcessingPhase.READY) =
+        AutomaticProcessingRequest(id, name, folderA, phase)
+    private val configured = TranscriptionSettings("https://example.invalid/v1", "fr", "model", "ref")
+    private fun coordinator(repo: LocalStateRepository, phone: MemoryStore, schedule: suspend (String) -> Unit = {},
+        beforePrepare: suspend () -> Unit = {}) = TranscriptionCoordinator(repo, client, TranscriptionSettingsManager(repo, credentials),
+        RecoverySafety(repo), verifyAudio = { true }, schedule = schedule,
+        prepareAutomatic = { names, work, active, folder ->
+            beforePrepare()
+            val state = repo.awaitInitialized()
+            TranscriptionPreparation.prepare(phone, folder, state.transcriptionSettings, state.errors, names,
+                state.synthesisSettings, work, active) { "generated" }
+        })
+    private fun phone(vararg extensions: String) = MemoryStore().apply {
+        extensions.forEach { files["Note-$name.$it"] = if (it == "vtt") "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nBonjour\n".toByteArray() else "synthetic".toByteArray() }
+    }
+    private fun store(state: LocalState): LocalStateStore = LocalStateStore(tmp.newFile()).also { it.save(state) }
+    private fun state(vararg requests: AutomaticProcessingRequest) = LocalState(phoneTreeUri = folderA,
+        transcriptionSettings = configured, automaticProcessingRequests = requests.toList())
+
+    @Test fun readyIsConsumedAtomicallyAndConcurrentReconciliationDoesNotDuplicate() = runBlocking {
+        val store = store(state(request(), request("recovering", AutomaticProcessingPhase.RECOVERING)))
+        val repo = LocalStateRepository(store)
+        val scheduled = mutableListOf<String>()
+        val transcription = coordinator(repo, phone("mp3"), { scheduled += it })
+        val automatic = AutomaticProcessingCoordinator(repo, transcription)
+        coroutineScope { repeat(2) { launch { automatic.reconcile() } } }
+        val result = store.load()
+        assertEquals(listOf("request"), result.transcriptionTasks.map { it.localId })
+        assertEquals(listOf("recovering"), result.automaticProcessingRequests.map { it.id })
+        assertEquals(listOf("request"), scheduled)
+        assertEquals(SynthesisPhase.WAITING_VTT, result.transcriptionTasks.single().synthesis?.phase)
+        assertNull(result.transcriptionTasks.single().synthesis?.context)
+    }
+
+    @Test fun existingTerminalAndActiveManualTasksSatisfyRequest() = runBlocking {
+        for (terminal in listOf(false, true)) {
+            val p = phone("mp3")
+            val task = TranscriptionPreparation.prepare(p, folderA, configured, emptyMap(), setOf(name), SynthesisSettings(), RequestedWork.MISSING) { "manual" }.single()
+                .copy(localId = if (terminal) "request" else "manual", phase = if (terminal) TranscriptionPhase.COMPLETED else TranscriptionPhase.PENDING)
+            val store = store(state(request()).copy(transcriptionTasks = listOf(task)))
+            val repo = LocalStateRepository(store)
+            AutomaticProcessingCoordinator(repo, coordinator(repo, p)).reconcile()
+            assertEquals(listOf(task), store.load().transcriptionTasks)
+            assertTrue(store.load().automaticProcessingRequests.isEmpty())
+        }
+    }
+
+    @Test fun existingOutputsDoNotRetranscribeAndCompleteOutputsNeedNoTask() = runBlocking {
+        for (md in listOf(false, true)) {
+            val p = if (md) phone("mp3", "vtt", "md") else phone("mp3", "vtt")
+            val synthesis = SynthesisSettings(baseUrl = "https://example.invalid/v1", model = "model", prompt = "prompt", credentialRef = "ref")
+            val store = store(state(request()).copy(synthesisSettings = synthesis))
+            val repo = LocalStateRepository(store)
+            AutomaticProcessingCoordinator(repo, coordinator(repo, p)).reconcile()
+            val tasks = store.load().transcriptionTasks
+            assertEquals(if (md) 0 else 1, tasks.size)
+            if (!md) { assertEquals("", tasks.single().mp3Sha256); assertEquals(TranscriptionPhase.SYNTHESIZING, tasks.single().phase) }
+            assertTrue(store.load().automaticProcessingRequests.isEmpty())
+        }
+    }
+
+    @Test fun missingSettingsWaitThenRetryAndFolderChangeNeverPrepares() = runBlocking {
+        val store = store(state(request()).copy(transcriptionSettings = TranscriptionSettings()))
+        val repo = LocalStateRepository(store)
+        var prepared = 0
+        val transcription = coordinator(repo, phone("mp3"), beforePrepare = { prepared++ })
+        val automatic = AutomaticProcessingCoordinator(repo, transcription)
+        automatic.reconcile()
+        assertEquals(AutomaticProcessingPhase.WAITING_SETTINGS, store.load().automaticProcessingRequests.single().phase)
+        assertTrue(store.load().transcriptionTasks.isEmpty())
+        repo.updateDurably { it.copy(transcriptionSettings = configured, phoneTreeUri = folderB) }
+        automatic.reconcile()
+        assertEquals(1, prepared)
+        assertEquals("Le dossier du téléphone a changé.", store.load().automaticProcessingRequests.single().reason)
+        repo.updateDurably { it.copy(phoneTreeUri = folderA) }
+        automatic.reconcile()
+        assertEquals(listOf("request"), store.load().transcriptionTasks.map { it.localId })
+    }
+
+    @Test fun preparationFailureIsIsolatedAndSchedulingFailureLeavesDurableWork() = runBlocking {
+        val second = request("second").copy(recordingName = "20261112120000")
+        val store = store(state(request(), second))
+        val repo = LocalStateRepository(store)
+        val p = phone("mp3").apply { files["Note-${second.recordingName}.mp3"] = "synthetic".toByteArray() }
+        var attempts = 0
+        val transcription = coordinator(repo, p, schedule = { throw java.io.IOException("scheduler") }, beforePrepare = {
+            if (attempts++ == 0) throw java.io.IOException("preparation")
+        })
+        AutomaticProcessingCoordinator(repo, transcription).reconcile()
+        assertEquals(listOf("request"), store.load().automaticProcessingRequests.map { it.id })
+        assertEquals(listOf("second"), store.load().transcriptionTasks.map { it.localId })
+        val scheduled = mutableListOf<String>()
+        coordinator(repo, p, { scheduled += it }).reconcile()
+        assertEquals(listOf("second"), scheduled)
+    }
+
+    @Test fun changingFolderDuringPreparationUsesCapturedFolderAndDoesNotCommit() = runBlocking {
+        val store = store(state(request()))
+        val repo = LocalStateRepository(store)
+        var usedFolder: String? = null
+        val transcription = TranscriptionCoordinator(repo, client, TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
+            verifyAudio = { true }, schedule = {}, prepareAutomatic = { _, _, _, folder ->
+                repo.updateDurably { it.copy(phoneTreeUri = folderB) }
+                usedFolder = folder
+                emptyList()
+            })
+        AutomaticProcessingCoordinator(repo, transcription).reconcile()
+        assertEquals(folderA, usedFolder)
+        assertEquals("Le dossier du téléphone a changé.", store.load().automaticProcessingRequests.single().reason)
+        assertTrue(store.load().transcriptionTasks.isEmpty())
     }
 }

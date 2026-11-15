@@ -183,6 +183,11 @@ class AppModel(
                 TranscriptionPreparation.prepare(PhoneFolder(app, folder.toUri()), folder,
                     state.transcriptionSettings, state.errors, names, state.synthesisSettings, request, active) { java.util.UUID.randomUUID().toString() }
             } },
+            prepareAutomatic = { names, request, active, folder -> withContext(Dispatchers.IO) {
+                val state = localRepository.awaitInitialized()
+                TranscriptionPreparation.prepare(PhoneFolder(app, folder.toUri()), folder,
+                    state.transcriptionSettings, state.errors, names, state.synthesisSettings, request, active) { java.util.UUID.randomUUID().toString() }
+            } },
             synthesisClient = synthesisClient,
             synthesisStorage = SynthesisStorage(File(app.filesDir, "synthesis")),
             phoneStore = { folder -> PhoneFolder(app, folder.toUri()) },
