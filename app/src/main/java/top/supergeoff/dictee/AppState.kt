@@ -636,9 +636,13 @@ class AppModel(
     private suspend fun sendRecordings(uri: Uri, recordings: List<Recording>, explicit: Boolean) {
         val drive = driveClient()
         val folder = resolveSendFolder(drive) ?: return
+        val account = readAccount() ?: run {
+            say("Adresse du compte Google indisponible, envoi annulé.")
+            return
+        }
         val failed = mutableSetOf<String>()   // un fichier envoyé ensuite ne doit pas effacer l'échec d'un autre du même enregistrement
-        val outcome = SendJob(drive, PhoneFolder(app, uri), journal)
-            .run(folder, recordings, ::publishSend, { applySend(it, failed) }, explicitSelection = explicit)
+        val outcome = SendJob(drive, PhoneFolder(app, uri), journal, app.cacheDir)
+            .run(folder, recordings, DriveSendChoice.ALL_FILES, DriveDestination(account, folder.id), localFlow.driveReceipts, ::publishSend, { applySend(it, failed) }, explicitSelection = explicit)
         if (outcome is SendOutcome.Stopped) say(outcome.reason)
     }
 

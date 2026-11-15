@@ -4,11 +4,17 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.Rule
+import org.junit.rules.TemporaryFolder
+import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.InputStream
 
 class SendJobTest {
+    @get:Rule val tmp = TemporaryFolder()
+    private val destination = DriveDestination("test@example.invalid", "F1")
+    private val hash = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
     private val n = "20261030084752"
     private val defaultFolder = DriveFolder("F1", "Dictée")
     private fun json(code: Int, body: String, headers: Map<String, String> = emptyMap()) = HttpResponse(code, body, headers)
@@ -19,8 +25,66 @@ class SendJobTest {
     }
     private fun run(
         http: Http, store: MemoryStore, rs: List<Recording>, log: ListLog = ListLog(), labels: MutableList<String> = mutableListOf(),
-        explicit: Boolean = false,
-    ) = SendJob(DriveClient(http, FakeTokens("t1", "t2")), store, log).run(defaultFolder, rs, { _, p -> labels += p.label() }, {}, explicitSelection = explicit)
+        explicit: Boolean = false, choice: DriveSendChoice = DriveSendChoice.ALL_FILES,
+        receipts: List<DriveReceipt> = listOf(DriveReceipt(destination, "Call-$n.vtt", "A2", hash)),
+    ) = runBlocking { SendJob(DriveClient(http, FakeTokens("t1", "t2")), store, log, tmp.root).run(defaultFolder, rs, choice, destination, receipts, { _, p -> labels += p.label() }, {}, explicitSelection = explicit) }
+
+    @Test fun documentsOnlySkipsAudioAndAbsentDocuments() {
+        val store = MemoryStore(); val http = FakeHttp(json(200, """{"files":[]}"""))
+        val out = run(http, store, listOf(recording(store, "Call-$n.mp3")), choice = DriveSendChoice.DOCUMENTS_ONLY)
+        assertTrue(out.results.isEmpty()); assertEquals(1, http.requests.size)
+    }
+
+    @Test fun unprovenDocumentIsUpdatedAndReceipted() {
+        val store = MemoryStore(); val file = "Call-$n.vtt"
+        val http = FakeHttp(json(200, """{"files":[{"id":"A2","name":"$file","size":"3"}]}"""),
+            json(200, "", mapOf("Location" to "https://upload.example/s1")), json(200, """{"id":"A2","name":"$file","size":"3"}"""))
+        val out = run(http, store, listOf(recording(store, file)), receipts = emptyList())
+        assertEquals("PATCH", http.requests[1].method)
+        assertEquals(DriveReceipt(destination, file, "A2", hash), (out.results.single() as SendResult.Sent).receipt)
+    }
+
+    @Test fun uploadReadsSnapshotEvenWhenSourceChanges() {
+        val store = MemoryStore(); val file = "Call-$n.vtt"
+        val rec = recording(store, file)
+        val inner = FakeHttp(json(200, """{"files":[]}"""), json(200, "", mapOf("Location" to "https://upload.example/s1")),
+            json(200, """{"id":"V1","name":"$file","size":"3"}"""))
+        var uploaded = ""
+        val http = object : Http {
+            override fun call(request: HttpRequest): HttpResponse {
+                if (request.method == "PUT") {
+                    store.files[file] = "abd".toByteArray()
+                    uploaded = (request.body as HttpBody.Stream).open().bufferedReader().use { it.readText() }
+                }
+                return inner.call(request)
+            }
+        }
+        val sent = run(http, store, listOf(rec), receipts = emptyList()).results.single() as SendResult.Sent
+        assertEquals("abc", uploaded); assertEquals(hash, sent.receipt!!.sha256)
+        assertTrue(tmp.root.listFiles()!!.isEmpty())
+    }
+
+    @Test fun duplicateDocumentFailsWithoutUpload() {
+        val store = MemoryStore(); val file = "Call-$n.vtt"
+        val http = FakeHttp(json(200, """{"files":[{"id":"A2","name":"$file","size":"3"},{"id":"A3","name":"$file","size":"3"}]}"""))
+        val out = run(http, store, listOf(recording(store, file)), receipts = emptyList())
+        assertTrue(out.results.single() is SendResult.Failed); assertEquals(1, http.requests.size)
+    }
+
+    @Test fun partialSuccessIsRetainedAndRetrySkipsReceipt() {
+        val store = MemoryStore(); val vtt = "Call-$n.vtt"; val md = "Call-$n.md"
+        val rec = recording(store, vtt, md)
+        val http = FakeHttp(json(200, """{"files":[]}"""), json(200, "", mapOf("Location" to "https://upload.example/s1")),
+            json(200, """{"id":"V1","name":"$vtt","size":"3"}"""), json(403, """{"error":{"message":"Forbidden"}}"""))
+        val out = run(http, store, listOf(rec), receipts = emptyList())
+        val receipt = (out.results[0] as SendResult.Sent).receipt!!
+        assertTrue(out.results[1] is SendResult.Failed)
+        val retry = FakeHttp(json(200, """{"files":[{"id":"V1","name":"$vtt","size":"3"}]}"""),
+            json(200, "", mapOf("Location" to "https://upload.example/s2")), json(200, """{"id":"M1","name":"$md","size":"2"}"""))
+        val again = run(retry, store, listOf(rec), receipts = listOf(receipt))
+        assertTrue(again.results[0] is SendResult.AlreadyThere); assertTrue(again.results[1] is SendResult.Failed)
+        assertEquals(3, retry.requests.size)
+    }
 
     @Test
     fun `le MP3 au nom de la 0_1_5 compte comme present`() {
@@ -64,7 +128,7 @@ class SendJobTest {
             json(200, "", mapOf("Location" to "https://upload.example/s1")), json(200, """{"id":"X1","name":"fichier","size":"3"}"""))
         val out = run(http, store, listOf(recording(store, "Call-$n.mp3", "Call-$n.vtt", "Call-$n.md")), log)
         assertEquals(
-            listOf(SendResult.AlreadyThere(n, "Call-$n.mp3"), SendResult.AlreadyThere(n, "Call-$n.vtt"), SendResult.Sent(n, "Call-$n.md")),
+            listOf(SendResult.AlreadyThere(n, "Call-$n.mp3"), SendResult.AlreadyThere(n, "Call-$n.vtt"), SendResult.Sent(n, "Call-$n.md", DriveReceipt(destination, "Call-$n.md", "X1", hash))),
             out.results,
         )
         assertEquals(listOf("DRIVE 2 fichiers déjà dans Dictée, non envoyés"), log.lines.filter { "déjà" in it })
@@ -170,7 +234,7 @@ class SendJobTest {
         }
         val http = ReadingHttp(FakeHttp(json(200, """{"files":[]}"""), json(200, "", mapOf("Location" to "https://upload.example/s1"))))
         val lost = Recording(n, RecordType.CALL, 3, true, mapOf(FileKind.MP3 to PhoneFile("Call-$n.mp3", 3)), DisplayState.Recovered)
-        val out = SendJob(DriveClient(http, FakeTokens("t1", "t2")), store, log).run(defaultFolder, listOf(lost), { _, _ -> }, {})
+        val out = runBlocking { SendJob(DriveClient(http, FakeTokens("t1", "t2")), store, log, tmp.root).run(defaultFolder, listOf(lost), DriveSendChoice.ALL_FILES, destination, emptyList(), { _, _ -> }, {}) }
         assertEquals(SendOutcome.Done(listOf(SendResult.Failed(n, "Call-$n.mp3", "Dossier du téléphone inaccessible."))), out)
         assertTrue(log.lines.contains("DRIVE erreur : Call-$n.mp3 : Dossier du téléphone inaccessible. (cause : FileNotFoundException : dossier illisible)"))
     }
