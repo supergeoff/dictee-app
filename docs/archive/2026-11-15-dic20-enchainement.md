@@ -167,5 +167,13 @@ L'option automatique, restée désactivée, a été activée avant la récupéra
 
 Les empreintes SHA-256 des 23 fichiers présents avant ce second lot sont inchangées après le traitement. Les anciens MP3 restent sans nouveau VTT/MD ; le compteur manuel VTT + MD reste à quatre, ce qui confirme l'absence de rétroactivité sur cette recette. Les deux premières tâches, annulées par l'utilisateur avant installation du correctif, n'ont pas été relancées.
 
-Le parcours nominal corrigé est validé sur appareil. La réception des notifications est observée dans le service système, mais leur ouverture n'a pas été validée par interaction. L'arrêt/reprise en cours de traitement avec le correctif, la désactivation en cours de lot et l'erreur isolée restent à vérifier sur téléphone ; leurs tests JVM ne remplacent pas cette recette. Aucun push ni fusion n'a été effectué à ce stade.
+Le parcours nominal corrigé est validé sur appareil. La réception des notifications est observée dans le service système. Aucun push ni fusion n'avait été effectué à ce stade.
+
+## Recette de désactivation et d'interruption
+
+Un troisième lot de deux nouveaux extraits de 20 et 22 secondes a été récupéré avec l'option active. Après présence des deux MP3 sur le téléphone, l'option a été désactivée et son état contrôlé dans les réglages. La première transcription était alors à 5 %. Le processus a été arrêté par `am force-stop`, puis l'activité redémarrée : le lancement est froid et l'interface retrouve la première transcription à 5 % et la seconde en attente. Aucun bouton de transcription n'a été utilisé.
+
+L'application a ensuite été laissée en arrière-plan. Les deux jeux MP3/VTT/MD étaient complets en moins d'une minute après la récupération, malgré la désactivation. Les journaux serveur montrent une seule soumission et une seule exécution par extrait, sans erreur ni réémission après redémarrage. Les VTT et Markdown ont été contrôlés comme pour le lot précédent. Les 29 fichiers préexistants conservent leurs empreintes SHA-256 et l'interface laisse Drive à faire. L'option reste désactivée à la fin de cette recette.
+
+Les notifications ont été observées dans le panneau Android : deux avis « Traitement terminé » distinguent les extraits par la date et les secondes, sans afficher le sujet. Elles sont informatives ; le code ne leur attache pas d'action d'ouverture, qui ne fait pas partie de la spécification approuvée. La récupération en lot, la désactivation sans annulation et la reprise en premier plan après arrêt du processus sont validées sur téléphone. Une erreur volontaire sur le vrai serveur n'a pas été provoquée : l'isolation des erreurs reste vérifiée par les tests automatisés. Les tests instrumentés Android ont été compilés, pas exécutés.
 
