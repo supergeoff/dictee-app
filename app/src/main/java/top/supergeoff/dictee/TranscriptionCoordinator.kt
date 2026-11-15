@@ -44,6 +44,7 @@ class TranscriptionCoordinator(
     private val promotionGuard: ReentrantLock = ReentrantLock(),
     private val prepareRequested: suspend (Set<String>?, RequestedWork, Set<String>) -> List<TranscriptionTask> = { names, _, _ -> prepare(names) },
     private val onFilesPromoted: suspend (String) -> Unit = {},
+    private val onProcessingResult: (ProcessingResultNotice) -> Unit = {},
     private val prepareAutomatic: suspend (String, String) -> AutomaticPreparation =
         { _, _ -> AutomaticPreparation.Excluded(TranscriptionExclusion.MISSING_MP3) },
 ) {
@@ -291,7 +292,7 @@ class TranscriptionCoordinator(
         if (task.phase == TranscriptionPhase.UNKNOWN_SUBMISSION) return RunOutcome.Suspended
         if (task.phase != TranscriptionPhase.PENDING && task.phase != TranscriptionPhase.TRACKING &&
             task.phase != TranscriptionPhase.SAVING) return RunOutcome.Resume
-        if (settings.readForTask(localId) == null) return RunOutcome.Suspended
+        if (settings.readForTask(localId, ::notifyProcessingResult) == null) return RunOutcome.Suspended
         if (task.phase == TranscriptionPhase.SAVING) return save(task.localId, null)
         // Une nouvelle tentative occupée reste en file jusqu'à son heure, sans recontacter le serveur.
         if (task.phase == TranscriptionPhase.PENDING && task.nextAttemptAtMillis != null && clock() < task.nextAttemptAtMillis)
@@ -379,7 +380,7 @@ class TranscriptionCoordinator(
             update(task.localId) { it.copy(phase = TranscriptionPhase.CANCELLED) }
             return RunOutcome.Finished
         }
-        if (settings.readForTask(task.localId) == null) return RunOutcome.Suspended
+        if (settings.readForTask(task.localId, ::notifyProcessingResult) == null) return RunOutcome.Suspended
         return try {
             val server = client.cancel(task)
             when (server.status) {
@@ -727,17 +728,21 @@ class TranscriptionCoordinator(
                 promotionGuard.withLock {
                     if (TranscriptionAudio.sha256(phone, task.vttName) != context.vttSha256 ||
                         TranscriptionAudio.sha256(phone, work.mdName) != expected) throw PhoneStoreException("Les fichiers ont changé.")
+                    var completedTransition: Pair<TranscriptionTask, TranscriptionTask>? = null
                     runBlocking(Dispatchers.IO) { repository.update { state ->
                         val current = state.transcriptionTasks.first { it.localId == task.localId }
                         if (current.phase != TranscriptionPhase.SYNTHESIZING || current.synthesis?.phase != SynthesisPhase.SAVE_PENDING) state else {
                             val previous = state.synthesisProvenance.filterNot { it.folderUri == task.folderUri && it.mdName == work.mdName }
                             val provenance = if (promotionObserved) previous + SynthesisProvenance(
                                 task.folderUri, work.mdName, context.model, checkNotNull(context.vttSha256), expected) else previous
-                            state.copy(transcriptionTasks = state.transcriptionTasks.map { if (it.localId == task.localId) it.copy(
-                                phase = TranscriptionPhase.COMPLETED, synthesis = it.synthesis?.copy(phase = SynthesisPhase.COMPLETED)) else it },
+                            val completed = current.copy(phase = TranscriptionPhase.COMPLETED,
+                                synthesis = current.synthesis.copy(phase = SynthesisPhase.COMPLETED))
+                            completedTransition = current to completed
+                            state.copy(transcriptionTasks = state.transcriptionTasks.map { if (it.localId == task.localId) completed else it },
                                 synthesisProvenance = provenance)
                         }
                     }.await().getOrThrow() }
+                    completedTransition?.let { (previous, next) -> notifyProcessingResult(previous, next) }
                     checkNotNull(synthesisStorage).discard(task.localId)
                 }
             }
@@ -754,7 +759,12 @@ class TranscriptionCoordinator(
         catch (_: Exception) { /* La lecture de la liste ne doit pas modifier le résultat de la promotion. */ }
     }
 
+    private fun notifyProcessingResult(previous: TranscriptionTask, next: TranscriptionTask) {
+        try { processingResultNotice(previous, next)?.let(onProcessingResult) } catch (_: Exception) { }
+    }
+
     private suspend fun update(localId: String, change: (TranscriptionTask) -> TranscriptionTask): TranscriptionTask {
+        var transition: Pair<TranscriptionTask, TranscriptionTask>? = null
         val state = repository.updateDurably { current ->
             current.copy(transcriptionTasks = current.transcriptionTasks.map {
                 if (it.localId != localId) return@map it
@@ -766,9 +776,11 @@ class TranscriptionCoordinator(
                     else -> next
                 }
                 logTransition(it, kept)
+                transition = it to kept
                 kept
             })
         }
+        transition?.let { (previous, next) -> notifyProcessingResult(previous, next) }
         return state.transcriptionTasks.first { it.localId == localId }
     }
 

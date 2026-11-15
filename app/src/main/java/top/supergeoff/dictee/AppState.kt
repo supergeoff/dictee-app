@@ -206,6 +206,7 @@ class AppModel(
                 } finally { spool.delete() }
             } },
             onFilesPromoted = { folder -> readPhoneAfterPromotion(folder) },
+            onProcessingResult = ProcessingNotifications(app)::show,
             launch = { startWork() })
     }
 

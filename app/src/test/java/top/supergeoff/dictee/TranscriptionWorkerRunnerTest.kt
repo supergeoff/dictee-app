@@ -351,6 +351,50 @@ class TranscriptionWorkerRunnerTest {
         assertTrue(disk.load().transcriptionTasks.first { it.localId == "blocked" }.suspended)
     }
 
+    @Test fun `worker reports durable completion even when callback fails and processes next task`() = runBlocking {
+        val first = synthesisTask("first", "20261110120000")
+        val second = synthesisTask("second", "20261111120000")
+        disk.save(LocalState(transcriptionTasks = listOf(first, second)))
+        val repo = LocalStateRepository(disk)
+        val phone = MemoryStore().apply { files["audio.vtt"] = vtt }
+        val notices = mutableListOf<ProcessingResultNotice>()
+        val coordinator = TranscriptionCoordinator(repo, Client(), TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
+            verifyAudio = { true }, synthesisClient = synthesisClient { "# Synthèse".toByteArray() },
+            synthesisStorage = SynthesisStorage(File(tmp.root, "notice-stage")), phoneStore = { phone },
+            synthesisCredentialAccessible = { true }, onProcessingResult = { notice ->
+                assertEquals(TranscriptionPhase.COMPLETED, disk.load().transcriptionTasks.first { it.localId == notice.taskId }.phase)
+                notices += notice
+                throw IllegalStateException("notification inaccessible")
+            })
+        val worker = TranscriptionWorkerRunner(repo, coordinator, {})
+        worker.run("first", 0)
+        // Each task needs a distinct destination to avoid replacing the first MD.
+        phone.files.remove("audio.md")
+        worker.run("second", 0)
+        assertEquals(listOf("first", "second"), notices.map { it.taskId })
+        assertTrue(disk.load().transcriptionTasks.all { it.phase == TranscriptionPhase.COMPLETED })
+    }
+
+    @Test fun `worker reports persisted inaccessible credentials suspension once`() = runBlocking {
+        disk.save(LocalState(transcriptionTasks = listOf(task())))
+        val repo = LocalStateRepository(disk)
+        val inaccessible = object : CredentialStore {
+            override fun save(secret: String) = "ref"
+            override fun read(ref: String): String = throw IllegalStateException("secret")
+            override fun remove(ref: String) = Unit
+        }
+        val notices = mutableListOf<ProcessingResultNotice>()
+        val coordinator = TranscriptionCoordinator(repo, Client(), TranscriptionSettingsManager(repo, inaccessible), RecoverySafety(repo),
+            verifyAudio = { true }, onProcessingResult = {
+                assertTrue(disk.load().transcriptionTasks.single().suspended)
+                notices += it
+            })
+        val worker = TranscriptionWorkerRunner(repo, coordinator, {})
+        worker.run("local-1", 0)
+        worker.run("local-1", 0)
+        assertEquals(listOf("Clé inaccessible. Vérifie les réglages de transcription."), notices.map { it.text })
+    }
+
     @Test fun `notification identifies synthesis instead of transcription`() {
         val md = synthesisTask()
         val progress = TranscriptionProgress.current(listOf(md))!!.second

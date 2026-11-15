@@ -163,6 +163,7 @@ L'app reprend l'état de la version 0.1.5 au premier lancement : elle garde l'ad
 
 - Un service de premier plan exécute les récupérations, les envois et le suivi des transcriptions et synthèses. Il déclare le type `dataSync`, et `connectedDevice` quand la permission Bluetooth est accordée. Il garde le processeur éveillé une heure au plus.
 - Sa notification, sur le canal « Travaux en cours », reprend le texte de la barre d'avancement. Sur Android 13 et plus, l'app demande la permission de notification au premier travail long de chaque lancement. Un refus n'arrête pas le travail : seule la notification manque.
+- Le canal distinct « Résultats des traitements » annonce, même sans écran ouvert, la création du VTT et du MD ensemble, ou une interruption avec sa raison. Un VTT seul n'est pas annoncé comme réussite globale. Une notification rejouée pour la même tâche remplace la précédente ; un refus de permission ou une erreur de notification ne modifie pas la file ni l'état durable.
 - Une récupération et un envoi peuvent tourner en même temps, mais jamais deux récupérations ni deux envois. Les transcriptions et synthèses partagent une file et un coordinateur avec la reprise WorkManager ; les tâches DIC-4 déjà persistées restent VTT uniquement. La création d'une tâche ne tient aucun verrou pendant les appels réseau (DIC-25) : une intervention à la fois par tâche, et la file traitée reste la plus ancienne tâche active, du plus ancien enregistrement au plus récent.
 
 ## Transcription
