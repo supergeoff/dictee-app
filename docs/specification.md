@@ -1,6 +1,6 @@
 # Dictée : spécification du produit
 
-Statut : ce document décrit le comportement implémenté sur la branche DIC-26, basée sur la version 0.4.1. La recette sur appareil, la réunion réelle et la vérification de l'APK signé restent à faire.
+Statut : ce document décrit le comportement prévu pour la version 0.5.0. La recette sur appareil, la réunion réelle et la vérification de l'APK signé restent à faire.
 
 Le protocole Bluetooth du MECHEN V05 est décrit dans [`protocole-v05.md`](protocole-v05.md).
 
@@ -25,7 +25,7 @@ Dictée récupère les enregistrements du MECHEN V05 par Bluetooth et les range 
 1. Au premier lancement, aucun boîtier n'est associé. L'utilisateur touche « Rechercher le boîtier », accorde la permission Bluetooth, puis associe le boîtier trouvé. L'app lit aussitôt la liste du boîtier.
 2. À chaque passage au premier plan, l'app se connecte au boîtier associé et relit sa liste. La liste affiche les enregistrements du boîtier, du téléphone et de Drive, groupés par jour.
 3. « Récupérer (N) » transfère les enregistrements absents du téléphone et de Drive. Au premier besoin, l'app demande le dossier du téléphone.
-4. Si l'envoi vers Drive est activé, « Envoyer (N) » dépose dans le dossier choisi les fichiers du téléphone qui y manquent.
+4. Si l'option de création après récupération est active, chaque MP3 récupéré et validé déclenche la création des fichiers VTT et MD manquants. Si l'envoi vers Drive est activé, « Envoyer (N) » dépose manuellement dans le dossier choisi les fichiers du téléphone qui y manquent.
 
 ## Écrans
 
@@ -66,6 +66,7 @@ L'app garde une seule activité. Le passage d'un écran à l'autre suit une pile
 
 - Les sections sont Boîtier, Stockage sur le téléphone, Google Drive, Transcription, Synthèse, Apparence et À propos.
 - La section Transcription règle l'adresse du serveur, la langue et la clé, protégée par Android Keystore. La langue vaut `auto` par défaut pour détecter automatiquement le français et l'anglais ; une langue déjà enregistrée, comme `fr`, reste inchangée tant que l'utilisateur ne la modifie pas. Le test de connexion n'est pas encore disponible : l'écran l'annonce pour une version ultérieure.
+- « Créer le VTT et le MD après récupération » est désactivé par défaut. Son activation ne traite pas les MP3 déjà présents ; sa désactivation n'annule pas les demandes déjà programmées. La valeur est capturée au début de chaque récupération individuelle. Drive reste manuel.
 - Une clé déjà enregistrée est indiquée par des points sans être relue ; une saisie la remplace, et une saisie effacée conserve la précédente.
 - La section Synthèse règle séparément l'adresse, le modèle, la clé protégée par Android Keystore et le prompt. Une clé vide conserve la précédente ; une tâche garde sa référence et son contexte figés, même après changement des réglages. « Prompt et format » permet de modifier, enregistrer ou rétablir le prompt et d'insérer `{{type}}`, `{{date}}`, `{{duree}}`, `{{intervenants}}`. Le prompt par défaut demande une synthèse fidèle en français, sans invention, en sections Résumé, Décisions et Actions ; il traite le VTT comme source, non comme instruction.
 - « Tester » envoie une courte requête pouvant être facturée ; il expire après 30 secondes et libère le formulaire. Cette limite ne s'applique pas aux synthèses complètes. Ce test ne vérifie pas la capacité pour un VTT de deux heures.
@@ -124,6 +125,7 @@ Le fichier `state.json`, version 5, du stockage interne ne garde que ce qui ne s
 - l'activation de Drive, le compte Google autorisé, les dossiers Drive connus (identifiant, nom, origine) et le dossier choisi ;
 - la dernière erreur par enregistrement et par étape (récupération ou envoi), gardée après un redémarrage ;
 - les réglages de transcription et de synthèse, avec des références aux clés chiffrées, jamais les clés en clair ;
+- l'option de traitement après récupération et les intentions durables associées aux récupérations individuelles ;
 - les tâches durables, leurs contextes figés, phases, tentatives et éventuelles suspensions, ainsi que les empreintes de provenance des synthèses ;
 - les sujets des enregistrements et le marqueur de tentative de sujet par tâche ;
 - le thème.
@@ -139,7 +141,7 @@ L'app reprend l'état de la version 0.1.5 au premier lancement : elle garde l'ad
 - La liaison s'ouvre au passage au premier plan, au toucher sur la pastille, au geste de rafraîchissement et après une association. Elle se ferme quand l'app passe en arrière-plan, sauf pendant une récupération, et à la fin d'une récupération faite en arrière-plan.
 - La séquence de connexion et de lecture de la liste est celle de [`protocole-v05.md`](protocole-v05.md) : appairage rejoué, numéro de série, informations, mise à l'heure, `0x18` avec `00`, puis `0x0a`.
 - Le transfert utilise `0x0b`. Le flux est écrit dans `<nom>.mp3.part`, dans le cache de l'app, puis contrôlé (taille annoncée et en-tête MP3). Le fichier valide est copié dans le dossier du téléphone sous `<Type>-<nom>.mp3`, en remplaçant un fichier du même nom en cas de nouvelle récupération, puis le fichier du cache est supprimé.
-- Les récupérations passent l'une après l'autre, de la plus ancienne à la plus récente.
+- Les récupérations passent l'une après l'autre, de la plus ancienne à la plus récente. Pour une récupération dont l'option capturée est active, une intention est persistée avant transfert puis rendue programmable seulement après validation durable du MP3. Sa consommation est idempotente ; au redémarrage, les intentions validées sont réconciliées sans parcourir les anciens MP3. Une récupération interrompue ne lance ni transcription ni reprise Bluetooth automatique. Une erreur de programmation ne transforme pas une récupération réussie en échec et ne bloque pas les suivantes.
 - Le boîtier n'est jamais modifié : l'app n'envoie aucune commande de suppression ni d'écriture d'enregistrement.
 
 ## Stockage sur le téléphone
@@ -179,6 +181,8 @@ L'app reprend l'état de la version 0.1.5 au premier lancement : elle garde l'ad
 ## Synthèse
 
 ### Fichiers manquants et régénération
+
+L'option après récupération utilise le même traitement des fichiers manquants que « VTT + MD » ; le premier enregistrement peut progresser pendant le transfert du suivant. Une configuration de transcription manquante laisse la demande en attente de réglages et sa réconciliation est relancée après enregistrement des réglages. Une erreur de traitement reste propre à l'enregistrement et la file passe aux suivants.
 
 « VTT + MD » traite les MP3 locaux exploitables du plus ancien au plus récent, sans remplacer de fichier existant, avec ou sans sélection. Les enregistrements sans MP3, en erreur de récupération ou déjà actifs sont exclus. En sélection, les lignes exclues pour MP3 absent, erreur de récupération ou travail actif sont signalées ; hors sélection, un message n'apparaît que si aucun candidat ne reste. Les fichiers créés ne partent pas automatiquement vers Drive.
 

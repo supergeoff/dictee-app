@@ -529,7 +529,7 @@ private inline fun <reified T : Enum<T>> String?.toEnumOr(default: T): T =
     enumValues<T>().firstOrNull { it.name == this } ?: default
 
 /** Sérialise les transferts et marque durablement un MP3 avant de pouvoir l'écrire.
- * Les futurs traitements lisant des MP3 doivent aussi utiliser ce verrou et l'état du dépôt. */
+ * La création d'une tâche lisant un MP3 partage ce verrou ; une tâche active protège ensuite son enregistrement. */
 class RecoverySafety(private val repository: LocalStateRepository) {
     private val transferMutex = kotlinx.coroutines.sync.Mutex()
 

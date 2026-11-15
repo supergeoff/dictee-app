@@ -301,14 +301,9 @@ class TranscriptionCoordinator(
         return if (task.phase == TranscriptionPhase.PENDING) submit(task) else track(task)
     }
 
-    private suspend fun submit(task: TranscriptionTask): RunOutcome =
-        // L'envoi lit le MP3 : le verrou de transfert couvre la vérification et la requête.
-        recoverySafety.withTransferLock(LOCK_WAIT_LOG_MS,
-            { journal(Source.STT, task, "en attente d'un transfert en cours") }) {
-            submitLocked(task)
-        }
+    private suspend fun submit(task: TranscriptionTask): RunOutcome {
+        // La tâche active protège son MP3 contre une récupération ; un autre transfert peut continuer.
 
-    private suspend fun submitLocked(task: TranscriptionTask): RunOutcome {
         val verified = try { verifyAudio(task) } catch (e: CancellationException) { throw e } catch (_: Exception) { false }
         if (!verified) {
             update(task.localId) { it.copy(suspended = true,
