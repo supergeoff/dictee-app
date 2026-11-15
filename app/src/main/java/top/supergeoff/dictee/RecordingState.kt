@@ -125,7 +125,7 @@ object Recordings {
             recording.phoneFiles.any { (kind, file) ->
                 kind in DriveSync.requiredKinds(local.driveSendChoice) &&
                     (drive == null || destination == null || DriveSync.action(file.fileName, kind, hashes[file.fileName], destination, drive.entries, local.driveReceipts) in
-                        setOf(DriveWriteAction.CREATE, DriveWriteAction.UPDATE))
+                        setOf(DriveWriteAction.CREATE, DriveWriteAction.UPDATE, DriveWriteAction.CONFLICT))
             }
         }
     }

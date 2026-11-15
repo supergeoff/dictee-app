@@ -49,6 +49,7 @@ class SendJob(
         onProgress: (name: String, progress: Progress) -> Unit,
         onResult: suspend (SendResult) -> Unit,
         explicitSelection: Boolean = false,
+        beforeUpdate: suspend (DriveDestination, String) -> Unit = { _, _ -> error("Invalidation du reçu indisponible") },
     ): SendOutcome {
         require(destination.account.isNotBlank() && destination.folderId == folder.id)
         val listing = try {
@@ -88,6 +89,15 @@ class SendJob(
                         SendResult.AlreadyThere(item.name, item.file.fileName)
                     }
                     else -> {
+                        if (entry.action == DriveWriteAction.UPDATE) {
+                            try {
+                                beforeUpdate(destination, item.file.fileName)
+                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                return stop("Impossible d'invalider le reçu Drive : ${reasonOf(e)}", results)
+                            }
+                        }
                         index++
                         try {
                             val existing = if (entry.action == DriveWriteAction.UPDATE) listing.single { it.name == item.file.fileName }.id else null

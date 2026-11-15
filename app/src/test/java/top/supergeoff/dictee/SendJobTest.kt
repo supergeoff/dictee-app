@@ -27,7 +27,41 @@ class SendJobTest {
         http: Http, store: MemoryStore, rs: List<Recording>, log: ListLog = ListLog(), labels: MutableList<String> = mutableListOf(),
         explicit: Boolean = false, choice: DriveSendChoice = DriveSendChoice.ALL_FILES,
         receipts: List<DriveReceipt> = listOf(DriveReceipt(destination, "Call-$n.vtt", "A2", hash)),
-    ) = runBlocking { SendJob(DriveClient(http, FakeTokens("t1", "t2")), store, log, tmp.root).run(defaultFolder, rs, choice, destination, receipts, { _, p -> labels += p.label() }, {}, explicitSelection = explicit) }
+    ) = runBlocking { SendJob(DriveClient(http, FakeTokens("t1", "t2")), store, log, tmp.root).run(defaultFolder, rs, choice, destination, receipts, { _, p -> labels += p.label() }, {}, explicitSelection = explicit, beforeUpdate = { _, _ -> }) }
+
+    @Test fun uncertainUpdateInvalidatesOldReceiptDurably() = runBlocking {
+        for (wrongSize in listOf(true, false)) {
+            val file = "Call-$n.vtt"
+            val stateFile = File(tmp.newFolder(), "state.json")
+            val repository = LocalStateRepository(LocalStateStore(stateFile))
+            val old = DriveReceipt(destination, file, "A2", hash)
+            repository.updateDurably { it.withDriveReceipt(old) }
+            val store = MemoryStore(); val rec = recording(store, file)
+            store.files[file] = "abd".toByteArray()
+            val http = FakeHttp(json(200, """{"files":[{"id":"A2","name":"$file","size":"3"}]}"""),
+                json(200, "", mapOf("Location" to "https://upload.example/s1")),
+                json(200, """{"id":"A2","name":"$file","size":"${if (wrongSize) 2 else 3}"}"""))
+            val out = SendJob(DriveClient(http, FakeTokens("t1", "t2")), store, ListLog(), tmp.root)
+                .run(defaultFolder, listOf(rec), DriveSendChoice.DOCUMENTS_ONLY, destination, listOf(old), { _, _ -> },
+                    { result -> if (result is SendResult.Sent) throw java.io.IOException("receipt failure") },
+                    beforeUpdate = { dest, name -> repository.updateDurably { it.withoutDriveReceipt(dest, name) } })
+            assertTrue(if (wrongSize) out.results.single() is SendResult.Failed else out is SendOutcome.Stopped)
+            val reloaded = LocalStateStore(stateFile).load()
+            assertTrue(reloaded.driveReceipts.isEmpty())
+            assertEquals(DriveWriteAction.UPDATE, DriveSync.action(file, FileKind.VTT, hash, destination,
+                listOf(DriveFile("A2", file, 3)), reloaded.driveReceipts))
+        }
+    }
+
+    @Test fun failedInvalidationStopsBeforeUpdateNetwork() = runBlocking {
+        val file = "Call-$n.vtt"; val store = MemoryStore(); val rec = recording(store, file)
+        val http = FakeHttp(json(200, """{"files":[{"id":"A2","name":"$file","size":"3"}]}"""))
+        val out = SendJob(DriveClient(http, FakeTokens("t1", "t2")), store, ListLog(), tmp.root)
+            .run(defaultFolder, listOf(rec), DriveSendChoice.DOCUMENTS_ONLY, destination, emptyList(), { _, _ -> }, {},
+                beforeUpdate = { _, _ -> throw java.io.IOException("disk failure") })
+        assertTrue(out is SendOutcome.Stopped)
+        assertEquals(1, http.requests.size)
+    }
 
     @Test fun existingSendErrorSurvivesFirstSuccessThenReceiptFailure() = runBlocking {
         val store = MemoryStore(); val mp3 = "Call-$n.mp3"; val vtt = "Call-$n.vtt"

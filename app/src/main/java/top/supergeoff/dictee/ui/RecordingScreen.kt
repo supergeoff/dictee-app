@@ -113,7 +113,20 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
                 )
             }
         }
-        RecordingBar(recording, ui.local.recordingSubjects[name], canRecover, onBack, onRecover = { model.recover(listOf(name)) },
+        val md = recording.phoneFiles[FileKind.MD]
+        val vtt = recording.phoneFiles[FileKind.VTT]
+        val document by produceState<Result<SynthesisDocument>?>(null, md, vtt, ui.local.synthesisProvenance, ui.local.transcriptionTasks, ui.refreshing, ui.phoneRevision) {
+            value = null
+            value = if (md == null) null else withContext(Dispatchers.IO) { model.readSynthesis(md.fileName, vtt?.fileName) }
+        }
+        val current = document?.getOrNull()
+        val settings = ui.local.synthesisSettings
+        val configured = settings.baseUrl != "/v1" && isValidSynthesisBaseUrl(settings.baseUrl) &&
+            settings.model.isNotBlank() && settings.prompt.isNotBlank() && !settings.credentialRef.isNullOrBlank()
+        val input = PipelineInput(recording, ui.local, ui.busy, ui.drive,
+            ui.link == LinkStatus.CONNECTED && !ui.recovering, configured, current?.status ?: ProvenanceStatus.UNKNOWN, ui.documentHashes)
+        val presentation = RecordingPipeline.calculate(input)
+        RecordingBar(recording, presentation.badge, ui.local.recordingSubjects[name], canRecover, onBack, onRecover = { model.recover(listOf(name)) },
             canRedoVtt = canRedoVtt, canRedoMd = canRedoMd,
             onRedoVtt = { model.transcribe(setOf(name), RequestedWork.REDO_VTT_AND_MD) },
             onRedoMd = { model.transcribe(setOf(name), RequestedWork.REDO_MD) })
@@ -125,19 +138,6 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
                 .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            val md = recording.phoneFiles[FileKind.MD]
-            val vtt = recording.phoneFiles[FileKind.VTT]
-            val document by produceState<Result<SynthesisDocument>?>(null, md, vtt, ui.local.synthesisProvenance, ui.local.transcriptionTasks, ui.refreshing, ui.phoneRevision) {
-                value = null
-                value = if (md == null) null else withContext(Dispatchers.IO) { model.readSynthesis(md.fileName, vtt?.fileName) }
-            }
-            val current = document?.getOrNull()
-            val settings = ui.local.synthesisSettings
-            val configured = settings.baseUrl != "/v1" && isValidSynthesisBaseUrl(settings.baseUrl) &&
-                settings.model.isNotBlank() && settings.prompt.isNotBlank() && !settings.credentialRef.isNullOrBlank()
-            val input = PipelineInput(recording, ui.local, ui.busy, ui.drive,
-                ui.link == LinkStatus.CONNECTED && !ui.recovering, configured, current?.status ?: ProvenanceStatus.UNKNOWN, ui.documentHashes)
-            val presentation = RecordingPipeline.calculate(input)
             PipelineCard(presentation) { action ->
                 when (action) {
                     PipelineAction.CANCEL_VTT, PipelineAction.CANCEL_MD -> confirmCancel = true
@@ -209,7 +209,7 @@ internal fun RecordingDocuments(
 /** En-tête : le retour, le titre, la durée avec l'état, puis le menu. */
 @Composable
 private fun RecordingBar(
-    recording: Recording, subject: String?, canRecover: Boolean, onBack: () -> Unit, onRecover: () -> Unit,
+    recording: Recording, badge: String, subject: String?, canRecover: Boolean, onBack: () -> Unit, onRecover: () -> Unit,
     canRedoVtt: Boolean, canRedoMd: Boolean, onRedoVtt: () -> Unit, onRedoMd: () -> Unit,
 ) {
     val colors = Dictee.colors
@@ -232,7 +232,8 @@ private fun RecordingBar(
             )
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(text = (subject?.let { "${RecordName.detailTitle(recording.type, recording.name)} · " } ?: "") + duration(recording), style = Dictee.type.caption, color = colors.textSecondary, maxLines = 1)
-                StateBadge(recording.state)
+                Text(badge, style = Dictee.type.captionStrong,
+                    color = when (badge) { "Erreur" -> colors.destructive; "Sur Drive" -> colors.success; else -> colors.textSecondary })
             }
         }
         RecordingMenu(canRecover, onRecover, canRedoVtt, canRedoMd, onRedoVtt, onRedoMd)

@@ -58,6 +58,10 @@ data class LocalState(
     val driveReceipts: List<DriveReceipt> = emptyList(),
 ) {
     /** Remplace la preuve d'envoi du même nom vers la même destination. */
+    fun withoutDriveReceipt(destination: DriveDestination, fileName: String): LocalState = copy(
+        driveReceipts = driveReceipts.filterNot { it.destination == destination && it.fileName == fileName },
+    )
+
     fun withDriveReceipt(receipt: DriveReceipt): LocalState = copy(
         driveReceipts = driveReceipts.filterNot {
             it.destination == receipt.destination && it.fileName == receipt.fileName

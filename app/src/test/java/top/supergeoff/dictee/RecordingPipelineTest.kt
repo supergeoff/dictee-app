@@ -78,7 +78,8 @@ class RecordingPipelineTest {
             assertEquals("Sur Drive", recordingListPresentation(r, current).badge)
         }
         val conflict = ui("Note-$name.mp3", "Call-$name.mp3")
-        assertTrue(conflict.toSend.isEmpty())
+        assertEquals(listOf(r), conflict.toSend)
+        assertEquals(PipelineAction.SEND, recordingListPresentation(r, conflict).button?.action)
         assertNotEquals("Sur Drive", recordingListPresentation(r, conflict).badge)
     }
 

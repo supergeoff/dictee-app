@@ -689,7 +689,9 @@ class AppModel(
                 if (result is SendResult.Sent && result.receipt != null) {
                     localRepository.updateDurably { it.withDriveReceipt(result.receipt) }
                 }
-            }, explicitSelection = request.names != null)
+            }, explicitSelection = request.names != null, beforeUpdate = { destination, fileName ->
+                localRepository.updateDurably { it.withoutDriveReceipt(destination, fileName) }
+            })
         update { applySendOutcome(it, outcome) }
         if (outcome is SendOutcome.Stopped) say(outcome.reason)
     }
