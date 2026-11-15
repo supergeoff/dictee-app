@@ -33,6 +33,60 @@ private fun HttpRequest.jsonBody(): JSONObject = JSONObject(String((body as Http
 class DriveClientTest {
 
     @Test
+    fun `listEntries conserve les homonymes sur plusieurs pages`() {
+        val http = FakeHttp(
+            json(200, """{"nextPageToken":"page 2","files":[{"id":"A1","name":"note.md","size":"3"}]}"""),
+            json(200, """{"files":[{"id":"A2","name":"note.md"}]}"""),
+        )
+        assertEquals(listOf(DriveFile("A1", "note.md", 3), DriveFile("A2", "note.md", 0)), DriveClient(http, FakeTokens("t")).listEntries("F1"))
+        assertTrue(http.requests[0].query().contains("files(id,name,size)"))
+        assertTrue(http.requests[1].query().contains("pageToken=page 2"))
+    }
+
+    @Test
+    fun `storeFile cree par POST et retourne les champs du PUT`() {
+        val http = FakeHttp(json(200, "", mapOf("Location" to "https://upload.example/s1")), json(200, """{"id":"X1","name":"note.md","size":"3"}"""))
+        val result = DriveClient(http, FakeTokens("t")).storeFile("F1", "note.md", "text/markdown", 3, { "abc".byteInputStream() })
+        assertEquals(DriveFile("X1", "note.md", 3), result)
+        assertEquals("POST", http.requests[0].method)
+        assertTrue(http.requests[0].query().contains("fields=id,name,size"))
+        assertEquals("F1", http.requests[0].jsonBody().getJSONArray("parents").getString(0))
+        assertEquals("PUT", http.requests[1].method)
+    }
+
+    @Test
+    fun `storeFile met a jour par PATCH sans parents et renouvelle une fois sur 401`() {
+        val http = FakeHttp(json(401, "{}"), json(200, "", mapOf("Location" to "https://upload.example/s1")), json(200, """{"id":"X1","name":"note.md","size":"3"}"""))
+        val tokens = FakeTokens("t1", "t2")
+        assertEquals(DriveFile("X1", "note.md", 3), DriveClient(http, tokens).storeFile("F1", "note.md", "text/markdown", 3, { "abc".byteInputStream() }, "X1"))
+        assertEquals(listOf("PATCH", "PATCH", "PUT"), http.requests.map { it.method })
+        assertTrue(http.requests[0].url.contains("/files/X1?uploadType=resumable"))
+        assertTrue(http.requests[0].query().contains("fields=id,name,size"))
+        assertFalse(http.requests[0].jsonBody().has("parents"))
+        assertEquals(listOf("Bearer t1", "Bearer t2", "Bearer t2"), http.requests.map { it.headers["Authorization"] })
+        assertEquals(listOf("t1"), tokens.invalidated)
+    }
+
+    @Test
+    fun `un PATCH refuse par 403 ne cree pas de fichier`() {
+        val http = FakeHttp(json(403, """{"error":{"message":"Interdit"}}"""))
+        val e = assertThrows(DriveException::class.java) { DriveClient(http, FakeTokens("t")).storeFile("F1", "note.md", "text/markdown", 3, { "abc".byteInputStream() }, "X1") }
+        assertEquals(403, e.code)
+        assertEquals(listOf("PATCH"), http.requests.map { it.method })
+    }
+
+    @Test
+    fun `une reponse sans identifiant exploitable est refusee`() {
+        for (id in listOf("", " ", "null")) {
+            val value = if (id == "null") "null" else "\"$id\""
+            val listing = FakeHttp(json(200, """{"files":[{"id":$value,"name":"note.md"}]}"""))
+            assertThrows(DriveException::class.java) { DriveClient(listing, FakeTokens("t")).listEntries("F1") }
+            val upload = FakeHttp(json(200, "", mapOf("Location" to "https://upload.example/s1")), json(200, """{"id":$value,"name":"note.md","size":"3"}"""))
+            assertThrows(DriveException::class.java) { DriveClient(upload, FakeTokens("t")).storeFile("F1", "note.md", "text/markdown", 3, { "abc".byteInputStream() }) }
+        }
+    }
+
+    @Test
     fun `un dossier choisi ou l'app peut ajouter des fichiers est accepte avec son nom`() {
         val http = FakeHttp(
             json(200, """{"id":"P1","name":"Dictées","mimeType":"application/vnd.google-apps.folder","trashed":false,"capabilities":{"canAddChildren":true}}"""),
@@ -94,10 +148,10 @@ class DriveClientTest {
     @Test
     fun `la liste donne noms et tailles sur toutes les pages, document sans taille compris`() {
         val http = FakeHttp(
-            json(200, """{"nextPageToken":"p2","files":[{"name":"Call-20261030160502.mp3","size":"9880000"}]}"""),
-            json(200, """{"files":[{"name":"Notes de réunion"}]}"""))
+            json(200, """{"nextPageToken":"p2","files":[{"id":"A1","name":"Call-20261030160502.mp3","size":"9880000"}]}"""),
+            json(200, """{"files":[{"id":"A2","name":"Notes de réunion"}]}"""))
         assertEquals(mapOf("Call-20261030160502.mp3" to 9_880_000L, "Notes de réunion" to 0L), DriveClient(http, FakeTokens("t")).listFiles("F1"))
-        assertTrue(http.requests[0].query().contains("files(name,size)"))
+        assertTrue(http.requests[0].query().contains("files(id,name,size)"))
         assertTrue(http.requests[1].query().contains("pageToken=p2"))
     }
 
@@ -137,7 +191,7 @@ class DriveClientTest {
 
     @Test
     fun `l'envoi d'un VTT annonce son type et sa taille et lit le flux`() {
-        val http = FakeHttp(json(200, "", mapOf("Location" to "https://upload.example/s1")), json(200, """{"id":"X1","size":"3"}"""))
+        val http = FakeHttp(json(200, "", mapOf("Location" to "https://upload.example/s1")), json(200, """{"id":"X1","name":"Call-20261030160502.vtt","size":"3"}"""))
         val size = DriveClient(http, FakeTokens("t")).upload("F1", "Call-20261030160502.vtt", "text/vtt", 3, { "abc".byteInputStream() })
         assertEquals(3L, size)
         assertEquals("text/vtt", http.requests[0].headers["X-Upload-Content-Type"])
@@ -152,7 +206,7 @@ class DriveClientTest {
         val http = FakeHttp(
             json(200, "", mapOf("Location" to "https://upload.example/s1")),
             json(401, "{}"),
-            json(200, """{"id":"X1","size":"3"}"""),
+            json(200, """{"id":"X1","name":"Call-20261030160502.vtt","size":"3"}"""),
         )
         val tokens = FakeTokens("t1", "t2")
         val size = DriveClient(http, tokens).upload("F1", "Call-20261030160502.vtt", "text/vtt", 3, { "abc".byteInputStream() })

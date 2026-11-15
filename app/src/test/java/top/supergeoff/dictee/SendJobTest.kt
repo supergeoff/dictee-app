@@ -24,7 +24,7 @@ class SendJobTest {
 
     @Test
     fun `le MP3 au nom de la 0_1_5 compte comme present`() {
-        val store = MemoryStore(); val http = FakeHttp(json(200, """{"files":[{"name":"$n.mp3","size":"3"}]}"""))
+        val store = MemoryStore(); val http = FakeHttp(json(200, """{"files":[{"id":"A1","name":"$n.mp3","size":"3"}]}"""))
         val out = run(http, store, listOf(recording(store, "Call-$n.mp3")))
         assertEquals(listOf(SendResult.AlreadyThere(n, "Call-$n.mp3")), out.results); assertEquals(1, http.requests.size)
     }
@@ -32,7 +32,7 @@ class SendJobTest {
     @Test
     fun `un fichier manquant part avec son type et sa taille controlee`() {
         val store = MemoryStore(); val labels = mutableListOf<String>()
-        val http = FakeHttp(json(200, """{"files":[]}"""), json(200, "", mapOf("Location" to "https://upload.example/s1")), json(200, """{"size":"3"}"""))
+        val http = FakeHttp(json(200, """{"files":[]}"""), json(200, "", mapOf("Location" to "https://upload.example/s1")), json(200, """{"id":"X1","name":"fichier","size":"3"}"""))
         val out = run(http, store, listOf(recording(store, "Call-$n.mp3")), labels = labels)
         assertEquals(SendOutcome.Done(listOf(SendResult.Sent(n, "Call-$n.mp3"))), out)
         assertEquals("audio/mpeg", http.requests[1].headers["X-Upload-Content-Type"])
@@ -42,15 +42,15 @@ class SendJobTest {
     @Test
     fun `une taille differente est une erreur`() {
         val store = MemoryStore()
-        val http = FakeHttp(json(200, """{"files":[]}"""), json(200, "", mapOf("Location" to "https://upload.example/s1")), json(200, """{"size":"2"}"""))
+        val http = FakeHttp(json(200, """{"files":[]}"""), json(200, "", mapOf("Location" to "https://upload.example/s1")), json(200, """{"id":"X1","name":"fichier","size":"2"}"""))
         assertEquals(listOf(SendResult.Failed(n, "Call-$n.mp3", "taille Drive 2 au lieu de 3")), run(http, store, listOf(recording(store, "Call-$n.mp3"))).results)
     }
 
     @Test
     fun `un VTT deja present n'est pas envoye et une selection explicite le dit fichier par fichier`() {
         val store = MemoryStore(); val log = ListLog()
-        val http = FakeHttp(json(200, """{"files":[{"name":"Call-$n.vtt","size":"10"}]}"""),
-            json(200, "", mapOf("Location" to "https://upload.example/s1")), json(200, """{"size":"3"}"""))
+        val http = FakeHttp(json(200, """{"files":[{"id":"A2","name":"Call-$n.vtt","size":"10"}]}"""),
+            json(200, "", mapOf("Location" to "https://upload.example/s1")), json(200, """{"id":"X1","name":"fichier","size":"3"}"""))
         val out = run(http, store, listOf(recording(store, "Call-$n.mp3", "Call-$n.vtt")), log, explicit = true)
         assertEquals(listOf(SendResult.Sent(n, "Call-$n.mp3"), SendResult.AlreadyThere(n, "Call-$n.vtt")), out.results)
         assertTrue(log.lines.contains("DRIVE Call-$n.vtt déjà dans Dictée, non envoyé"))
@@ -60,8 +60,8 @@ class SendJobTest {
     @Test
     fun `sans selection explicite, les fichiers deja presents tiennent en une seule ligne`() {
         val store = MemoryStore(); val log = ListLog()
-        val http = FakeHttp(json(200, """{"files":[{"name":"Call-$n.mp3","size":"3"},{"name":"Call-$n.vtt","size":"10"}]}"""),
-            json(200, "", mapOf("Location" to "https://upload.example/s1")), json(200, """{"size":"3"}"""))
+        val http = FakeHttp(json(200, """{"files":[{"id":"A1","name":"Call-$n.mp3","size":"3"},{"id":"A2","name":"Call-$n.vtt","size":"10"}]}"""),
+            json(200, "", mapOf("Location" to "https://upload.example/s1")), json(200, """{"id":"X1","name":"fichier","size":"3"}"""))
         val out = run(http, store, listOf(recording(store, "Call-$n.mp3", "Call-$n.vtt", "Call-$n.md")), log)
         assertEquals(
             listOf(SendResult.AlreadyThere(n, "Call-$n.mp3"), SendResult.AlreadyThere(n, "Call-$n.vtt"), SendResult.Sent(n, "Call-$n.md")),
@@ -73,12 +73,12 @@ class SendJobTest {
     @Test
     fun `la ligne des fichiers deja presents s'accorde au singulier et manque quand aucun n'est present`() {
         val store = MemoryStore(); val log = ListLog()
-        val one = FakeHttp(json(200, """{"files":[{"name":"Call-$n.vtt","size":"10"}]}"""),
-            json(200, "", mapOf("Location" to "https://upload.example/s1")), json(200, """{"size":"3"}"""))
+        val one = FakeHttp(json(200, """{"files":[{"id":"A2","name":"Call-$n.vtt","size":"10"}]}"""),
+            json(200, "", mapOf("Location" to "https://upload.example/s1")), json(200, """{"id":"X1","name":"fichier","size":"3"}"""))
         run(one, store, listOf(recording(store, "Call-$n.mp3", "Call-$n.vtt")), log)
         assertEquals(listOf("DRIVE 1 fichier déjà dans Dictée, non envoyé"), log.lines.filter { "déjà" in it })
         val none = FakeHttp(json(200, """{"files":[]}"""),
-            json(200, "", mapOf("Location" to "https://upload.example/s1")), json(200, """{"size":"3"}"""))
+            json(200, "", mapOf("Location" to "https://upload.example/s1")), json(200, """{"id":"X1","name":"fichier","size":"3"}"""))
         val quiet = ListLog()
         run(none, store, listOf(recording(store, "Call-$n.mp3")), quiet)
         assertTrue(quiet.lines.none { "déjà" in it })
@@ -131,7 +131,7 @@ class SendJobTest {
         store.files["Call-20261031094837.mp3"] = "abc".toByteArray()
         val second = first.copy(name = "20261031094837", phoneFiles = mapOf(FileKind.MP3 to PhoneFile("Call-20261031094837.mp3", 3)))
         val http = FakeHttp(json(200, """{"files":[]}"""), json(500, """{"error":{"message":"Backend Error"}}"""),
-            json(200, "", mapOf("Location" to "https://upload.example/s2")), json(200, """{"size":"3"}"""))
+            json(200, "", mapOf("Location" to "https://upload.example/s2")), json(200, """{"id":"X1","name":"fichier","size":"3"}"""))
         val out = run(http, store, listOf(first, second), log, labels)
         assertEquals(
             SendOutcome.Done(listOf(SendResult.Failed(n, "Call-$n.mp3", "Drive a répondu 500 : Backend Error"), SendResult.Sent("20261031094837", "Call-20261031094837.mp3"))),
@@ -144,7 +144,7 @@ class SendJobTest {
     @Test
     fun `le pourcentage suit les octets envoyes`() {
         val store = MemoryStore(); val labels = mutableListOf<String>()
-        val http = ReadingHttp(FakeHttp(json(200, """{"files":[]}"""), json(200, "", mapOf("Location" to "https://upload.example/s1")), json(200, """{"size":"3"}""")))
+        val http = ReadingHttp(FakeHttp(json(200, """{"files":[]}"""), json(200, "", mapOf("Location" to "https://upload.example/s1")), json(200, """{"id":"X1","name":"fichier","size":"3"}""")))
         run(http, store, listOf(recording(store, "Call-$n.mp3")), labels = labels)
         assertEquals(listOf("Envoi 1/1 · 0 %", "Envoi 1/1 · 33 %", "Envoi 1/1 · 66 %", "Envoi 1/1 · 100 %"), labels.distinct())
     }
