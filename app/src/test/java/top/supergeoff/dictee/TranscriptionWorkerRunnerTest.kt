@@ -392,7 +392,7 @@ class TranscriptionWorkerRunnerTest {
         val worker = TranscriptionWorkerRunner(repo, coordinator, {})
         worker.run("local-1", 0)
         worker.run("local-1", 0)
-        assertEquals(listOf("Clé inaccessible. Vérifie les réglages de transcription."), notices.map { it.text })
+        assertTrue(notices.single().text.endsWith("Clé inaccessible. Vérifie les réglages de transcription."))
     }
 
     @Test fun `notification identifies synthesis instead of transcription`() {

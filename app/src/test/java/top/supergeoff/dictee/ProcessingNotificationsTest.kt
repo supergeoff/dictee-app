@@ -12,22 +12,45 @@ class ProcessingNotificationsTest {
         assertNull(processingResultNotice(task, waiting))
         assertNull(processingResultNotice(task, task.copy(phase = TranscriptionPhase.COMPLETED)))
         val completed = waiting.copy(phase = TranscriptionPhase.COMPLETED, synthesis = work.copy(phase = SynthesisPhase.COMPLETED))
-        assertEquals(ProcessingResultNotice("id", "Traitement terminé", "VTT et MD créés."), processingResultNotice(waiting, completed))
+        assertEquals(ProcessingResultNotice("id", "Traitement terminé", "Enregistrement — VTT et MD créés."), processingResultNotice(waiting, completed))
         assertNull(processingResultNotice(completed, completed))
     }
 
     @Test fun `failure and suspension report their reason but cancellation does not`() {
         val failed = task.copy(phase = TranscriptionPhase.FAILED, error = "VTT invalide.")
-        assertEquals("VTT invalide.", processingResultNotice(task, failed)?.text)
+        assertTrue(processingResultNotice(task, failed)!!.text.endsWith("VTT invalide."))
         val suspended = task.copy(suspended = true, suspensionReason = "Dossier inaccessible.")
-        assertEquals("Dossier inaccessible.", processingResultNotice(task, suspended)?.text)
+        assertTrue(processingResultNotice(task, suspended)!!.text.endsWith("Dossier inaccessible."))
         assertEquals("Traitement interrompu", processingResultNotice(task, suspended)?.title)
         assertNull(processingResultNotice(suspended, suspended))
         assertNull(processingResultNotice(task, task.copy(phase = TranscriptionPhase.CANCELLED)))
         assertNull(processingResultNotice(task.copy(phase = TranscriptionPhase.CANCEL_REQUESTED), failed))
     }
 
-    @Test fun `notices exclude task credentials prompts and meeting contents`() {
+    @Test fun `batch notices identify recordings without exposing sensitive contents`() {
+        val first = task.copy(recordingName = "20261111120000", mp3Name = "Note-20261111120000.mp3",
+            encryptedKeyRef = "clé secrète", synthesis = work.copy(context = SynthesisContext("url", "clé secrète", "model", "prompt secret",
+                PromptMetadata("type", "date", "durée"), "prompt secret", "hash")))
+        val second = first.copy(localId = "second", recordingName = "20261111130000", mp3Name = "Call-20261111130000.mp3")
+        val notices = listOf(first, second).map { recording ->
+            val completed = recording.copy(phase = TranscriptionPhase.COMPLETED,
+                synthesis = recording.synthesis!!.copy(phase = SynthesisPhase.COMPLETED))
+            processingResultNotice(recording, completed)!!
+        }
+        assertNotEquals(notices[0].text, notices[1].text)
+        assertTrue(notices[0].text.contains("Note · 11 nov. 12:00"))
+        assertTrue(notices[1].text.contains("Call · 11 nov. 13:00"))
+        for (notice in notices) {
+            assertEquals("Traitement terminé", notice.title)
+            assertTrue(notice.text.contains("VTT et MD créés."))
+            for (secret in listOf("clé secrète", "prompt secret", "synthèse secrétique", "contenu secret de réunion")) {
+                assertFalse(notice.title.contains(secret))
+                assertFalse(notice.text.contains(secret))
+            }
+        }
+    }
+
+    @Test fun `invalid recording names use a generic safe label`() {
         val privateTask = task.copy(recordingName = "contenu secret de réunion", encryptedKeyRef = "clé secrète",
             synthesis = work.copy(context = SynthesisContext("url", "clé secrète", "model", "prompt secret",
                 PromptMetadata("type", "date", "durée"), "prompt secret", "hash")))
@@ -38,11 +61,11 @@ class ProcessingNotificationsTest {
             assertFalse(notice.title.contains(secret))
             assertFalse(notice.text.contains(secret))
         }
-        assertEquals("Le traitement a échoué.", processingResultNotice(privateTask, privateTask.copy(phase = TranscriptionPhase.FAILED))?.text)
+        assertTrue(processingResultNotice(privateTask, privateTask.copy(phase = TranscriptionPhase.FAILED))!!.text.endsWith("Le traitement a échoué."))
     }
 
     @Test fun `missing synthesis configuration is a suspension not a global success`() {
         val next = task.copy(phase = TranscriptionPhase.COMPLETED, synthesis = work.copy(phase = SynthesisPhase.SUSPENDED, suspensionReason = "Configure la synthèse."))
-        assertEquals("Configure la synthèse.", processingResultNotice(task, next)?.text)
+        assertTrue(processingResultNotice(task, next)!!.text.endsWith("Configure la synthèse."))
     }
 }

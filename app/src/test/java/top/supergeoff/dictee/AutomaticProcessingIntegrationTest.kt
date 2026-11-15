@@ -123,6 +123,7 @@ class AutomaticProcessingIntegrationTest {
         assertTrue(h.recover().all { it is RecoveryResult.Ok })
         assertTrue(names.all { "Note-$it.mp3" in h.phone.files })
         assertEquals(names, h.disk.load().transcriptionTasks.map { it.recordingName })
+        assertTrue(h.disk.load().transcriptionTasks.last().localId in h.scheduled)
     }
 
     @Test fun firstTranscriptionProgressesWhileSecondTransferIsInProgress() = runBlocking {
