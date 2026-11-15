@@ -82,17 +82,35 @@ class TranscriptionCoordinator(
 
     suspend fun start(names: Set<String>?, request: RequestedWork = RequestedWork.MISSING): List<String> {
         val source = if (request == RequestedWork.REDO_MD) Source.LLM else Source.STT
+        val resumed = if (request == RequestedWork.MISSING) resumeSuspendedTranscriptions(names) else emptyList()
         val existing = withMutexJournal(source, null) { repository.awaitInitialized().transcriptionTasks }
         val active = existing.filterNot { it.phase.isTerminal() }.map { it.recordingName }.toSet()
         // La préparation relit le dossier : elle ne tient aucun verrou, un appui ne doit pas attendre un appel réseau.
         val prepared = prepareRequested(names, request, active).filter { it.recordingName !in active }.sortedBy { it.recordingName }
-        if (prepared.isEmpty()) return emptyList()
+        if (prepared.isEmpty()) return resumed
         // Un plan qui lit ou écrit un MP3 passe par le verrou de transfert ; une synthèse seule n'en a pas besoin.
-        return if (prepared.any { it.mp3Sha256.isNotBlank() }) {
+        return resumed + if (prepared.any { it.mp3Sha256.isNotBlank() }) {
             recoverySafety.withTransferLock(LOCK_WAIT_LOG_MS, { journal(source, null, "en attente d'un transfert en cours") }) {
                 commitPrepared(prepared)
             }
         } else commitPrepared(prepared)
+    }
+
+    private suspend fun resumeSuspendedTranscriptions(names: Set<String>?): List<String> = mutex.withLock {
+        val tasks = repository.awaitInitialized().transcriptionTasks.filter {
+            it.suspended && !isLocalTranscriptionAbandon(it) && (names == null || it.recordingName in names) &&
+                it.phase in setOf(TranscriptionPhase.PENDING, TranscriptionPhase.TRACKING, TranscriptionPhase.SAVING)
+        }
+        if (tasks.isEmpty()) return@withLock emptyList()
+        tasks.forEach { schedule(it.localId) }
+        val ids = tasks.map { it.localId }.toSet()
+        repository.updateDurably { state -> state.copy(transcriptionTasks = state.transcriptionTasks.map {
+            if (it.localId in ids && it.suspended && it.phase in setOf(TranscriptionPhase.PENDING, TranscriptionPhase.TRACKING, TranscriptionPhase.SAVING))
+                it.copy(suspended = false, suspensionReason = null, submitAttempts = 0, nextAttemptAtMillis = null)
+            else it
+        }) }
+        launch()
+        tasks.map { it.localId }
     }
 
     /** Verrou court de file : lecture et écriture durable, jamais d'appel réseau. */
