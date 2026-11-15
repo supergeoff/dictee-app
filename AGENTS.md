@@ -14,7 +14,7 @@ Dictée est une application Android en Kotlin et Jetpack Compose, avec un seul m
 ## Conventions
 
 - Le code est en Kotlin, les textes affichés par l'application sont en français.
-- Le code sans dépendance Android (`Frame.kt`, `V05Session.kt`, `RecordName.kt`, `RecordingState.kt`, `SendJob.kt`, `RecoveryJob.kt`) s'écrit test d'abord : le test échoue, puis le code le fait passer.
+- Le code sans dépendance Android (`Frame.kt`, `V05Session.kt`, `RecordName.kt`, `RecordingState.kt`, `RecordingPipeline.kt`, `RecordingSubject.kt`, `SendJob.kt`, `RecoveryJob.kt`) s'écrit test d'abord : le test échoue, puis le code le fait passer.
 - Les versions de l'application (`versionCode`, `versionName`), des dépendances et du SDK sont dans `app/build.gradle.kts`. Les versions de Gradle et des plugins sont dans `build.gradle.kts` et `gradle/wrapper/`.
 - Le dépôt est public. Aucun trousseau, mot de passe, chemin local ni information personnelle n'y entre : le trousseau de signature vient de l'environnement (variables `DICTEE_*`).
 - Les fixtures de `app/src/test/resources` sont synthétiques. Elles ne contiennent ni capture d'un vrai boîtier ni identifiant réel.

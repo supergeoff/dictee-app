@@ -59,6 +59,7 @@ sealed class Screen {
     data object Home : Screen()
     data class Detail(val name: String) : Screen()
     data object Settings : Screen()
+    data object SynthesisSettings : Screen()
     data object Prompt : Screen()
     data object DriveFolders : Screen()
     data object Journal : Screen()
@@ -239,8 +240,8 @@ private fun Navigation(ui: UiState, model: AppModel, stack: SnapshotStateList<Sc
                 } else {
                     RecordingsScreen(ui, model, onOpen = { push(Screen.Detail(it)) }, onSettings = { push(Screen.Settings) })
                 }
-            is Screen.Detail -> RecordingScreen(ui, screen.name, model, back)
-            Screen.Settings -> SettingsScreen(
+            is Screen.Detail -> RecordingScreen(ui, screen.name, model, back, onSettings = { push(Screen.SynthesisSettings) })
+            Screen.Settings, Screen.SynthesisSettings -> SettingsScreen(
                 ui = ui,
                 model = model,
                 onBack = back,
@@ -248,6 +249,7 @@ private fun Navigation(ui: UiState, model: AppModel, stack: SnapshotStateList<Sc
                 onDriveFolders = { push(Screen.DriveFolders) },
                 onJournal = { push(Screen.Journal) },
                 onPrompt = { push(Screen.Prompt) },
+                scrollToSynthesis = screen == Screen.SynthesisSettings,
             )
             Screen.Prompt -> PromptScreen(model.synthesisForm, back)
             Screen.DriveFolders -> DriveFolderScreen(ui, model, back)

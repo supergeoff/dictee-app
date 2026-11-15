@@ -34,7 +34,10 @@ class SynthesisCoordinatorTest {
     private var calls = 0
     private var accessible = true
     private var response: suspend () -> ByteArray = { "# Synthèse".toByteArray() }
+    private var subjectCalls = 0
+    private var subjectResponse: suspend () -> String? = { null }
     private val md = object : SynthesisClient {
+        override suspend fun subject(context: SynthesisContext, vtt: ByteArray): String? { subjectCalls++; return subjectResponse() }
         override suspend fun complete(context: SynthesisContext, vtt: ByteArray): ByteArray { calls++; return response() }
         override suspend fun test(settings: SynthesisSettings, secret: String) = Unit
     }
@@ -48,6 +51,89 @@ class SynthesisCoordinatorTest {
     private fun coordinator(repo: LocalStateRepository, guard: java.util.concurrent.locks.ReentrantLock = java.util.concurrent.locks.ReentrantLock()) = TranscriptionCoordinator(repo, stt, TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
         verifyAudio = { true }, schedule = {}, synthesisClient = md, synthesisStorage = SynthesisStorage(File(tmp.root, "stage")),
         phoneStore = { folder }, synthesisCredentialAccessible = { accessible }, clock = { now }, promotionGuard = guard)
+
+    @Test fun subjectFailureDoesNotBlockMdAndRestartDoesNotRepeat() = runBlocking {
+        store.save(LocalState(transcriptionTasks = listOf(task())))
+        subjectResponse = { throw IllegalStateException("synthetic") }
+        coordinator(LocalStateRepository(store)).runBounded("id")
+        assertEquals(1, subjectCalls)
+        assertTrue(store.load().transcriptionTasks.single().subjectAttempted)
+        assertEquals(TranscriptionPhase.COMPLETED, store.load().transcriptionTasks.single().phase)
+        assertTrue(store.load().recordingSubjects.isEmpty())
+        assertEquals(1, calls)
+    }
+
+    @Test fun processRestartDoesNotRepeatSubjectAttempt() = runBlocking {
+        store.save(LocalState(transcriptionTasks = listOf(task().copy(subjectAttempted = true))))
+        coordinator(LocalStateRepository(store)).runBounded("id")
+        assertEquals(0, subjectCalls)
+        assertEquals(TranscriptionPhase.COMPLETED, store.load().transcriptionTasks.single().phase)
+    }
+
+    @Test fun subjectCancellationPreventsMdAndDoesNotRepeat() = runBlocking {
+        store.save(LocalState(transcriptionTasks = listOf(task())))
+        val entered = CompletableDeferred<Unit>()
+        subjectResponse = { entered.complete(Unit); CompletableDeferred<String?>().await() }
+        val coordinator = coordinator(LocalStateRepository(store))
+        val run = async(Dispatchers.Default) { coordinator.runBounded("id") }
+        entered.await()
+        coordinator.requestCancel("id")
+        run.await()
+        assertEquals(TranscriptionPhase.CANCELLED, store.load().transcriptionTasks.single().phase)
+        assertTrue(store.load().transcriptionTasks.single().subjectAttempted)
+        assertEquals(0, calls)
+    }
+
+    @Test fun existingSubjectSkipsMdOnlyRequest() = runBlocking {
+        store.save(LocalState(transcriptionTasks = listOf(task()), recordingSubjects = mapOf("20261111120000" to "Sujet existant")))
+        coordinator(LocalStateRepository(store)).runBounded("id")
+        assertEquals(0, subjectCalls)
+        assertEquals("Sujet existant", store.load().recordingSubjects["20261111120000"])
+    }
+
+    @Test fun redoVttPromotesBeforeSubjectAndMdAndReplacesOrClearsSubject() = runBlocking {
+        for (subject in listOf("Nouveau sujet", null)) {
+            val initial = task().copy(phase = TranscriptionPhase.PENDING, replaceVtt = true, serverAddress = "https://example.invalid/v1", encryptedKeyRef = "ref", mp3Sha256 = "hash", language = "fr", model = "model")
+            store.save(LocalState(transcriptionTasks = listOf(initial), recordingSubjects = mapOf(initial.recordingName to "Ancien sujet")))
+            val events = mutableListOf<String>()
+            val replacement = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nNouveau\n".toByteArray()
+            val transcription = object : TranscriptionClient {
+                override suspend fun submit(task: TranscriptionTask): SubmitResult = SubmitResult.DirectVtt(replacement)
+                override suspend fun get(task: TranscriptionTask): ServerTask = error("unexpected")
+                override suspend fun cancel(task: TranscriptionTask): ServerTask = error("unexpected")
+                override suspend fun test(settings: TranscriptionSettings) = Unit
+            }
+            subjectResponse = {
+                events += "subject"
+                assertArrayEquals(replacement, phone.files[initial.vttName])
+                assertNull(store.load().recordingSubjects[initial.recordingName])
+                if (subject == null) throw IllegalStateException("échec synthétique")
+                subject
+            }
+            response = {
+                events += "md"
+                assertEquals(subject, store.load().recordingSubjects[initial.recordingName])
+                "# MD".toByteArray()
+            }
+            val repo = LocalStateRepository(store)
+            val coordinator = TranscriptionCoordinator(repo, transcription, TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
+                verifyAudio = { true }, schedule = {}, saveVtt = { task, bytes, promote -> promote { events += "vtt"; phone.files[task.vttName] = bytes } },
+                synthesisClient = md, synthesisStorage = SynthesisStorage(File(tmp.root, "stage")), phoneStore = { phone }, synthesisCredentialAccessible = { true })
+            coordinator.runBounded(initial.localId)
+            coordinator.runBounded(initial.localId)
+            assertEquals(listOf("vtt", "subject", "md"), events)
+            assertEquals(subject, store.load().recordingSubjects[initial.recordingName])
+            assertEquals(TranscriptionPhase.COMPLETED, store.load().transcriptionTasks.single().phase)
+        }
+    }
+
+    @Test fun subjectIsPersistedBeforeMd() = runBlocking {
+        store.save(LocalState(transcriptionTasks = listOf(task())))
+        subjectResponse = { "Sujet synthétique" }
+        response = { assertEquals("Sujet synthétique", store.load().recordingSubjects["20261111120000"]); "# MD".toByteArray() }
+        coordinator(LocalStateRepository(store)).runBounded("id")
+        assertEquals(1, subjectCalls)
+    }
 
     @Test fun attemptBudgetSurvivesRestart() = runBlocking {
         store.save(LocalState(transcriptionTasks = listOf(task())))
@@ -109,11 +195,19 @@ class SynthesisCoordinatorTest {
         val initial = task()
         store.save(LocalState(transcriptionTasks = listOf(initial.copy(suspended = true,
             synthesis = initial.synthesis!!.copy(phase = SynthesisPhase.SUSPENDED, context = null, attempts = 1, stagedSha256 = "a".repeat(64))))))
+        val state = store.load()
+        val recording = Recording(initial.recordingName, RecordType.NOTE, 100, true,
+            mapOf(FileKind.MP3 to PhoneFile(initial.mp3Name, 100), FileKind.VTT to PhoneFile(initial.vttName, 100)), DisplayState.OnBox)
+        val presentation = RecordingPipeline.calculate(PipelineInput(recording, state, Busy(), null, true, true))
+        assertEquals(PipelineAction.RETRY_MD, presentation.button?.action)
+        assertFalse(presentation.button!!.enabled)
+        assertTrue(presentation.reason!!.text.contains("contexte"))
         val coordinator = coordinator(LocalStateRepository(store))
         coordinator.retrySynthesis("id")
         coordinator.runBounded("id")
         assertEquals(0, calls)
         assertEquals(1, store.load().transcriptionTasks.single().synthesis!!.attempts)
+        assertTrue(store.load().transcriptionTasks.single().suspended)
     }
 
     @Test fun invalidResponseSuspendsImmediately() = runBlocking {

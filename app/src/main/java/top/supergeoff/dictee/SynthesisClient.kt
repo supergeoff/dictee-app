@@ -21,6 +21,7 @@ import kotlin.coroutines.resumeWithException
 
 interface SynthesisClient {
     suspend fun complete(context: SynthesisContext, vtt: ByteArray): ByteArray
+    suspend fun subject(context: SynthesisContext, vtt: ByteArray): String? = null
     suspend fun test(settings: SynthesisSettings, secret: String)
 }
 
@@ -54,13 +55,23 @@ class UrlSynthesisClient(
         }
     }
 
+    override suspend fun subject(context: SynthesisContext, vtt: ByteArray): String? {
+        val response = execute(minOf(timeoutMs, 60_000L)) { resources ->
+            request(context.baseUrl, context.model, RecordingSubject.INSTRUCTION, RecordingSubject.input(vtt), resources, minOf(timeoutMs, 60_000L)) {
+                if (context.credentialRef.isBlank()) throw Failure(SynthesisFailureKind.CREDENTIAL)
+                try { credentials.read(context.credentialRef) } catch (_: Exception) { throw Failure(SynthesisFailureKind.CREDENTIAL) }
+            }
+        }
+        return RecordingSubject.clean(response.toString(Charsets.UTF_8))
+    }
+
     override suspend fun test(settings: SynthesisSettings, secret: String) {
         execute { resources ->
             request(settings.baseUrl, settings.model, settings.prompt, "Réponds brièvement pour confirmer la connexion.", resources) { secret }
         }
     }
 
-    private fun request(base: String, model: String, prompt: String, user: String, resources: Resources, secret: () -> String): ByteArray {
+    private fun request(base: String, model: String, prompt: String, user: String, resources: Resources, requestTimeoutMs: Long = timeoutMs, secret: () -> String): ByteArray {
         if (base == "/v1" || !isValidTranscriptionBaseUrl(base) || model.isBlank() || prompt.isBlank()) throw Failure(SynthesisFailureKind.PERMANENT)
         val key = secret()
         if (key.isBlank() || key.any { it == '\r' || it == '\n' }) throw Failure(SynthesisFailureKind.CREDENTIAL)
@@ -68,8 +79,8 @@ class UrlSynthesisClient(
         resources.connection.set(c)
         if (resources.cancelled.get()) { c.disconnect(); throw CancellationException() }
         c.instanceFollowRedirects = false
-        c.connectTimeout = minOf(30_000L, timeoutMs).toInt().coerceAtLeast(1)
-        c.readTimeout = minOf(Int.MAX_VALUE.toLong(), timeoutMs).toInt().coerceAtLeast(1)
+        c.connectTimeout = minOf(30_000L, requestTimeoutMs).toInt().coerceAtLeast(1)
+        c.readTimeout = minOf(Int.MAX_VALUE.toLong(), requestTimeoutMs).toInt().coerceAtLeast(1)
         c.requestMethod = "POST"
         c.doOutput = true
         c.setRequestProperty("Authorization", "Bearer $key")
@@ -141,8 +152,8 @@ class UrlSynthesisClient(
         }
     }
 
-    private suspend fun <T : Any> execute(block: (Resources) -> T): T {
-        val result = withTimeoutOrNull(timeoutMs) {
+    private suspend fun <T : Any> execute(deadlineMs: Long = timeoutMs, block: (Resources) -> T): T {
+        val result = withTimeoutOrNull(deadlineMs) {
             suspendCancellableCoroutine { continuation ->
                 val resources = Resources()
                 val future = AtomicReference<Future<*>?>()

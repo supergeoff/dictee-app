@@ -87,6 +87,8 @@ class TranscriptionJournalTest {
         assertTrue(phone.files.containsKey("Note-20261111120000.md"))
         assertEquals(listOf(
             "LLM Note-20261111120000 : tâche créée, 1e dans la file",
+            "LLM Note-20261111120000 : sujet demandé",
+            "LLM Note-20261111120000 : sujet indisponible",
             "LLM Note-20261111120000 : appel envoyé, tentative 1/3",
             "LLM Note-20261111120000 : réponse 200 en 0 s (9 o)",
             "LLM Note-20261111120000 : MD enregistré",

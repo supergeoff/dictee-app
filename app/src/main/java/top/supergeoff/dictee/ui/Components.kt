@@ -242,6 +242,11 @@ fun PrimaryButton(text: String, enabled: Boolean = true, modifier: Modifier = Mo
 fun SecondaryButton(text: String, enabled: Boolean = true, modifier: Modifier = Modifier, icon: Int? = null, mono: Boolean = false, onClick: () -> Unit) =
     ButtonBox(text, ButtonTone.Secondary, enabled, modifier, icon, compact = false, onClick, mono)
 
+/** Bouton de barre collective : dimensions et typographie compactes de la maquette. */
+@Composable
+internal fun ActionBarButton(text: String, primary: Boolean, enabled: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) =
+    ButtonBox(text, if (primary) ButtonTone.Primary else ButtonTone.Secondary, enabled, modifier, icon = null, compact = false, onClick, actionBar = true)
+
 /** Bouton d'une action qui supprime : texte `destructive` sur `destructive-surface`. */
 @Composable
 internal fun DangerButton(text: String, enabled: Boolean = true, modifier: Modifier = Modifier, onClick: () -> Unit) =
@@ -266,6 +271,7 @@ private fun ButtonBox(
     compact: Boolean,
     onClick: () -> Unit,
     mono: Boolean = false,
+    actionBar: Boolean = false,
 ) {
     val colors = Dictee.colors
     val (rest, pressedFill, content) = when (tone) {
@@ -289,14 +295,14 @@ private fun ButtonBox(
             .background(if (pressed) pressedFill else rest)
             .focusRing(source, Tokens.RADIUS_DP.dp)
             .clickable(interactionSource = source, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)
-            .padding(horizontal = if (compact) 14.dp else 18.dp, vertical = if (compact) 6.dp else 10.dp),
+            .padding(horizontal = if (actionBar) 4.dp else if (compact) 14.dp else 18.dp, vertical = if (actionBar) 8.dp else if (compact) 6.dp else 10.dp),
         contentAlignment = Alignment.Center,
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             if (icon != null) {
                 Icon(painter = painterResource(icon), contentDescription = null, modifier = Modifier.size(18.dp), tint = content)
             }
-            Text(text = text, style = if (mono) Dictee.type.mono else if (compact) Dictee.type.controlSm else Dictee.type.control, color = content, maxLines = 1)
+            Text(text = text, style = if (actionBar) Dictee.type.controlSm else if (mono) Dictee.type.mono else if (compact) Dictee.type.controlSm else Dictee.type.control, color = content, maxLines = 1)
         }
     }
 }
@@ -422,6 +428,7 @@ internal fun DicteeTextField(
     keyboardActions: KeyboardActions = KeyboardActions.Default,
     enabled: Boolean = true,
     visualTransformation: VisualTransformation = VisualTransformation.None,
+    placeholder: String? = null,
 ) {
     val colors = Dictee.colors
     val source = remember { MutableInteractionSource() }
@@ -437,7 +444,10 @@ internal fun DicteeTextField(
         keyboardActions = keyboardActions,
         visualTransformation = visualTransformation,
         interactionSource = source,
-        decorationBox = { field -> DicteeFieldDecoration(source, enabled, Tokens.BUTTON_HEIGHT_DP.dp, Alignment.CenterStart, field) },
+        decorationBox = { field -> DicteeFieldDecoration(source, enabled, Tokens.BUTTON_HEIGHT_DP.dp, Alignment.CenterStart) {
+            if (value.isEmpty() && placeholder != null) Text(placeholder, style = Dictee.type.body, color = colors.textSecondary)
+            field()
+        } },
     )
 }
 

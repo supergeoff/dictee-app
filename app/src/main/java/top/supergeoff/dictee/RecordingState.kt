@@ -201,7 +201,7 @@ object Recordings {
 }
 
 /** Nature d'un traitement suivi par une barre d'avancement. */
-enum class ProgressKind(val label: String) { RECOVERY("Récupération"), SEND("Envoi"), TRANSCRIPTION("Transcription") }
+enum class ProgressKind(val label: String) { RECOVERY("Récupération"), SEND("Envoi"), TRANSCRIPTION("Transcription"), SYNTHESIS("Synthèse") }
 
 /** Avancement : fichier [index] sur [total], [percent] pour cent du fichier en cours. */
 data class Progress(val kind: ProgressKind, val index: Int, val total: Int, val percent: Int) {

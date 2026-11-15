@@ -22,26 +22,23 @@ import top.supergeoff.dictee.ui.DicteeTheme
 import top.supergeoff.dictee.ui.RecordingDocuments
 import top.supergeoff.dictee.ui.MarkdownView
 import top.supergeoff.dictee.ui.RecordingMenu
-import top.supergeoff.dictee.ui.SynthesisTaskNotice
+import top.supergeoff.dictee.ui.PipelineCard
 
 class SynthesisRecordingUiTest {
     @get:Rule val compose = createComposeRule()
 
-    @Test fun tabsKeepTranscriptAndCreateMissingMdInBothThemes() {
-        var creates = 0
+    @Test fun tabsKeepTranscriptWithoutActions() {
         compose.setContent {
             DicteeTheme(true) {
-                RecordingDocuments(markdown = null, provenanceLabel = null, canCreate = true, onCreate = { creates++ }) {
+                RecordingDocuments(markdown = null, provenanceLabel = null, hasVtt = true) {
                     Text("Segment synthétique")
                 }
             }
         }
-        compose.onNodeWithText("Créer le MD").assertIsDisplayed().performClick()
-        compose.runOnIdle { assertEquals(1, creates) }
+        compose.onNodeWithText("La synthèse reste à créer").assertIsDisplayed()
+        compose.onNodeWithText("Créer le MD").assertDoesNotExist()
         compose.onNodeWithText("Transcription").performClick()
         compose.onNodeWithText("Segment synthétique").assertIsDisplayed()
-        compose.onNodeWithText("Synthèse").performClick()
-        compose.onNodeWithText("Créer le MD").assertIsDisplayed()
     }
 
     @Test fun markdownIsRenderedAsNativeSpansWithoutRawMarkers() {
@@ -65,8 +62,7 @@ class SynthesisRecordingUiTest {
         val actions = mutableListOf<String>()
         compose.setContent {
             DicteeTheme(false) {
-                RecordingMenu(canRecover = false, onRecover = {}, canCancelTranscription = true, cancellingSynthesis = true,
-                    onCancelTranscription = { actions += "annuler" }, canRedoVtt = true, canRedoMd = false,
+                RecordingMenu(canRecover = false, onRecover = {}, canRedoVtt = true, canRedoMd = false,
                     onRedoVtt = { actions += "vtt" }, onRedoMd = { actions += "md" })
             }
         }
@@ -75,39 +71,25 @@ class SynthesisRecordingUiTest {
         compose.onNodeWithText("Refaire le VTT et le MD").performClick()
         compose.runOnIdle { assertEquals(listOf("vtt"), actions) }
         compose.onNodeWithContentDescription("Plus d'actions").performClick()
-        compose.onNodeWithText("Annuler la synthèse").performClick()
-        compose.runOnIdle { assertEquals(listOf("vtt", "annuler"), actions) }
+        compose.onNodeWithText("Annuler la synthèse").assertDoesNotExist()
     }
 
-    @Test fun suspendedSynthesisOffersManualResumeWithSameTaskId() {
-        var retried: String? = null
-        val context = SynthesisContext("https://example.invalid/v1", "ref", "model", "prompt", PromptMetadata("Note", "date", "durée"), "prompt résolu", "vtt-hash")
-        val work = SynthesisWork(SynthesisPhase.SUSPENDED, "Note-20261101000000.md", true, context, 3, null, null, "Trois tentatives ont échoué.")
-        val task = TranscriptionTask("id-synthétique", "20261101000000", "Note-20261101000000.mp3", "Note-20261101000000.vtt", "content://folder", "", "", "", "", "", TranscriptionPhase.SYNTHESIZING, suspended = true, synthesis = work)
-        compose.setContent { DicteeTheme(true) { SynthesisTaskNotice(task, listOf(task)) { retried = it } } }
-        compose.onNodeWithText("Trois tentatives ont échoué.").assertIsDisplayed()
+    @Test fun pipelineOffersOneActionAndTheReason() {
+        val steps = PipelineStage.entries.map { PipelineStep(it, PipelineStatus.TODO, "À faire") }
+        var action: PipelineAction? = null
+        val presentation = PipelinePresentation(steps, PipelineReason(PipelineStage.MD, "Synthèse suspendue."),
+            PipelineButton(PipelineAction.RETRY_MD, "Relancer le MD"), "Erreur", null)
+        compose.setContent { DicteeTheme(true) { PipelineCard(presentation) { action = it } } }
+        compose.onNodeWithText("MD · Synthèse suspendue.").assertIsDisplayed()
         compose.onNodeWithText("Relancer le MD").performClick()
-        compose.runOnIdle { assertEquals("id-synthétique", retried) }
-    }
-
-    @Test fun taskNoticeShowsCallingRetryAndSavingAsDistinctStates() {
-        val work = SynthesisWork(SynthesisPhase.CALLING, "Note.md", false, null, 1, 60_000, null, null)
-        val task = TranscriptionTask("id", "20261101000000", "Note.mp3", "Note.vtt", "content://folder", "", "", "", "", "", TranscriptionPhase.SYNTHESIZING, synthesis = work)
-        val current = mutableStateOf(task)
-        compose.setContent { DicteeTheme(false) { SynthesisTaskNotice(current.value, listOf(current.value)) {} } }
-        compose.onNodeWithText("Synthèse en cours. Le MD sera enregistré dès réception.").assertIsDisplayed()
-        compose.onNodeWithText("Relance automatique prévue. La tâche est conservée.").assertDoesNotExist()
-        compose.runOnIdle { current.value = task.copy(synthesis = work.copy(phase = SynthesisPhase.READY)) }
-        compose.onNodeWithText("Relance automatique prévue. La tâche est conservée.").assertIsDisplayed()
-        compose.runOnIdle { current.value = task.copy(synthesis = work.copy(phase = SynthesisPhase.SAVE_PENDING, nextAttemptAtMillis = null)) }
-        compose.onNodeWithText("Enregistrement de la synthèse en cours.").assertIsDisplayed()
+        compose.runOnIdle { assertEquals(PipelineAction.RETRY_MD, action) }
     }
 
     @Test fun renderedMarkdownShowsModelInLightTheme() {
         compose.setContent {
             DicteeTheme(false) {
                 androidx.compose.foundation.layout.Column() {
-                RecordingDocuments(markdown = "## Résumé\n\n- Élément synthétique", provenanceLabel = "Modèle utilisé : modèle-démo", canCreate = false, onCreate = {}) {
+                RecordingDocuments(markdown = "## Résumé\n\n- Élément synthétique", provenanceLabel = "Modèle utilisé : modèle-démo") {
                     Text("Segment synthétique")
                 }
                 }

@@ -15,6 +15,21 @@ class LocalStateTest {
     @get:Rule val tmp = TemporaryFolder()
     private fun file() = File(tmp.root, "state.json")
 
+    @Test fun version5PersistsSubjectsAndAttemptMarkerAndReadsVersion4() {
+        val store = LocalStateStore(file())
+        val state = LocalState(recordingSubjects = mapOf("20261030160502" to "Sujet synthétique"),
+            transcriptionTasks = listOf(sampleTask().copy(subjectAttempted = true)))
+        store.save(state)
+        assertEquals(5, org.json.JSONObject(file().readText()).getInt("version"))
+        assertEquals(state, store.load())
+        val old = org.json.JSONObject(file().readText()).put("version", 4)
+        old.remove("recordingSubjects")
+        old.getJSONArray("transcriptionTasks").getJSONObject(0).remove("subjectAttempted")
+        file().writeText(old.toString())
+        assertTrue(store.load().recordingSubjects.isEmpty())
+        assertFalse(store.load().transcriptionTasks.single().subjectAttempted)
+    }
+
     @Test
     fun version3TasksRemainVttOnly() {
         val phases = listOf(TranscriptionPhase.PENDING, TranscriptionPhase.TRACKING, TranscriptionPhase.SAVING, TranscriptionPhase.COMPLETED)
@@ -57,7 +72,7 @@ class LocalStateTest {
             synthesisProvenance = listOf(provenance))
         val store = LocalStateStore(file())
         store.save(state)
-        assertEquals(4, org.json.JSONObject(file().readText()).getInt("version"))
+        assertEquals(5, org.json.JSONObject(file().readText()).getInt("version"))
         assertEquals(state, store.load())
         assertFalse(file().readText().contains(secret))
     }
@@ -442,7 +457,7 @@ class LocalStateTest {
         assertEquals(state, LocalStateStore(file()).load())
         assertTrue(file().readText().contains("encrypted-key-ref"))
         assertFalse(file().readText().contains("cleartext-api-key"))
-        assertTrue(file().readText().contains("\"version\": 4"))
+        assertTrue(file().readText().contains("\"version\": 5"))
     }
 
     @Test

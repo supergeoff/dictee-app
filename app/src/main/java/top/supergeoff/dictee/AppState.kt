@@ -51,6 +51,7 @@ data class UiState(
     val phoneFolderOk: Boolean = false,
     val phoneRevision: Long = 0,
     val drive: DriveListing? = null,      // null si Drive est désactivé ou illisible
+    val busy: Busy = Busy(),
     val message: String? = null,
 ) {
     /** Enregistrements du boîtier à récupérer. */
@@ -60,6 +61,14 @@ data class UiState(
     /** Enregistrements à envoyer : aucun si Drive est désactivé. */
     val toSend: List<Recording>
         get() = if (local.driveEnabled) Recordings.toSend(recordings, drive, local.errors) else emptyList()
+}
+
+internal fun recordingListPresentation(recording: Recording, ui: UiState, provenance: ProvenanceStatus = ProvenanceStatus.UNKNOWN): PipelinePresentation {
+    val settings = ui.local.synthesisSettings
+    val configured = settings.baseUrl != "/v1" && isValidSynthesisBaseUrl(settings.baseUrl) &&
+        settings.model.isNotBlank() && settings.prompt.isNotBlank() && !settings.credentialRef.isNullOrBlank()
+    return RecordingPipeline.calculate(PipelineInput(recording, ui.local, ui.busy, ui.drive,
+        ui.link == LinkStatus.CONNECTED && !ui.recovering, configured, provenance))
 }
 
 /** État à afficher avant que les écrans puissent lire l'état local. */
@@ -453,13 +462,13 @@ class AppModel(
      * Lance la transcription de [names] (null : tout ce qui est éligible). La planification WorkManager est confirmée avant
      * la tâche durable et le service ; la boucle interactive suit ensuite les tâches jusqu'à leur fin ou leur suspension.
      */
-    fun transcribe(names: Set<String>?, request: RequestedWork = RequestedWork.MISSING) {
+    fun transcribe(names: Set<String>?, request: RequestedWork = RequestedWork.MISSING, resumeRecording: Boolean = false) {
         scope.launch {
             jobs.track {
                 try {
                     if (request == RequestedWork.MISSING) announceExclusions(names)
                     logTranscriptionRequest(names, request)
-                    val started = transcriptionCoordinator.start(names, request)
+                    val started = transcriptionCoordinator.start(names, request, resumeRecording)
                     if (started.isEmpty()) reportUnconfiguredSynthesis(names, request)
                     if (started.isNotEmpty()) transcriptionLifecycle.request().join()
                 } catch (e: CancellationException) {
@@ -1080,6 +1089,7 @@ class AppModel(
             phoneFolderOk = phone.ok,
             phoneRevision = phone.revision,
             drive = listing,
+            busy = busy,
             message = live.message,
         )
     }

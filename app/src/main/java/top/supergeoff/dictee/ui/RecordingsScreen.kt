@@ -20,6 +20,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -31,6 +34,7 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -42,6 +46,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import top.supergeoff.dictee.AppModel
 import top.supergeoff.dictee.LinkStatus
+import top.supergeoff.dictee.FileKind
+import top.supergeoff.dictee.ProvenanceStatus
 import top.supergeoff.dictee.R
 import top.supergeoff.dictee.RecordName
 import top.supergeoff.dictee.RecordType
@@ -50,7 +56,12 @@ import top.supergeoff.dictee.Recordings
 import top.supergeoff.dictee.UiState
 import top.supergeoff.dictee.isTerminal
 import top.supergeoff.dictee.transcriptionNotificationLabel
+import top.supergeoff.dictee.recordingListPresentation
+import top.supergeoff.dictee.PipelinePresentation
+import top.supergeoff.dictee.PipelineStatus
 import java.time.LocalDate
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Filtres de la liste, chacun avec son compteur. « Sur le boîtier » garde ce qui n'est pas encore récupéré.
@@ -132,6 +143,8 @@ fun RecordingsScreen(ui: UiState, model: AppModel, onOpen: (name: String) -> Uni
                 shown.isEmpty() -> EmptyList(NO_MATCH_TEXT)
                 else -> RecordingList(
                     recordings = shown,
+                    ui = ui,
+                    model = model,
                     checked = checked,
                     onClick = { name -> if (checked != null) selection.toggle(name) else onOpen(name) },
                     onLongClick = { name -> if (checked == null) selection.start(name) },
@@ -205,6 +218,8 @@ private fun Filters(recordings: List<Recording>, selected: Filter, onSelect: (Fi
 @Composable
 private fun RecordingList(
     recordings: List<Recording>,
+    ui: UiState,
+    model: AppModel,
     checked: Set<String>?,
     onClick: (name: String) -> Unit,
     onLongClick: (name: String) -> Unit,
@@ -216,7 +231,7 @@ private fun RecordingList(
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         // Le libellé du jour n'a pas d'année : la clé est le premier enregistrement du groupe, unique par construction.
-        items(groups, key = { it.second.first().name }) { (day, group) -> DayGroup(day, group, checked, onClick, onLongClick) }
+        items(groups, key = { it.second.first().name }) { (day, group) -> DayGroup(day, group, ui, model, checked, onClick, onLongClick) }
     }
 }
 
@@ -225,6 +240,8 @@ private fun RecordingList(
 private fun DayGroup(
     day: String,
     recordings: List<Recording>,
+    ui: UiState,
+    model: AppModel,
     checked: Set<String>?,
     onClick: (name: String) -> Unit,
     onLongClick: (name: String) -> Unit,
@@ -235,8 +252,16 @@ private fun DayGroup(
         Column(modifier = Modifier.fillMaxWidth().card()) {
             recordings.forEachIndexed { index, recording ->
                 if (index > 0) HorizontalDivider(color = colors.border)
+                val md = recording.phoneFiles[FileKind.MD]
+                val vtt = recording.phoneFiles[FileKind.VTT]
+                val provenance by produceState(ProvenanceStatus.UNKNOWN, md, vtt, ui.local.synthesisProvenance, ui.local.transcriptionTasks, ui.refreshing, ui.phoneRevision) {
+                    value = ProvenanceStatus.UNKNOWN
+                    if (md != null) value = withContext(Dispatchers.IO) { model.readSynthesis(md.fileName, vtt?.fileName).getOrNull()?.status } ?: ProvenanceStatus.UNKNOWN
+                }
                 RecordingRow(
                     recording = recording,
+                    presentation = recordingListPresentation(recording, ui, provenance),
+                    subject = ui.local.recordingSubjects[recording.name],
                     checked = checked?.let { recording.name in it },
                     onClick = { onClick(recording.name) },
                     onLongClick = { onLongClick(recording.name) },
@@ -248,7 +273,7 @@ private fun DayGroup(
 
 /** Ligne d'enregistrement. [checked] est `null` hors sélection : le pictogramme du type laisse alors la place à la case. */
 @Composable
-private fun RecordingRow(recording: Recording, checked: Boolean?, onClick: () -> Unit, onLongClick: () -> Unit) {
+private fun RecordingRow(recording: Recording, presentation: PipelinePresentation, subject: String?, checked: Boolean?, onClick: () -> Unit, onLongClick: () -> Unit) {
     val colors = Dictee.colors
     Row(
         modifier = Modifier
@@ -266,15 +291,31 @@ private fun RecordingRow(recording: Recording, checked: Boolean?, onClick: () ->
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = RecordName.rowTitle(recording.type, recording.name),
+                text = subject ?: RecordName.rowTitle(recording.type, recording.name),
                 style = Dictee.type.rowTitle,
                 color = colors.text,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(text = details(recording), style = Dictee.type.caption, color = colors.textSecondary, maxLines = 1)
+            val rank = presentation.queueRank?.takeIf { presentation.badge == "En attente" }
+            val date = if (subject == null) "" else "${RecordName.detailTitle(recording.type, recording.name)} · "
+            Text(text = date + details(recording) + (rank?.let { " · ${it}e dans la file" } ?: ""), style = Dictee.type.caption, color = colors.textSecondary, maxLines = 1)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(presentation.badge, style = Dictee.type.captionStrong,
+                    color = when (presentation.badge) { "Erreur" -> colors.destructive; "Sur Drive" -> colors.success; else -> colors.textSecondary })
+                presentation.steps.forEach { step ->
+                    val color = when (step.status) {
+                        PipelineStatus.DONE -> colors.success
+                        PipelineStatus.RUNNING -> colors.primary
+                        PipelineStatus.ERROR -> colors.destructive
+                        PipelineStatus.WAITING -> colors.warning
+                        PipelineStatus.TODO -> colors.border
+                    }
+                    Box(Modifier.size(8.dp).background(color, CircleShape)
+                        .semantics { contentDescription = "${step.stage.title()} : ${step.label}" })
+                }
+            }
         }
-        StateBadge(recording.state)
     }
 }
 
@@ -318,39 +359,35 @@ private fun ActionBar(ui: UiState, model: AppModel, checked: Set<String>?, onDon
     val transcribe = Recordings.toTranscribe(ui.recordings, checked, ui.local.errors, active).candidates.map { it.name }
     val recoverCount = recoverNames?.size ?: ui.toRecover.size
     val sendCount = sendNames?.size ?: ui.toSend.size
+    ActionBarButtons(
+        recoverText = if (ui.recovering) "Récupération…" else "Récupérer ($recoverCount)",
+        recoverEnabled = ui.link == LinkStatus.CONNECTED && !ui.recovering && recoverCount > 0,
+        transcribeCount = transcribe.size,
+        sendText = if (ui.sending) "Envoi…" else "Envoyer ($sendCount)",
+        sendEnabled = !ui.sending && sendCount > 0,
+        driveEnabled = ui.local.driveEnabled,
+        onRecover = { model.recover(recoverNames); onDone() },
+        onTranscribe = { model.transcribe(checked); onDone() },
+        onSend = { model.send(sendNames); onDone() },
+    )
+}
+
+@Composable
+internal fun ActionBarButtons(
+    recoverText: String, recoverEnabled: Boolean, transcribeCount: Int,
+    sendText: String, sendEnabled: Boolean, driveEnabled: Boolean,
+    onRecover: () -> Unit, onTranscribe: () -> Unit, onSend: () -> Unit,
+) {
     Column(modifier = Modifier.fillMaxWidth().background(Dictee.colors.surface).navigationBarsPadding()) {
         HorizontalDivider(color = Dictee.colors.border)
         Row(
             modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (ui.local.driveEnabled) {
-                SecondaryButton(
-                    text = if (ui.sending) "Envoi…" else "Envoyer ($sendCount)",
-                    enabled = !ui.sending && sendCount > 0,
-                    modifier = Modifier.weight(1f),
-                    icon = R.drawable.ic_upload,
-                ) {
-                    model.send(sendNames)
-                    onDone()
-                }
-            }
-            SecondaryButton(
-                text = "VTT + MD (${transcribe.size})",
-                enabled = true,
-                modifier = Modifier.weight(1f),
-            ) {
-                model.transcribe(checked)
-                onDone()
-            }
-            PrimaryButton(
-                text = if (ui.recovering) "Récupération…" else "Récupérer ($recoverCount)",
-                enabled = ui.link == LinkStatus.CONNECTED && !ui.recovering && recoverCount > 0,
-                modifier = Modifier.weight(1f),
-                icon = R.drawable.ic_download,
-            ) {
-                model.recover(recoverNames)
-                onDone()
+            ActionBarButton(recoverText, primary = true, enabled = recoverEnabled, modifier = Modifier.weight(1f), onClick = onRecover)
+            ActionBarButton("VTT + MD ($transcribeCount)", primary = false, enabled = transcribeCount > 0, modifier = Modifier.weight(1f), onClick = onTranscribe)
+            if (driveEnabled) {
+                ActionBarButton(sendText, primary = false, enabled = sendEnabled, modifier = Modifier.weight(1f), onClick = onSend)
             }
         }
     }

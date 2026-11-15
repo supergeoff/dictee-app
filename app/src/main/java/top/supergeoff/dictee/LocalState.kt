@@ -33,7 +33,7 @@ data class KnownFolder(val id: String, val name: String, val origin: FolderOrigi
 /** Étape de traitement d'un enregistrement, dont l'erreur est gardée jusqu'à une réussite. */
 enum class Step { RECOVER, SEND, TRANSCRIBE }
 
-/** État local tenu dans `state.json`, version 4. */
+/** État local tenu dans `state.json`, version 5. */
 data class LocalState(
     val deviceAddress: String? = null,
     val deviceName: String? = null,
@@ -51,6 +51,7 @@ data class LocalState(
     val transcriptionAddressNeedsReview: Boolean = false,
     val synthesisSettings: SynthesisSettings = SynthesisSettings(),
     val synthesisProvenance: List<SynthesisProvenance> = emptyList(),
+    val recordingSubjects: Map<String, String> = emptyMap(),
 ) {
     /** Ajoute l'erreur de cette étape, ou remplace celle qu'elle avait déjà pour ce nom. */
     fun withError(name: String, step: Step, message: String): LocalState =
@@ -165,6 +166,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
                         .put("model", provenance.model).put("vttSha256", provenance.vttSha256).put("mdSha256", provenance.mdSha256))
                 }
             })
+            .put("recordingSubjects", JSONObject().apply { state.recordingSubjects.forEach { (name, subject) -> put(name, subject) } })
             .put("transcriptionTasks", JSONArray().apply {
                 state.transcriptionTasks.forEach { task ->
                     put(JSONObject()
@@ -187,6 +189,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
                         .put("replaceVtt", task.replaceVtt)
                         .put("submitAttempts", task.submitAttempts)
                         .put("nextAttemptAtMillis", task.nextAttemptAtMillis ?: JSONObject.NULL)
+                        .put("subjectAttempted", task.subjectAttempted)
                         .put("synthesis", task.synthesis?.let { writeSynthesis(it) } ?: JSONObject.NULL))
                 }
             })
@@ -215,6 +218,9 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
             transcriptionAddressNeedsReview = invalidAddress || json.booleanOr("transcriptionAddressNeedsReview", false),
             synthesisSettings = if (isValidSynthesisBaseUrl(synthesisSettings.baseUrl)) synthesisSettings else synthesisSettings.copy(baseUrl = "/v1"),
             synthesisProvenance = if (version >= 4) json.arrayOrNull("synthesisProvenance")?.let { readSynthesisProvenance(it) }.orEmpty() else emptyList(),
+            recordingSubjects = if (version >= 5) json.objectOrNull("recordingSubjects")?.let { subjects ->
+                subjects.keys().asSequence().mapNotNull { name -> subjects.stringOrNull(name)?.let { name to it } }.toMap()
+            }.orEmpty() else emptyMap(),
         )
     }
 
@@ -271,6 +277,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
             replaceVtt = if (version >= 4) o.booleanOr("replaceVtt", true) else true,
             submitAttempts = o.intOr("submitAttempts", 0),
             nextAttemptAtMillis = if (o.isNull("nextAttemptAtMillis")) null else o.getLong("nextAttemptAtMillis"),
+            subjectAttempted = version >= 5 && o.booleanOr("subjectAttempted", false),
         )
         val addressSafeTask = when {
             // Corrige les suspensions terminales enregistrées par la migration précédente.
@@ -347,7 +354,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
     }
 
     private companion object {
-        const val VERSION = 4
+        const val VERSION = 5
     }
 }
 
