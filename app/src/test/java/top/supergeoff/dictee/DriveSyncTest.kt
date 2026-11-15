@@ -67,4 +67,20 @@ class DriveSyncTest {
         val remote = listOf(DriveFile("legacy", "20261030160502.mp3", 3))
         assertEquals(DriveWriteAction.SKIP, action(fileName = name, kind = FileKind.MP3, remote = remote))
     }
+
+    @Test fun `current MP3 name without receipt is never replaced`() {
+        val name = "Call-20261030160502.mp3"
+        val remote = listOf(DriveFile("current", name, 3))
+        assertEquals(DriveWriteAction.SKIP, action(fileName = name, kind = FileKind.MP3, remote = remote))
+    }
+
+    @Test fun `current MP3 with different hash is never replaced`() {
+        val name = "Call-20261030160502.mp3"
+        val remote = listOf(DriveFile("current", name, 3))
+        val receipt = DriveReceipt(destination, name, "current", "old-hash")
+        assertEquals(
+            DriveWriteAction.SKIP,
+            action(fileName = name, kind = FileKind.MP3, sha256 = "new-hash", remote = remote, receipts = listOf(receipt)),
+        )
+    }
 }

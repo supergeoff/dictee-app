@@ -34,7 +34,7 @@ object DriveSync {
         val matching = remote.filter { it.name == fileName || (legacyName != null && it.name == legacyName) }
         if (matching.size > 1) return DriveWriteAction.CONFLICT
         val current = matching.singleOrNull() ?: return DriveWriteAction.CREATE
-        if (legacyName != null && current.name == legacyName) return DriveWriteAction.SKIP
+        if (kind == FileKind.MP3) return DriveWriteAction.SKIP
 
         val receiptIsCurrent = sha256 != null && receipts.any { receipt ->
             receipt.destination == destination &&
