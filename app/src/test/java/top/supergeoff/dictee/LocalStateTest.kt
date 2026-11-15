@@ -73,6 +73,46 @@ class LocalStateTest {
     }
 
     @Test
+    fun `version_7_requires_drive_choice_and_receipts_without_changing_file_on_failure`() {
+        val store = LocalStateStore(file())
+        val validState = LocalState(driveSendChoice = DriveSendChoice.DOCUMENTS_ONLY)
+        val invalidFields = listOf(
+            "driveSendChoice" to null,
+            "driveSendChoice" to org.json.JSONObject.NULL,
+            "driveSendChoice" to 42,
+            "driveSendChoice" to "UNKNOWN",
+            "driveReceipts" to null,
+            "driveReceipts" to org.json.JSONObject.NULL,
+            "driveReceipts" to "not-an-array",
+        )
+
+        for ((field, invalidValue) in invalidFields) {
+            store.save(validState)
+            val json = org.json.JSONObject(file().readText())
+            if (invalidValue == null) json.remove(field) else json.put(field, invalidValue)
+            file().writeText(json.toString())
+            val before = file().readText()
+
+            try {
+                store.load()
+                org.junit.Assert.fail("Le champ v7 $field invalide doit empêcher le chargement")
+            } catch (_: org.json.JSONException) { }
+            assertEquals("Le fichier v7 doit rester intact pour $field=$invalidValue", before, file().readText())
+        }
+    }
+
+    @Test
+    fun `versions_1_to_6_keep_drive_defaults`() {
+        val store = LocalStateStore(file())
+        for (version in 1..6) {
+            file().writeText(org.json.JSONObject().put("version", version).toString())
+            val loaded = store.load()
+            assertEquals("version $version", DriveSendChoice.ALL_FILES, loaded.driveSendChoice)
+            assertTrue("version $version", loaded.driveReceipts.isEmpty())
+        }
+    }
+
+    @Test
     fun `receipt_replaces_only_same_destination_and_name`() {
         val destination = DriveDestination("account-1", "folder-1")
         val old = DriveReceipt(destination, "Note.vtt", "old-id", "a".repeat(64))

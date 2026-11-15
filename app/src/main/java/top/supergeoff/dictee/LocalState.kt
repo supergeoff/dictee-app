@@ -285,19 +285,20 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
                         request.getString("folderUri"), phase, request.stringOrNull("reason"))
                 }
             }.orEmpty() else emptyList(),
-            driveSendChoice = if (version >= 7 && json.has("driveSendChoice")) {
+            driveSendChoice = if (version >= 7) {
                 val choiceName = json.getString("driveSendChoice")
                 DriveSendChoice.entries.firstOrNull { it.name == choiceName }
                     ?: throw JSONException("Choix d'envoi Drive inconnu : $choiceName")
             } else DriveSendChoice.ALL_FILES,
-            driveReceipts = if (version >= 7) json.arrayOrNull("driveReceipts")?.let { receipts ->
+            driveReceipts = if (version >= 7) {
+                val receipts = json.getJSONArray("driveReceipts")
                 List(receipts.length()) { i ->
                     val receipt = receipts.getJSONObject(i)
                     val destination = receipt.getJSONObject("destination")
                     DriveReceipt(DriveDestination(destination.getString("account"), destination.getString("folderId")),
                         receipt.getString("fileName"), receipt.getString("driveFileId"), receipt.getString("sha256"))
                 }
-            }.orEmpty() else emptyList(),
+            } else emptyList(),
         )
     }
 
