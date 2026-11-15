@@ -153,9 +153,19 @@ Vérification finale du contrôleur : testDebugUnitTest rejoué avec --rerun-tas
 
 Les ajustements issus des revues sont intégrés : préparation automatique avec dossier capturé et résultat explicite, validation durable sous garde par transfert, suppression du verrou global de soumission qui bloquait la progression pendant le lot, destinations de réglages adaptées et notifications identifiées jusqu'à l'année et la seconde. Les régressions correspondantes sont couvertes.
 
-La recette sur téléphone reste à réaliser, dont notifications système, arrêt/reprise et absence d'envoi Drive. Le chemin automatique n'appelle pas Drive à la lecture du code, mais aucun espion Drive n'est raccordé à AppModel dans le test JVM. Ces limites ne sont pas des validations réussies. Aucun APK release signé n'a été construit ou publié. Aucun push ni fusion n'a eu lieu. La carte DIC-20 garde la recette et la livraison comme suite.
+Au terme de cette première vérification, la recette sur téléphone restait à réaliser, dont notifications système, arrêt/reprise et absence d'envoi Drive. Le chemin automatique n'appelle pas Drive à la lecture du code, mais aucun espion Drive n'est raccordé à AppModel dans le test JVM. Ces limites n'étaient pas des validations réussies. Aucun APK release signé n'avait alors été construit ou publié, et aucun push ni fusion n'avait eu lieu.
 
 ## Correctif du suivi interactif
 
-Le diagnostic ultérieur a montré que la programmation automatique démarrait le service sans demander la boucle de suivi ; le worker périodique pouvait ainsi laisser attendre un résultat déjà prêt. Le correctif raccorde la création automatique et la reprise au premier plan à la boucle unique existante, avec comptabilisation du service. Les tests JVM couvrent la création après récupération et la reprise d'une tâche serveur sans nouvel envoi, les demandes simultanées et l'équilibre des travaux. La recette sur téléphone reste nécessaire.
+Le diagnostic ultérieur a montré que la programmation automatique démarrait le service sans demander la boucle de suivi ; le worker périodique pouvait ainsi laisser attendre un résultat déjà prêt. Le correctif 865d469 raccorde la création automatique et la reprise au premier plan à la boucle unique existante, avec comptabilisation du service. Les tests JVM couvrent la création après récupération et la reprise d'une tâche serveur sans nouvel envoi, les demandes simultanées et l'équilibre des travaux. La vérification donne 466 tests sans échec ni erreur, assembleDebug et lint réussis (dix avertissements), puis une revue indépendante approuvée.
+
+## Recette du parcours nominal corrigé, le 15 novembre 2026
+
+Un APK release signé contenant 865d469 a été construit avec `scripts/release.sh --dry-run`, puis installé avec accord explicite par-dessus la version existante, sans désinstallation ni effacement. La signature est identique à celle de l'installation précédente. Aucun tag ni release n'a été publié.
+
+L'option automatique, restée désactivée, a été activée avant la récupération de deux nouveaux extraits synthétiques de quatre et cinq secondes. Un seul appui sur « Récupérer » a déclenché leur traitement : les deux jeux MP3/VTT/MD étaient présents en moins de 35 secondes. Les VTT commencent par WEBVTT et contiennent des timecodes ; les deux Markdown sont non vides. L'interface indique VTT et MD faits pour chacun et Drive à faire. Deux notifications de résultat distinctes sont enregistrées par Android.
+
+Les empreintes SHA-256 des 23 fichiers présents avant ce second lot sont inchangées après le traitement. Les anciens MP3 restent sans nouveau VTT/MD ; le compteur manuel VTT + MD reste à quatre, ce qui confirme l'absence de rétroactivité sur cette recette. Les deux premières tâches, annulées par l'utilisateur avant installation du correctif, n'ont pas été relancées.
+
+Le parcours nominal corrigé est validé sur appareil. La réception des notifications est observée dans le service système, mais leur ouverture n'a pas été validée par interaction. L'arrêt/reprise en cours de traitement avec le correctif, la désactivation en cours de lot et l'erreur isolée restent à vérifier sur téléphone ; leurs tests JVM ne remplacent pas cette recette. Aucun push ni fusion n'a été effectué à ce stade.
 
