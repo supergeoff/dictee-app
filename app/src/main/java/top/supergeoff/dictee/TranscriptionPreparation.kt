@@ -1,5 +1,12 @@
 package top.supergeoff.dictee
 
+sealed interface AutomaticPreparation {
+    data class Prepared(val task: TranscriptionTask) : AutomaticPreparation
+    data object Complete : AutomaticPreparation
+    data object MdUnconfigured : AutomaticPreparation
+    data class Excluded(val reason: TranscriptionExclusion) : AutomaticPreparation
+}
+
 /** Fige le contexte de chaque enregistrement avant sa programmation durable. */
 internal object TranscriptionPreparation {
     /** Valide uniquement les réglages nécessaires au plan ; l'orchestration MD reste distincte. */
@@ -17,6 +24,29 @@ internal object TranscriptionPreparation {
         synthesisSettings: SynthesisSettings, request: RequestedWork, activeNames: Set<String> = emptySet(), newId: (String) -> String,
     ): List<TranscriptionTask> {
         val recordings = Recordings.merge(emptyList(), phone.list(), null, errors, Busy())
+        return prepareRecordings(phone, folderUri, settings, errors, selectedNames, synthesisSettings, request, activeNames, newId, recordings)
+    }
+
+    fun prepareAutomatic(
+        phone: PhoneStore, folderUri: String, settings: TranscriptionSettings,
+        errors: Map<String, Map<Step, String>>, name: String, synthesisSettings: SynthesisSettings,
+        newId: (String) -> String,
+    ): AutomaticPreparation {
+        val recordings = Recordings.merge(emptyList(), phone.list(), null, errors, Busy())
+        val (plans, excluded) = SynthesisSelection.plan(recordings, setOf(name), errors, emptySet(), RequestedWork.MISSING)
+        excluded[name]?.let { return AutomaticPreparation.Excluded(it) }
+        if (plans.isEmpty()) return AutomaticPreparation.Complete
+        val tasks = prepareRecordings(phone, folderUri, settings, errors, setOf(name), synthesisSettings,
+            RequestedWork.MISSING, emptySet(), newId, recordings)
+        return tasks.singleOrNull()?.let { AutomaticPreparation.Prepared(it) } ?: AutomaticPreparation.MdUnconfigured
+    }
+
+    private fun prepareRecordings(
+        phone: PhoneStore, folderUri: String, settings: TranscriptionSettings,
+        errors: Map<String, Map<Step, String>>, selectedNames: Set<String>?,
+        synthesisSettings: SynthesisSettings, request: RequestedWork, activeNames: Set<String>, newId: (String) -> String,
+        recordings: List<Recording>,
+    ): List<TranscriptionTask> {
         val (plans, _) = SynthesisSelection.plan(recordings, selectedNames, errors, activeNames, request)
         // Sans réglages de synthèse, une demande de MD seule ne crée aucune tâche : le message vient d'AppModel.
         return plans.mapNotNull { plan ->

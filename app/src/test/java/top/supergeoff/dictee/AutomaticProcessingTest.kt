@@ -96,11 +96,11 @@ class AutomaticProcessingTest {
     private fun coordinator(repo: LocalStateRepository, phone: MemoryStore, schedule: suspend (String) -> Unit = {},
         beforePrepare: suspend () -> Unit = {}) = TranscriptionCoordinator(repo, client, TranscriptionSettingsManager(repo, credentials),
         RecoverySafety(repo), verifyAudio = { true }, schedule = schedule,
-        prepareAutomatic = { names, work, active, folder ->
+        prepareAutomatic = { name, folder ->
             beforePrepare()
             val state = repo.awaitInitialized()
-            TranscriptionPreparation.prepare(phone, folder, state.transcriptionSettings, state.errors, names,
-                state.synthesisSettings, work, active) { "generated" }
+            TranscriptionPreparation.prepareAutomatic(phone, folder, state.transcriptionSettings, state.errors, name,
+                state.synthesisSettings) { "generated" }
         })
     private fun phone(vararg extensions: String) = MemoryStore().apply {
         extensions.forEach { files["Note-$name.$it"] = if (it == "vtt") "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nBonjour\n".toByteArray() else "synthetic".toByteArray() }
@@ -191,14 +191,59 @@ class AutomaticProcessingTest {
         val repo = LocalStateRepository(store)
         var usedFolder: String? = null
         val transcription = TranscriptionCoordinator(repo, client, TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
-            verifyAudio = { true }, schedule = {}, prepareAutomatic = { _, _, _, folder ->
+            verifyAudio = { true }, schedule = {}, prepareAutomatic = { _, folder ->
                 repo.updateDurably { it.copy(phoneTreeUri = folderB) }
                 usedFolder = folder
-                emptyList()
+                AutomaticPreparation.Complete
             })
         AutomaticProcessingCoordinator(repo, transcription).reconcile()
         assertEquals(folderA, usedFolder)
         assertEquals("Le dossier du téléphone a changé.", store.load().automaticProcessingRequests.single().reason)
         assertTrue(store.load().transcriptionTasks.isEmpty())
     }
+    @Test fun manualDuplicateBecomingTerminalBeforeCommitRetriesPreparation() = runBlocking {
+        val p = phone("mp3")
+        val manual = TranscriptionPreparation.prepare(p, folderA, configured, emptyMap(), setOf(name), SynthesisSettings(), RequestedWork.MISSING) { "manual" }.single()
+        val store = store(state(request()).copy(transcriptionTasks = listOf(manual)))
+        val repo = LocalStateRepository(store)
+        val locked = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val transcription = coordinator(repo, p, schedule = { locked.complete(Unit); release.await() })
+        val reconcile = launch { transcription.reconcile() }
+        locked.await()
+        val automatic = async(start = CoroutineStart.UNDISPATCHED) { transcription.startAutomatic("request") }
+        repo.updateDurably { it.copy(transcriptionTasks = listOf(manual.copy(phase = TranscriptionPhase.CANCELLED))) }
+        release.complete(Unit)
+        reconcile.join()
+        automatic.await()
+        assertEquals(listOf("manual", "request"), store.load().transcriptionTasks.map { it.localId })
+        assertTrue(store.load().automaticProcessingRequests.isEmpty())
+    }
+
+    @Test fun missingMp3AndRecoveryFailureRetainRequestAndReasonUntilRetry() = runBlocking {
+        for (recoveryFailure in listOf(false, true)) {
+            val p = if (recoveryFailure) phone("mp3") else phone()
+            val original = request().copy(phase = AutomaticProcessingPhase.WAITING_SETTINGS, reason = "raison conservée")
+            val errors = if (recoveryFailure) mapOf(name to mapOf(Step.RECOVER to "interruption")) else emptyMap()
+            val store = store(state(original).copy(errors = errors))
+            val repo = LocalStateRepository(store)
+            val automatic = AutomaticProcessingCoordinator(repo, coordinator(repo, p))
+            automatic.reconcile()
+            assertEquals(original, store.load().automaticProcessingRequests.single())
+            assertTrue(store.load().transcriptionTasks.isEmpty())
+            p.files["Note-$name.mp3"] = "synthetic".toByteArray()
+            repo.updateDurably { it.copy(errors = emptyMap()) }
+            automatic.reconcile()
+            assertEquals(listOf("request"), store.load().transcriptionTasks.map { it.localId })
+        }
+    }
+
+    @Test fun vttOnlyWithoutSynthesisConfigurationConsumesWithoutTask() = runBlocking {
+        val store = store(state(request()))
+        val repo = LocalStateRepository(store)
+        AutomaticProcessingCoordinator(repo, coordinator(repo, phone("mp3", "vtt"))).reconcile()
+        assertTrue(store.load().automaticProcessingRequests.isEmpty())
+        assertTrue(store.load().transcriptionTasks.isEmpty())
+    }
+
 }
