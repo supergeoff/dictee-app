@@ -207,6 +207,10 @@ class AppModel(
             launch = { startWork() })
     }
 
+    private val automaticProcessingCoordinator by lazy {
+        AutomaticProcessingCoordinator(localRepository, transcriptionCoordinator, journal)
+    }
+
     private val scope = CoroutineScope(
         SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, e -> journal.error(Source.APP, reasonOf(e)) },
     )
@@ -232,6 +236,10 @@ class AppModel(
     private val notificationAsked = AtomicBoolean(false)
     private val accountFailureNoted = AtomicBoolean(false)
     internal val jobs = ActiveWork()
+
+    init {
+        scope.launch { reconcileProcessing() }
+    }
 
     private val foregroundBoxGate = ForegroundBoxGate()
     @Volatile private var searching = false   // la feuille de recherche du boîtier est ouverte : le modèle ne rouvre pas la liaison
@@ -278,8 +286,21 @@ class AppModel(
 
     fun onForeground() {
         foregroundBoxGate.onForeground()
-        scope.launch { transcriptionCoordinator.reconcile() }
+        scope.launch { reconcileProcessing() }
         scope.launch { refreshWhenForeground(refreshCoordinator, { foregroundBoxGate.isForeground }, ::readForRefresh) }
+    }
+
+    private suspend fun reconcileProcessing() {
+        try { transcriptionCoordinator.reconcile() }
+        catch (e: CancellationException) { throw e }
+        catch (e: Exception) { journal.error(Source.APP, "Reprise des traitements impossible : ${reasonOf(e)}") }
+        reconcileAutomaticProcessing()
+    }
+
+    private suspend fun reconcileAutomaticProcessing() {
+        try { automaticProcessingCoordinator.reconcile() }
+        catch (e: CancellationException) { throw e }
+        catch (e: Exception) { journal.error(Source.APP, "Programmation automatique impossible : ${reasonOf(e)}") }
     }
 
     fun onBackground() {
@@ -388,7 +409,7 @@ class AppModel(
         jobs.begin()
         try {
             startWork()
-            recoverySafety.withTransferLock { runRecovery(address, uri, entries) }
+            runRecovery(address, uri, entries)
         } finally {
             jobs.end()
             liveFlow.update { it.copy(recovering = false, recovery = null, recoveryName = null) }
@@ -414,7 +435,10 @@ class AppModel(
                 box.withSession(address) { session ->
                     connected = true
                     RecoveryJob(session, PhoneFolder(app, uri), File(app.cacheDir, "recovery"), journal)
-                        .run(entries, ::publishRecovery, ::applyRecovery) { entry -> recoverySafety.begin(entry.name) }
+                        .run(entries, ::publishRecovery, ::applyRecovery,
+                            beforeRecovery = { entry -> recoverySafety.begin(entry.name, uri.toString()) },
+                            validateResult = { result -> recoverySafety.finish(result, uri.toString()) },
+                            withRecoveryLock = { block -> recoverySafety.withTransferLock(block) })
                 }
             }
         }
@@ -424,7 +448,7 @@ class AppModel(
                 val message = reasonOf(e)
                 say(message)
                 journal.error(Source.FS, message)
-            } else if (connected) markRecoveryFailed(e) else say(OUT_OF_RANGE)
+            } else if (connected) markRecoveryFailed(e, uri.toString()) else say(OUT_OF_RANGE)
         }
         readPhone()
         if (!foregroundBoxGate.isForeground) box.close()
@@ -438,13 +462,15 @@ class AppModel(
     }
 
     private suspend fun applyRecovery(result: RecoveryResult) {
-        recoverySafety.finish(result)
         readPhone()
+        reconcileAutomaticProcessing()
     }
 
-    private suspend fun markRecoveryFailed(e: Throwable) {
+    private suspend fun markRecoveryFailed(e: Throwable, folderUri: String) {
         liveFlow.value.recoveryName?.let { name ->
-            recoverySafety.finish(RecoveryResult.Failed(name, reasonOf(e), true))
+            recoverySafety.withTransferLock {
+                recoverySafety.finish(RecoveryResult.Failed(name, reasonOf(e), true), folderUri)
+            }
         }
     }
 

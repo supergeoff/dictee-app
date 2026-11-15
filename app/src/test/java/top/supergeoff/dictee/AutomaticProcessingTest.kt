@@ -109,6 +109,66 @@ class AutomaticProcessingTest {
     private fun state(vararg requests: AutomaticProcessingRequest) = LocalState(phoneTreeUri = folderA,
         transcriptionSettings = configured, automaticProcessingRequests = requests.toList())
 
+    @Test fun restartReconcilesReadyButNotInterruptedRecovery() = runBlocking {
+        for (success in listOf(false, true)) {
+            val disk = store(state().copy(autoProcessAfterRecovery = true))
+            val initial = LocalStateRepository(disk)
+            val safety = RecoverySafety(initial)
+            safety.begin(name, folderA)
+            if (success) safety.finish(RecoveryResult.Ok(name, "Note-$name.mp3", 10), folderA)
+            val restarted = LocalStateRepository(disk)
+            val scheduled = mutableListOf<String>()
+            AutomaticProcessingCoordinator(restarted, coordinator(restarted, phone("mp3"), { scheduled += it })).reconcile()
+            assertEquals(if (success) 1 else 0, scheduled.size)
+            assertEquals(if (success) 1 else 0, disk.load().transcriptionTasks.size)
+        }
+    }
+
+    @Test fun recoverySchedulesFirstBeforeSecondCompletesWithoutDeadlock() = runBlocking {
+        val second = "20261111130000"
+        val bytes = javaClass.getResource("/stream.bin")!!.readBytes()
+        fun u32(v: Long) = byteArrayOf((v ushr 24).toByte(), (v ushr 16).toByte(), (v ushr 8).toByte(), v.toByte())
+        val link = FakeLink { cmd, _ -> if (cmd == Cmd.FILE) {
+            reply(Cmd.FILE, byteArrayOf(0) + u32(bytes.size.toLong())); audio(bytes); reply(Cmd.FILE, byteArrayOf(2))
+        } }
+        val phone = MemoryStore()
+        val disk = store(state().copy(autoProcessAfterRecovery = true))
+        val repo = LocalStateRepository(disk)
+        val safety = RecoverySafety(repo)
+        val scheduled = mutableListOf<String>()
+        val transcription = TranscriptionCoordinator(repo, client, TranscriptionSettingsManager(repo, credentials), safety,
+            verifyAudio = { true }, schedule = { scheduled += it }, prepareAutomatic = { n, folder ->
+                val current = repo.awaitInitialized()
+                TranscriptionPreparation.prepareAutomatic(phone, folder, current.transcriptionSettings, current.errors, n,
+                    current.synthesisSettings) { "generated" }
+            })
+        val automatic = AutomaticProcessingCoordinator(repo, transcription)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val labels = mutableListOf<String>()
+        val job = async(Dispatchers.Default) {
+            RecoveryJob(V05Session(link, {}), phone, tmp.newFolder(), ListLog()).run(
+                listOf(ListItem.Entry(second, bytes.size.toLong(), 0), ListItem.Entry(name, bytes.size.toLong(), 0)),
+                { _, progress -> labels += progress.label() }, { automatic.reconcile() },
+                beforeRecovery = { entry ->
+                    safety.begin(entry.name, folderA)
+                    if (entry.name == second) { entered.complete(Unit); release.await() }
+                }, validateResult = { safety.finish(it, folderA) },
+                withRecoveryLock = { block -> safety.withTransferLock(block) })
+        }
+        try {
+            withTimeout(5000) { entered.await() }
+            assertEquals(1, scheduled.size)
+            val during = repo.awaitInitialized()
+            assertEquals(listOf(name), during.transcriptionTasks.map { it.recordingName })
+            assertEquals(AutomaticProcessingPhase.RECOVERING, during.automaticProcessingRequests.single().phase)
+        } finally { release.complete(Unit) }
+        withTimeout(5000) { job.await() }
+        assertEquals(2, scheduled.size)
+        assertEquals("Récupération 1/2 · 0 %", labels.first())
+        assertEquals("Récupération 2/2 · 100 %", labels.last())
+    }
+
     @Test fun readyIsConsumedAtomicallyAndConcurrentReconciliationDoesNotDuplicate() = runBlocking {
         val store = store(state(request(), request("recovering", AutomaticProcessingPhase.RECOVERING)))
         val repo = LocalStateRepository(store)

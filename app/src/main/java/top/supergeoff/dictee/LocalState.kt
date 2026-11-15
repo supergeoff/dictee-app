@@ -557,6 +557,32 @@ class RecoverySafety(private val repository: LocalStateRepository) {
         }
     }
 
+    suspend fun begin(name: String, folderUri: String) {
+        try {
+            repository.updateDurably { state ->
+                check(state.transcriptionTasks.none { !it.phase.isTerminal() && it.recordingName == name }) {
+                    "Enregistrement utilisé par une transcription active"
+                }
+                state.withError(name, Step.RECOVER, "Récupération interrompue ou en cours")
+                    .beginAutomaticRecovery(name, folderUri, java.util.UUID.randomUUID().toString())
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (e: Exception) { throw RecoveryGuardException(e) }
+    }
+
+    suspend fun finish(result: RecoveryResult, folderUri: String) {
+        try {
+            repository.updateDurably { state ->
+                val protected = when (result) {
+                    is RecoveryResult.Ok -> state.withoutError(result.name, Step.RECOVER)
+                    is RecoveryResult.Failed -> state.withError(result.name, Step.RECOVER, result.reason)
+                }
+                protected.finishAutomaticRecovery(result, folderUri)
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (e: Exception) { throw RecoveryGuardException(e) }
+    }
+
     suspend fun finish(result: RecoveryResult) {
         repository.update { state ->
             when (result) {

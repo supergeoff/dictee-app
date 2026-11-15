@@ -17,7 +17,11 @@ data class AutomaticProcessingRequest(
 )
 
 /** Reprend chaque intention validée indépendamment des autres. */
-class AutomaticProcessingCoordinator(private val repository: LocalStateRepository, private val transcription: TranscriptionCoordinator) {
+class AutomaticProcessingCoordinator(
+    private val repository: LocalStateRepository,
+    private val transcription: TranscriptionCoordinator,
+    private val log: Log? = null,
+) {
     private val mutex = Mutex()
 
     suspend fun reconcile(): Unit = mutex.withLock {
@@ -25,7 +29,7 @@ class AutomaticProcessingCoordinator(private val repository: LocalStateRepositor
         for (request in requests) {
             try { transcription.startAutomatic(request.id) }
             catch (e: CancellationException) { throw e }
-            catch (_: Exception) { /* L'intention ou la tâche persistée reste récupérable. */ }
+            catch (e: Exception) { log?.error(Source.APP, "Programmation automatique impossible : ${e.message ?: e.javaClass.simpleName}") }
         }
     }
 }
