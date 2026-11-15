@@ -33,7 +33,7 @@ data class KnownFolder(val id: String, val name: String, val origin: FolderOrigi
 /** Étape de traitement d'un enregistrement, dont l'erreur est gardée jusqu'à une réussite. */
 enum class Step { RECOVER, SEND, TRANSCRIBE }
 
-/** État local tenu dans `state.json`, version 6. */
+/** État local tenu dans `state.json`, version 7. */
 data class LocalState(
     val deviceAddress: String? = null,
     val deviceName: String? = null,
@@ -54,7 +54,16 @@ data class LocalState(
     val recordingSubjects: Map<String, String> = emptyMap(),
     val autoProcessAfterRecovery: Boolean = false,
     val automaticProcessingRequests: List<AutomaticProcessingRequest> = emptyList(),
+    val driveSendChoice: DriveSendChoice = DriveSendChoice.ALL_FILES,
+    val driveReceipts: List<DriveReceipt> = emptyList(),
 ) {
+    /** Remplace la preuve d'envoi du même nom vers la même destination. */
+    fun withDriveReceipt(receipt: DriveReceipt): LocalState = copy(
+        driveReceipts = driveReceipts.filterNot {
+            it.destination == receipt.destination && it.fileName == receipt.fileName
+        } + receipt,
+    )
+
     /** Capture le réglage au début d'un transfert, sans activer rétroactivement les anciens MP3. */
     fun beginAutomaticRecovery(name: String, folderUri: String, id: String): LocalState {
         val sameFile = automaticProcessingRequests.filter { it.recordingName == name && it.folderUri == folderUri }
@@ -201,6 +210,16 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
                         .put("reason", request.reason ?: JSONObject.NULL))
                 }
             })
+            .put("driveSendChoice", state.driveSendChoice.name)
+            .put("driveReceipts", JSONArray().apply {
+                state.driveReceipts.forEach { receipt ->
+                    put(JSONObject()
+                        .put("destination", JSONObject().put("account", receipt.destination.account).put("folderId", receipt.destination.folderId))
+                        .put("fileName", receipt.fileName)
+                        .put("driveFileId", receipt.driveFileId)
+                        .put("sha256", receipt.sha256))
+                }
+            })
             .put("transcriptionTasks", JSONArray().apply {
                 state.transcriptionTasks.forEach { task ->
                     put(JSONObject()
@@ -264,6 +283,19 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
                         ?: throw JSONException("Phase de traitement automatique inconnue : $phaseName")
                     AutomaticProcessingRequest(request.getString("id"), request.getString("recordingName"),
                         request.getString("folderUri"), phase, request.stringOrNull("reason"))
+                }
+            }.orEmpty() else emptyList(),
+            driveSendChoice = if (version >= 7 && json.has("driveSendChoice")) {
+                val choiceName = json.getString("driveSendChoice")
+                DriveSendChoice.entries.firstOrNull { it.name == choiceName }
+                    ?: throw JSONException("Choix d'envoi Drive inconnu : $choiceName")
+            } else DriveSendChoice.ALL_FILES,
+            driveReceipts = if (version >= 7) json.arrayOrNull("driveReceipts")?.let { receipts ->
+                List(receipts.length()) { i ->
+                    val receipt = receipts.getJSONObject(i)
+                    val destination = receipt.getJSONObject("destination")
+                    DriveReceipt(DriveDestination(destination.getString("account"), destination.getString("folderId")),
+                        receipt.getString("fileName"), receipt.getString("driveFileId"), receipt.getString("sha256"))
                 }
             }.orEmpty() else emptyList(),
         )
@@ -399,7 +431,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
     }
 
     private companion object {
-        const val VERSION = 6
+        const val VERSION = 7
     }
 }
 
