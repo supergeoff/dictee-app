@@ -842,8 +842,11 @@ class AppModel(
 
     fun setTheme(theme: ThemeChoice) { appLocalState.setTheme(theme) }
 
+    fun setAutoProcessAfterRecovery(enabled: Boolean) { update { it.copy(autoProcessAfterRecovery = enabled) } }
+
     val transcriptionForm = TranscriptionSettingsForm(scope) { settings, secret ->
         withContext(Dispatchers.IO) { transcriptionSettings.save(settings, secret) }
+        reconcileAutomaticProcessing()
     }
     val synthesisForm = SynthesisSettingsForm(scope,
         save = { settings, secret -> withContext(Dispatchers.IO) { synthesisSettings.saveService(settings, secret) } },
