@@ -61,6 +61,27 @@ class RecordingPipelineTest {
         assertNotEquals("Sur Drive", recordingListPresentation(r, changed).badge)
     }
 
+    @Test fun mp3PrefixAndLegacyMatchingAgreeWithCounterAndPresentation() {
+        val r = recording(FileKind.MP3, FileKind.VTT, FileKind.MD)
+        val documents = r.phoneFiles.filterKeys { it != FileKind.MP3 }.values.map { DriveFile(it.fileName, it.fileName, it.size) }
+        val hashes = documents.associate { it.name to "hash" }
+        val destination = DriveDestination("account", "folder")
+        val receipts = documents.map { DriveReceipt(destination, it.name, it.id, "hash") }
+        val local = LocalState(driveEnabled = true, driveAccount = "account", chosenFolderId = "folder", driveReceipts = receipts)
+        fun ui(vararg mp3: String): UiState {
+            val entries = documents + mp3.map { DriveFile(it, it, 100) }
+            return UiState(local = local, recordings = listOf(r), drive = DriveListing(entries.associate { it.name to it.size }, entries), documentHashes = hashes)
+        }
+        for (remote in listOf("Call-$name.mp3", "$name.mp3")) {
+            val current = ui(remote)
+            assertTrue(current.toSend.isEmpty())
+            assertEquals("Sur Drive", recordingListPresentation(r, current).badge)
+        }
+        val conflict = ui("Note-$name.mp3", "Call-$name.mp3")
+        assertTrue(conflict.toSend.isEmpty())
+        assertNotEquals("Sur Drive", recordingListPresentation(r, conflict).badge)
+    }
+
     @Test fun documentsCanBeSentWithoutLocalMp3() {
         val r = recording(FileKind.VTT, FileKind.MD, onBox = false)
         val local = LocalState(driveEnabled = true, driveSendChoice = DriveSendChoice.DOCUMENTS_ONLY)

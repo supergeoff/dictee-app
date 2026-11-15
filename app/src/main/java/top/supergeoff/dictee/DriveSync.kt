@@ -29,10 +29,8 @@ object DriveSync {
         }
         if (!documentsComplete) return false
         if (choice == DriveSendChoice.DOCUMENTS_ONLY) return true
-        val names = setOf("${recording.name}.mp3") + RecordType.entries.map {
-            RecordName.fileName(it, recording.name, FileKind.MP3)
-        }
-        return remote.count { it.name in names } == 1
+        val mp3Name = RecordName.fileName(recording.type, recording.name, FileKind.MP3)
+        return action(mp3Name, FileKind.MP3, null, destination, remote, receipts) == DriveWriteAction.SKIP
     }
 
     fun requiredKinds(choice: DriveSendChoice): Set<FileKind> = when (choice) {
@@ -48,9 +46,11 @@ object DriveSync {
         remote: List<DriveFile>,
         receipts: List<DriveReceipt>,
     ): DriveWriteAction {
-        val parsed = if (kind == FileKind.MP3) RecordName.parse(fileName) else null
-        val legacyName = parsed?.let { "${it.name}.mp3" }
-        val matching = remote.filter { it.name == fileName || (legacyName != null && it.name == legacyName) }
+        val parsed = if (kind == FileKind.MP3) RecordName.parse(fileName)?.takeIf { it.kind == FileKind.MP3 } else null
+        val names = if (parsed != null) {
+            setOf("${parsed.name}.mp3") + RecordType.entries.map { RecordName.fileName(it, parsed.name, FileKind.MP3) }
+        } else setOf(fileName)
+        val matching = remote.filter { it.name in names }
         if (matching.size > 1) return DriveWriteAction.CONFLICT
         val current = matching.singleOrNull() ?: return DriveWriteAction.CREATE
         if (kind == FileKind.MP3) return DriveWriteAction.SKIP

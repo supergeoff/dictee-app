@@ -68,6 +68,15 @@ class DriveSyncTest {
         assertEquals(DriveWriteAction.SKIP, action(fileName = name, kind = FileKind.MP3, remote = remote))
     }
 
+    @Test fun `other prefix MP3 is skipped and two prefixes conflict`() {
+        val name = "Note-20261030160502.mp3"
+        val call = DriveFile("call", "Call-20261030160502.mp3", 3)
+        val note = DriveFile("note", name, 3)
+        assertEquals(DriveWriteAction.SKIP, action(fileName = name, kind = FileKind.MP3, remote = listOf(call)))
+        assertEquals(DriveWriteAction.CONFLICT, action(fileName = name, kind = FileKind.MP3, remote = listOf(note, call)))
+        assertEquals(DriveWriteAction.CONFLICT, action(fileName = name, kind = FileKind.MP3, remote = listOf(call, DriveFile("legacy", "20261030160502.mp3", 3))))
+    }
+
     @Test fun `current MP3 name without receipt is never replaced`() {
         val name = "Call-20261030160502.mp3"
         val remote = listOf(DriveFile("current", name, 3))
