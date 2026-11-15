@@ -42,4 +42,43 @@ class DriveSendRequestTest {
         requests.open(emptyList(), DriveSendChoice.ALL_FILES)
         assertNull(requests.current)
     }
+    @Test fun missingDocumentsIncludeUnsendableSelection() {
+        val audio = recording.copy(phoneFiles = mapOf(FileKind.MP3 to PhoneFile("Note-$name.mp3", 4)))
+        val only = DriveSync.sendSummary(listOf(audio), DriveSendChoice.DOCUMENTS_ONLY)
+        assertEquals(0, only.sendable.size)
+        assertEquals(1, only.missingVtt)
+        assertEquals(1, only.missingMd)
+        val mixed = DriveSync.sendSummary(listOf(audio, recording), DriveSendChoice.DOCUMENTS_ONLY)
+        assertEquals(listOf(recording), mixed.sendable)
+        assertEquals(1, mixed.missingVtt)
+        assertEquals(1, mixed.missingMd)
+    }
+
+    @Test fun selectionClearsOnlyOnConfirmation() {
+        val requests = DriveSendRequests()
+        var clears = 0
+        requests.open(listOf(name), DriveSendChoice.ALL_FILES) { clears++ }
+        requests.cancel()
+        assertEquals(0, clears)
+        requests.open(listOf(name), DriveSendChoice.ALL_FILES) { clears++ }
+        requests.confirm(DriveSendChoice.DOCUMENTS_ONLY)
+        requests.confirm(DriveSendChoice.ALL_FILES)
+        assertEquals(1, clears)
+    }
+
+    @Test fun capturedAccountDrivesActualTokenSourceAfterSettingsChange() {
+        var settings = LocalState(driveAccount = "first@example.invalid")
+        val captured = settings
+        val accounts = mutableListOf<String>()
+        val http = FakeHttp(HttpResponse(200, """{"files":[]}""", emptyMap()))
+        val client = driveClientForCapturedAccount(http, captured.driveAccount!!) { account ->
+            accounts += account
+            FakeTokens(account, account)
+        }
+        settings = settings.copy(driveAccount = "second@example.invalid")
+        client.listEntries("folder")
+        assertEquals("second@example.invalid", settings.driveAccount)
+        assertEquals(listOf("first@example.invalid"), accounts)
+        assertEquals("Bearer first@example.invalid", http.requests.single().headers["Authorization"])
+    }
 }

@@ -16,18 +16,22 @@ import androidx.compose.ui.Modifier
 import top.supergeoff.dictee.DriveSendChoice
 import top.supergeoff.dictee.DriveSendRequest
 import top.supergeoff.dictee.DriveSync
-import top.supergeoff.dictee.FileKind
 import top.supergeoff.dictee.Recordings
 import top.supergeoff.dictee.UiState
 
 @Composable
 internal fun DriveSendDialog(ui: UiState, request: DriveSendRequest, onConfirm: (DriveSendChoice) -> Unit, onDismiss: () -> Unit) {
     var choice by remember(request) { mutableStateOf(request.choice) }
-    val recordings = (if (request.names == null) Recordings.toSendCurrent(ui.recordings, ui.drive, ui.local.copy(driveSendChoice = choice), ui.documentHashes)
-        else Recordings.sendable(ui.recordings, ui.local.errors).filter { it.name in request.names })
-        .filter { recording -> recording.phoneFiles.keys.any { it in DriveSync.requiredKinds(choice) } }
-    val missingVtt = recordings.count { FileKind.VTT !in it.phoneFiles }
-    val missingMd = recordings.count { FileKind.MD !in it.phoneFiles }
+    val selected = if (request.names == null) Recordings.toSendCurrent(ui.recordings, ui.drive, ui.local.copy(driveSendChoice = choice), ui.documentHashes)
+        else Recordings.sendable(ui.recordings, ui.local.errors).filter { it.name in request.names }
+    val initialSelection = if (request.names == null)
+        Recordings.toSendCurrent(ui.recordings, ui.drive, ui.local.copy(driveSendChoice = request.choice), ui.documentHashes)
+    else selected
+    val summary = DriveSync.sendSummary(selected, choice)
+    val warnings = DriveSync.sendSummary(initialSelection, choice)
+    val recordings = summary.sendable
+    val missingVtt = warnings.missingVtt
+    val missingMd = warnings.missingMd
     val folder = ui.local.knownFolders.firstOrNull { it.id == ui.local.chosenFolderId }?.name
         ?: ui.local.chosenFolderId ?: "à résoudre avant l'envoi"
     DicteeDialog(title = "Envoyer sur Drive", confirm = "Envoyer", onConfirm = { onConfirm(choice) }, onDismiss = onDismiss,

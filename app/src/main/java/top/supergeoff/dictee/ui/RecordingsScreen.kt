@@ -368,7 +368,7 @@ private fun ActionBar(ui: UiState, model: AppModel, checked: Set<String>?, onDon
         driveEnabled = ui.local.driveEnabled,
         onRecover = { model.recover(recoverNames); onDone() },
         onTranscribe = { model.transcribe(checked); onDone() },
-        onSend = { model.send(sendNames) },
+        onSend = { model.send(sendNames, if (checked != null) onDone else null) },
     )
 }
 

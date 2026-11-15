@@ -194,3 +194,20 @@ private fun LocalState.withChosenFolder(folder: DriveFolder, origin: FolderOrigi
     }
     return copy(knownFolders = folders, chosenFolderId = folder.id)
 }
+
+/** Les erreurs antérieures ne sont levées que lorsque le lot a été entièrement traité. */
+internal fun applySendOutcome(state: LocalState, outcome: SendOutcome): LocalState {
+    var updated = state
+    val failures = outcome.results.filterIsInstance<SendResult.Failed>()
+    for (failure in failures) updated = updated.withError(failure.name, Step.SEND, failure.reason)
+    if (outcome is SendOutcome.Done) {
+        val failedNames = failures.mapTo(mutableSetOf()) { it.name }
+        for (name in outcome.results.map { it.name }.toSet() - failedNames) {
+            updated = updated.withoutError(name, Step.SEND)
+        }
+    }
+    return updated
+}
+
+internal fun driveClientForCapturedAccount(http: Http, account: String, tokens: (String) -> TokenSource): DriveClient =
+    DriveClient(http, tokens(account))

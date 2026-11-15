@@ -29,6 +29,30 @@ class SendJobTest {
         receipts: List<DriveReceipt> = listOf(DriveReceipt(destination, "Call-$n.vtt", "A2", hash)),
     ) = runBlocking { SendJob(DriveClient(http, FakeTokens("t1", "t2")), store, log, tmp.root).run(defaultFolder, rs, choice, destination, receipts, { _, p -> labels += p.label() }, {}, explicitSelection = explicit) }
 
+    @Test fun existingSendErrorSurvivesFirstSuccessThenReceiptFailure() = runBlocking {
+        val store = MemoryStore(); val mp3 = "Call-$n.mp3"; val vtt = "Call-$n.vtt"
+        val rec = recording(store, mp3, vtt)
+        val http = FakeHttp(json(200, """{"files":[{"id":"A","name":"$mp3","size":"3"}]}"""),
+            json(200, "", mapOf("Location" to "https://upload.example/s1")),
+            json(200, """{"id":"V1","name":"$vtt","size":"3"}"""))
+        val initial = LocalState().withError(n, Step.SEND, "ancienne erreur")
+        val out = SendJob(DriveClient(http, FakeTokens("t1", "t2")), store, ListLog(), tmp.root)
+            .run(defaultFolder, listOf(rec), DriveSendChoice.ALL_FILES, destination, emptyList(), { _, _ -> }, { result ->
+                if (result is SendResult.Sent) throw java.io.IOException("disque indisponible")
+            })
+        assertTrue(out is SendOutcome.Stopped)
+        assertTrue(out.results.single() is SendResult.AlreadyThere)
+        assertEquals("ancienne erreur", applySendOutcome(initial, out).errors[n]?.get(Step.SEND))
+    }
+
+    @Test fun completedSendClearsOnlyRecordingsWithoutFailures() {
+        val initial = LocalState().withError(n, Step.SEND, "ancienne erreur")
+        val success = SendResult.AlreadyThere(n, "Call-$n.mp3")
+        assertTrue(applySendOutcome(initial, SendOutcome.Done(listOf(success))).errors[n]?.get(Step.SEND) == null)
+        val failure = SendResult.Failed(n, "Call-$n.vtt", "nouvelle erreur")
+        assertEquals("nouvelle erreur", applySendOutcome(initial, SendOutcome.Done(listOf(success, failure))).errors[n]?.get(Step.SEND))
+    }
+
     @Test fun receiptPersistenceFailureStopsBeforeNextFile() = runBlocking {
         val store = MemoryStore(); val vtt = "Call-$n.vtt"; val md = "Call-$n.md"
         val rec = recording(store, vtt, md)

@@ -9,11 +9,23 @@ class DriveSendRequests {
     var current: DriveSendRequest? = null
         private set
 
-    @Synchronized fun open(names: List<String>?, choice: DriveSendChoice) {
-        if (current == null && (names == null || names.isNotEmpty())) current = DriveSendRequest(names?.toList(), choice)
+    private var onConfirmed: (() -> Unit)? = null
+
+    @Synchronized fun open(names: List<String>?, choice: DriveSendChoice, onConfirmed: (() -> Unit)? = null) {
+        if (current == null && (names == null || names.isNotEmpty())) {
+            current = DriveSendRequest(names?.toList(), choice)
+            this.onConfirmed = onConfirmed
+        }
     }
-    @Synchronized fun cancel() { current = null }
-    @Synchronized fun confirm(choice: DriveSendChoice): DriveSendRequest? = current?.copy(choice = choice).also { current = null }
+    @Synchronized fun cancel() { current = null; onConfirmed = null }
+    @Synchronized fun confirm(choice: DriveSendChoice): DriveSendRequest? {
+        val request = current?.copy(choice = choice) ?: return null
+        current = null
+        val callback = onConfirmed
+        onConfirmed = null
+        callback?.invoke()
+        return request
+    }
 }
 
 data class DriveDestination(val account: String, val folderId: String)
@@ -29,7 +41,15 @@ data class DriveReceipt(
 
 enum class DriveWriteAction { SKIP, CREATE, UPDATE, CONFLICT }
 
+data class DriveSendSummary(val sendable: List<Recording>, val missingVtt: Int, val missingMd: Int)
+
 object DriveSync {
+    fun sendSummary(recordings: List<Recording>, choice: DriveSendChoice) = DriveSendSummary(
+        recordings.filter { recording -> recording.phoneFiles.keys.any { it in requiredKinds(choice) } },
+        recordings.count { FileKind.VTT !in it.phoneFiles },
+        recordings.count { FileKind.MD !in it.phoneFiles },
+    )
+
     fun isComplete(
         recording: Recording, choice: DriveSendChoice, destination: DriveDestination,
         remote: List<DriveFile>, hashes: Map<String, String>, receipts: List<DriveReceipt>,

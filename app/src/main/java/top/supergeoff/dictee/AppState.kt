@@ -508,11 +508,11 @@ class AppModel(
      * [names] nul : tout ce qui manque dans Drive si sa liste est connue, sinon tout ce qui a un fichier sur le téléphone.
      * Sans envoi vers Drive activé, rien ne part.
      */
-    fun send(names: List<String>?) {
+    fun send(names: List<String>?, onConfirmed: (() -> Unit)? = null) {
         val local = localRepository.state.value ?: return
         synchronized(driveSendRequests) {
             if (!local.driveEnabled || liveFlow.value.sending) return
-            driveSendRequests.open(names, local.driveSendChoice)
+            driveSendRequests.open(names, local.driveSendChoice, onConfirmed)
             liveFlow.update { it.copy(driveSendRequest = driveSendRequests.current) }
         }
     }
@@ -673,7 +673,7 @@ class AppModel(
 
     /** Le compte, le dossier et les enregistrements proviennent de la confirmation. */
     private suspend fun sendRecordings(uri: Uri, recordings: List<Recording>, request: DriveSendRequest, captured: LocalState, account: String) {
-        val drive = DriveClient(LoggingHttp(UrlHttp(), { journal.add(Source.DRIVE, it) }), auth.tokens(account))
+        val drive = driveClientForCapturedAccount(LoggingHttp(UrlHttp(), { journal.add(Source.DRIVE, it) }), account, auth::tokens)
         val folder = try {
             val (folder, resolved) = resolveFolder(captured, drive)
             if (captured.chosenFolderId == null && update {
@@ -686,14 +686,13 @@ class AppModel(
             say(message)
             return
         }
-        val failed = mutableSetOf<String>()
         val outcome = SendJob(drive, PhoneFolder(app, uri), journal, app.cacheDir)
             .run(folder, recordings, request.choice, DriveDestination(account, folder.id), captured.driveReceipts, ::publishSend, { result ->
                 if (result is SendResult.Sent && result.receipt != null) {
                     localRepository.updateDurably { it.withDriveReceipt(result.receipt) }
                 }
-                applySend(result, failed)
             }, explicitSelection = request.names != null)
+        update { applySendOutcome(it, outcome) }
         if (outcome is SendOutcome.Stopped) say(outcome.reason)
     }
 
@@ -701,15 +700,6 @@ class AppModel(
         val current = liveFlow.value
         if (current.sendName == name && current.send?.label() == progress.label()) return
         liveFlow.update { it.copy(send = progress, sendName = name) }
-    }
-
-    private fun applySend(result: SendResult, failed: MutableSet<String>) {
-        if (result is SendResult.Failed) {
-            failed += result.name
-            update { it.withError(result.name, Step.SEND, result.reason) }
-        } else if (result.name !in failed) {
-            update { it.withoutError(result.name, Step.SEND) }
-        }
     }
 
     /** Relance l'étape de l'erreur affichée, la première dans l'ordre de [Step]. */
