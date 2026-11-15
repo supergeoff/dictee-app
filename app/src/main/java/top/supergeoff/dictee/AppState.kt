@@ -46,6 +46,7 @@ data class UiState(
     val sending: Boolean = false,
     val recovery: Progress? = null,
     val send: Progress? = null,
+    val driveSendRequest: DriveSendRequest? = null,
     val transcription: Progress? = null,
     val phoneFolder: String? = null,      // chemin affiché, null sans dossier
     val phoneFolderOk: Boolean = false,
@@ -118,6 +119,7 @@ private data class Live(
     val recoveryName: String? = null,
     val send: Progress? = null,
     val sendName: String? = null,
+    val driveSendRequest: DriveSendRequest? = null,
     val message: String? = null,
 )
 
@@ -165,6 +167,7 @@ class AppModel(
 ) {
     val journal = Journal(File(app.filesDir, "journal")) { LocalDateTime.now() }
     private val liveFlow = MutableStateFlow(Live())
+    private val driveSendRequests = DriveSendRequests()
     private val refreshCoordinator = RefreshCoordinator { refreshing ->
         liveFlow.update { it.copy(refreshing = refreshing) }
     }
@@ -506,9 +509,29 @@ class AppModel(
      * Sans envoi vers Drive activé, rien ne part.
      */
     fun send(names: List<String>?) {
-        scope.launch {
-            localRepository.awaitInitialized()
-            if (localFlow.driveEnabled && !liveFlow.value.sending) sendNow(names)
+        val local = localRepository.state.value ?: return
+        synchronized(driveSendRequests) {
+            if (!local.driveEnabled || liveFlow.value.sending) return
+            driveSendRequests.open(names, local.driveSendChoice)
+            liveFlow.update { it.copy(driveSendRequest = driveSendRequests.current) }
+        }
+    }
+
+    fun cancelDriveSend() = synchronized(driveSendRequests) {
+        driveSendRequests.cancel()
+        liveFlow.update { it.copy(driveSendRequest = null) }
+    }
+
+    fun confirmDriveSend(choice: DriveSendChoice) {
+        synchronized(driveSendRequests) {
+            val request = driveSendRequests.confirm(choice) ?: return
+            liveFlow.update { it.copy(driveSendRequest = null, sending = true) }
+            val local = localFlow
+            val current = buildUi(local.copy(driveSendChoice = choice), phoneFlow.value, driveFlow.value, box.status.value, liveFlow.value)
+            val recordings = (if (request.names == null) current.toSend else
+                Recordings.sendable(current.recordings, local.errors).filter { it.name in request.names })
+                .filter { recording -> recording.phoneFiles.keys.any { it in DriveSync.requiredKinds(choice) } }
+            scope.launch { sendNow(request, local, recordings) }
         }
     }
 
@@ -621,22 +644,25 @@ class AppModel(
         transcriptionLifecycle.stop()
     }
 
-    private suspend fun sendNow(names: List<String>?) {
-        if (liveFlow.getAndUpdate { it.copy(sending = true) }.sending) return
+    private suspend fun sendNow(request: DriveSendRequest, captured: LocalState, recordings: List<Recording>) {
         jobs.begin()
         try {
-            if (!authorizeOrAsk { send(names) }) return
+            if (recordings.isEmpty()) return
+            if (update { it.copy(driveSendChoice = request.choice) }.await().isFailure) {
+                say("Impossible d'enregistrer le choix Drive, envoi annulé.")
+                return
+            }
+            if (!authorizeOrAsk { send(request.names) }) return
+            val account = captured.driveAccount?.takeIf { it.isNotBlank() } ?: run {
+                say("Adresse du compte Google indisponible, envoi annulé.")
+                return
+            }
             recoverySafety.withTransferLock {
-                val uri = localFlow.phoneTreeUri?.toUri() ?: return@withTransferLock
-                val current = buildUi(localFlow, phoneFlow.value, driveFlow.value, box.status.value, liveFlow.value)
-                val recordings = when {
-                    names != null -> Recordings.sendable(current.recordings, current.local.errors).filter { it.name in names }
-                    current.drive != null -> current.toSend
-                    else -> Recordings.sendable(current.recordings, current.local.errors)
-                }
-                if (recordings.isEmpty()) return@withTransferLock
+                val uri = captured.phoneTreeUri?.toUri() ?: return@withTransferLock
+                val safeRecordings = Recordings.sendable(recordings, localFlow.errors)
+                if (safeRecordings.isEmpty()) return@withTransferLock
                 startWork()
-                withContext(Dispatchers.IO) { sendRecordings(uri, recordings, explicit = names != null) }
+                withContext(Dispatchers.IO) { sendRecordings(uri, safeRecordings, request, captured, account) }
                 readDrive()
             }
         } finally {
@@ -645,30 +671,31 @@ class AppModel(
         }
     }
 
-    /** Hors du fil principal. Le message d'un envoi arrêté vient de [SendJob], qui l'a déjà noté au journal. */
-    private suspend fun sendRecordings(uri: Uri, recordings: List<Recording>, explicit: Boolean) {
-        val drive = driveClient()
-        val folder = resolveSendFolder(drive) ?: return
-        val account = readAccount() ?: run {
-            say("Adresse du compte Google indisponible, envoi annulé.")
-            return
-        }
-        val failed = mutableSetOf<String>()   // un fichier envoyé ensuite ne doit pas effacer l'échec d'un autre du même enregistrement
-        val outcome = SendJob(drive, PhoneFolder(app, uri), journal, app.cacheDir)
-            .run(folder, recordings, DriveSendChoice.ALL_FILES, DriveDestination(account, folder.id), localFlow.driveReceipts, ::publishSend, { applySend(it, failed) }, explicitSelection = explicit)
-        if (outcome is SendOutcome.Stopped) say(outcome.reason)
-    }
-
-    private suspend fun resolveSendFolder(drive: DriveClient): DriveFolder? =
-        try {
-            val (folder, resolved) = resolveFolder(localFlow, drive)
-            if (update { it.withFoldersOf(resolved) }.await().isFailure) null else folder
+    /** Le compte, le dossier et les enregistrements proviennent de la confirmation. */
+    private suspend fun sendRecordings(uri: Uri, recordings: List<Recording>, request: DriveSendRequest, captured: LocalState, account: String) {
+        val drive = DriveClient(LoggingHttp(UrlHttp(), { journal.add(Source.DRIVE, it) }), auth.tokens(account))
+        val folder = try {
+            val (folder, resolved) = resolveFolder(captured, drive)
+            if (captured.chosenFolderId == null && update {
+                    if (it.chosenFolderId == captured.chosenFolderId && it.driveAccount == captured.driveAccount) it.withFoldersOf(resolved) else it
+                }.await().isFailure) return
+            folder
         } catch (e: Exception) {
             val message = folderMessage(e)
             journal.error(Source.DRIVE, message)
             say(message)
-            null
+            return
         }
+        val failed = mutableSetOf<String>()
+        val outcome = SendJob(drive, PhoneFolder(app, uri), journal, app.cacheDir)
+            .run(folder, recordings, request.choice, DriveDestination(account, folder.id), captured.driveReceipts, ::publishSend, { result ->
+                if (result is SendResult.Sent && result.receipt != null) {
+                    localRepository.updateDurably { it.withDriveReceipt(result.receipt) }
+                }
+                applySend(result, failed)
+            }, explicitSelection = request.names != null)
+        if (outcome is SendOutcome.Stopped) say(outcome.reason)
+    }
 
     private fun publishSend(name: String, progress: Progress) {
         val current = liveFlow.value
@@ -1152,6 +1179,7 @@ class AppModel(
             sending = live.sending,
             recovery = live.recovery,
             send = live.send,
+            driveSendRequest = live.driveSendRequest,
             transcription = transcription?.second,
             phoneFolder = local.phoneTreeUri?.let { runCatching { PhoneFolder.displayPath(it.toUri()) }.getOrDefault(it) },
             phoneFolderOk = phone.ok,

@@ -4,6 +4,18 @@ enum class DriveSendChoice { ALL_FILES, DOCUMENTS_ONLY }
 
 data class DriveSendRequest(val names: List<String>?, val choice: DriveSendChoice)
 
+/** Une demande ne peut être confirmée ou annulée qu'une seule fois. */
+class DriveSendRequests {
+    var current: DriveSendRequest? = null
+        private set
+
+    @Synchronized fun open(names: List<String>?, choice: DriveSendChoice) {
+        if (current == null && (names == null || names.isNotEmpty())) current = DriveSendRequest(names?.toList(), choice)
+    }
+    @Synchronized fun cancel() { current = null }
+    @Synchronized fun confirm(choice: DriveSendChoice): DriveSendRequest? = current?.copy(choice = choice).also { current = null }
+}
+
 data class DriveDestination(val account: String, val folderId: String)
 
 data class DriveFile(val id: String, val name: String, val size: Long)

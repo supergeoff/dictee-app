@@ -354,21 +354,21 @@ private fun SelectionMark(checked: Boolean) {
 @Composable
 private fun ActionBar(ui: UiState, model: AppModel, checked: Set<String>?, onDone: () -> Unit) {
     val recoverNames = checked?.let { names -> ui.local.boxList.map { it.name }.filter { it in names } }
-    val sendNames = checked?.let { names -> ui.toSend.map { it.name }.filter { it in names } }
+    val sendNames = checked?.let { names -> Recordings.sendable(ui.recordings, ui.local.errors).map { it.name }.filter { it in names } }
     val active = ui.local.transcriptionTasks.filter { !it.phase.isTerminal() }.mapTo(mutableSetOf()) { it.recordingName }
     val transcribe = Recordings.toTranscribe(ui.recordings, checked, ui.local.errors, active).candidates.map { it.name }
     val recoverCount = recoverNames?.size ?: ui.toRecover.size
-    val sendCount = sendNames?.size ?: ui.toSend.size
+    val sendCount = if (checked == null) ui.toSend.size else ui.toSend.count { it.name in checked }
     ActionBarButtons(
         recoverText = if (ui.recovering) "Récupération…" else "Récupérer ($recoverCount)",
         recoverEnabled = ui.link == LinkStatus.CONNECTED && !ui.recovering && recoverCount > 0,
         transcribeCount = transcribe.size,
         sendText = if (ui.sending) "Envoi…" else "Envoyer ($sendCount)",
-        sendEnabled = !ui.sending && sendCount > 0,
+        sendEnabled = !ui.sending && if (checked != null) sendNames.orEmpty().isNotEmpty() else sendCount > 0,
         driveEnabled = ui.local.driveEnabled,
         onRecover = { model.recover(recoverNames); onDone() },
         onTranscribe = { model.transcribe(checked); onDone() },
-        onSend = { model.send(sendNames); onDone() },
+        onSend = { model.send(sendNames) },
     )
 }
 

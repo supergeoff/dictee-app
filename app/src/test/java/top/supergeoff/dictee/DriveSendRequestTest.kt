@@ -23,4 +23,23 @@ class DriveSendRequestTest {
         assertFalse(complete(h = hashes + (files.getValue(FileKind.VTT).fileName to "changed")))
         assertFalse(complete(proof = receipts.drop(1)))
     }
+
+    @Test fun `cancel and duplicate confirmation consume request only once`() {
+        val requests = DriveSendRequests()
+        val names = mutableListOf("one")
+        requests.open(names, DriveSendChoice.ALL_FILES)
+        names.add("two")
+        assertEquals(listOf("one"), requests.current?.names)
+        requests.cancel()
+        assertNull(requests.confirm(DriveSendChoice.DOCUMENTS_ONLY))
+        requests.open(listOf("one"), DriveSendChoice.ALL_FILES)
+        assertEquals(DriveSendRequest(listOf("one"), DriveSendChoice.DOCUMENTS_ONLY), requests.confirm(DriveSendChoice.DOCUMENTS_ONLY))
+        assertNull(requests.confirm(DriveSendChoice.ALL_FILES))
+    }
+
+    @Test fun `empty selection cannot open`() {
+        val requests = DriveSendRequests()
+        requests.open(emptyList(), DriveSendChoice.ALL_FILES)
+        assertNull(requests.current)
+    }
 }

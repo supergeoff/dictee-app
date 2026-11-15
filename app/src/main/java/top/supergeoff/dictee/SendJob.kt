@@ -98,8 +98,14 @@ class SendJob(
                         }
                     }
                 }
+                try {
+                    onResult(result)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    return stop("Impossible d'enregistrer le résultat de l'envoi : ${reasonOf(e)}", results)
+                }
                 results += result
-                onResult(result)
             }
             return SendOutcome.Done(results)
         } finally {

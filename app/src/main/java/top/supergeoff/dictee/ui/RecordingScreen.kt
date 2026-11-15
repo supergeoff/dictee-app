@@ -69,6 +69,8 @@ import top.supergeoff.dictee.TranscriptionPhase
 import top.supergeoff.dictee.UiState
 import top.supergeoff.dictee.isTerminal
 import top.supergeoff.dictee.transcriptionCancellationMessage
+import top.supergeoff.dictee.PipelineStage
+import top.supergeoff.dictee.PipelineStatus
 import top.supergeoff.dictee.PipelineAction
 import top.supergeoff.dictee.PipelineInput
 import top.supergeoff.dictee.RecordingPipeline
@@ -149,6 +151,9 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
                     PipelineAction.REDO_MD -> model.transcribe(setOf(name), RequestedWork.REDO_MD)
                     PipelineAction.OPEN_SETTINGS -> onSettings(presentation.settingsDestination(input))
                 }
+            }
+            if (ui.local.driveEnabled && presentation.steps.any { it.stage == PipelineStage.DRIVE && it.status == PipelineStatus.DONE }) {
+                SecondaryButton("Envoyer sur Drive…", enabled = !ui.sending, onClick = { model.send(listOf(name)) })
             }
             val mp3 = recording.phoneFiles[FileKind.MP3]
             val playback = if (mp3 == null) null else rememberPlayback(model, mp3.fileName, mp3.size)

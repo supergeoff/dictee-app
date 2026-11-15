@@ -29,6 +29,53 @@ class SendJobTest {
         receipts: List<DriveReceipt> = listOf(DriveReceipt(destination, "Call-$n.vtt", "A2", hash)),
     ) = runBlocking { SendJob(DriveClient(http, FakeTokens("t1", "t2")), store, log, tmp.root).run(defaultFolder, rs, choice, destination, receipts, { _, p -> labels += p.label() }, {}, explicitSelection = explicit) }
 
+    @Test fun receiptPersistenceFailureStopsBeforeNextFile() = runBlocking {
+        val store = MemoryStore(); val vtt = "Call-$n.vtt"; val md = "Call-$n.md"
+        val rec = recording(store, vtt, md)
+        val http = FakeHttp(json(200, """{"files":[]}"""), json(200, "", mapOf("Location" to "https://upload.example/s1")),
+            json(200, """{"id":"V1","name":"$vtt","size":"3"}"""))
+        val out = SendJob(DriveClient(http, FakeTokens("t1", "t2")), store, ListLog(), tmp.root)
+            .run(defaultFolder, listOf(rec), DriveSendChoice.DOCUMENTS_ONLY, destination, emptyList(), { _, _ -> },
+                { throw java.io.IOException("disque indisponible") })
+        assertTrue(out is SendOutcome.Stopped)
+        assertTrue(out.results.isEmpty())
+        assertEquals(3, http.requests.size)
+    }
+
+    @Test fun receiptKeepsCapturedDestinationWhenSettingsChangeDuringUpload() = runBlocking {
+        val repository = LocalStateRepository(LocalStateStore(File(tmp.root, "state.json")))
+        repository.updateDurably { it.copy(driveAccount = destination.account, chosenFolderId = destination.folderId) }
+        val store = MemoryStore(); val vtt = "Call-$n.vtt"
+        val rec = recording(store, vtt)
+        val http = FakeHttp(json(200, """{"files":[]}"""), json(200, "", mapOf("Location" to "https://upload.example/s1")),
+            json(200, """{"id":"V1","name":"$vtt","size":"3"}"""))
+        val out = SendJob(DriveClient(http, FakeTokens("t1", "t2")), store, ListLog(), tmp.root)
+            .run(defaultFolder, listOf(rec), DriveSendChoice.DOCUMENTS_ONLY, destination, emptyList(), { _, _ -> }, { result ->
+                repository.updateDurably { it.copy(driveAccount = "other@example.invalid", chosenFolderId = "other") }
+                if (result is SendResult.Sent && result.receipt != null) repository.updateDurably { it.withDriveReceipt(result.receipt) }
+            })
+        assertTrue(out is SendOutcome.Done)
+        val state = LocalStateStore(File(tmp.root, "state.json")).load()
+        assertEquals("other", state.chosenFolderId)
+        assertEquals(destination, state.driveReceipts.single().destination)
+    }
+
+    @Test fun failedDurableReceiptStopsBatchWithoutPublishingReceipt() = runBlocking {
+        val repository = LocalStateRepository(LocalStateStore(tmp.newFile("state.json"), rename = { _, _ -> false }), load = { LocalState() })
+        val store = MemoryStore(); val vtt = "Call-$n.vtt"; val md = "Call-$n.md"
+        val rec = recording(store, vtt, md)
+        val http = FakeHttp(json(200, """{"files":[]}"""), json(200, "", mapOf("Location" to "https://upload.example/s1")),
+            json(200, """{"id":"V1","name":"$vtt","size":"3"}"""))
+        val out = SendJob(DriveClient(http, FakeTokens("t1", "t2")), store, ListLog(), tmp.root)
+            .run(defaultFolder, listOf(rec), DriveSendChoice.DOCUMENTS_ONLY, destination, emptyList(), { _, _ -> }, { result ->
+                if (result is SendResult.Sent && result.receipt != null) repository.updateDurably { it.withDriveReceipt(result.receipt) }
+            })
+        assertTrue(out is SendOutcome.Stopped)
+        assertTrue(out.results.isEmpty())
+        assertTrue(repository.state.value!!.driveReceipts.isEmpty())
+        assertEquals(3, http.requests.size)
+    }
+
     @Test fun documentsOnlySkipsAudioAndAbsentDocuments() {
         val store = MemoryStore(); val http = FakeHttp(json(200, """{"files":[]}"""))
         val out = run(http, store, listOf(recording(store, "Call-$n.mp3")), choice = DriveSendChoice.DOCUMENTS_ONLY)
