@@ -1,6 +1,6 @@
 # Dictée : spécification du produit
 
-Statut : ce document décrit le comportement prévu pour la version 0.5.0. La recette sur appareil, la réunion réelle et la vérification de l'APK signé restent à faire.
+Statut : ce document décrit le comportement livré visé pour la version 0.6.0. La recette sur appareil, la vérification Drive réelle et celle de l'APK signé restent à faire.
 
 Le protocole Bluetooth du MECHEN V05 est décrit dans [`protocole-v05.md`](protocole-v05.md).
 
@@ -117,12 +117,13 @@ L'état se calcule à chaque rafraîchissement à partir des trois sources, des 
 
 ### État local
 
-Le fichier `state.json`, version 5, du stockage interne ne garde que ce qui ne se déduit pas des trois sources :
+Le fichier `state.json`, version 7, du stockage interne ne garde que ce qui ne se déduit pas des trois sources :
 
 - l'adresse et le nom du boîtier associé ;
 - la dernière liste lue sur le boîtier (nom, taille, indicateur), remplacée à chaque lecture et utilisée quand le boîtier est hors de portée ;
 - l'adresse du dossier du téléphone (URI de l'arborescence choisie) ;
 - l'activation de Drive, le compte Google autorisé, les dossiers Drive connus (identifiant, nom, origine) et le dossier choisi ;
+- le dernier choix d'envoi Drive confirmé et les preuves d'envoi des VTT/MD (destination, nom, identifiant Drive et empreinte SHA-256) ;
 - la dernière erreur par enregistrement et par étape (récupération ou envoi), gardée après un redémarrage ;
 - les réglages de transcription et de synthèse, avec des références aux clés chiffrées, jamais les clés en clair ;
 - l'option de traitement après récupération et les intentions durables associées aux récupérations individuelles ;
@@ -156,9 +157,9 @@ L'app reprend l'état de la version 0.1.5 au premier lancement : elle garde l'ad
 
 - Le droit est `drive.file`. L'app demande un jeton avant chaque requête Drive. Sur une erreur 401, elle efface le jeton en cache (`clearToken`), en redemande un et refait l'appel une seule fois. Les délais sont de 30 secondes pour la connexion et de 120 secondes pour la lecture.
 - Dossier par défaut : quand Drive est activé sans dossier choisi, l'app cherche « Dictée » parmi les dossiers connus, puis dans Drive (requête sur le nom, limitée par Google aux dossiers accessibles à l'app). Sans résultat, elle crée « Dictée » à la racine. Ce choix se fait au premier envoi.
-- Liste et fiche ouvrent le même dialogue : « MP3 + VTT + MD » ou « VTT + MD », avec le compte, le dossier, le nombre d'enregistrements et les documents manquants. Le dernier choix confirmé est conservé ; annuler ne lance aucun envoi. La sélection explicite et l'action secondaire d'une fiche terminée permettent de changer de choix. Les reprises repassent par le dialogue.
-- Les entrées Drive sont lues page par page avec leur identifiant. Un MP3 existant n'est jamais remplacé ; son ancien nom sans préfixe (`<nom>.mp3`) compte aussi. Un MP3 présent seulement dans Drive crée une ligne dans la liste.
-- Les VTT et MD sont comparés par empreinte SHA-256 et preuve d'envoi, propre au compte, au dossier et à l'identifiant Drive. Un document sans preuve ou modifié est créé ou remplacé par téléversement reprenable, y compris un VTT DOWAY visible du même nom ; les homonymes visibles sont signalés comme conflit. La preuve est enregistrée après contrôle de taille et une erreur d'écriture arrête le lot.
+- Liste et fiche ouvrent le même dialogue : « MP3 + VTT + MD » ou « VTT + MD », avec le compte, le dossier, le nombre d'enregistrements et les documents manquants. Le dernier choix confirmé est conservé dans `state.json` ; annuler ne change pas ce choix et ne lance aucun envoi. Les anciens états migrent avec le choix « MP3 + VTT + MD » et sans preuve d'envoi. La sélection explicite et l'action secondaire d'une fiche terminée permettent de changer de choix. Les reprises repassent par le dialogue.
+- Les entrées Drive accessibles à l'application sont lues page par page avec leur identifiant. Le droit `drive.file` ne donne pas une vue générale du Drive : un fichier existant mais non visible à l'application peut ne pas être détecté. Un MP3 existant n'est jamais remplacé ; son ancien nom sans préfixe (`<nom>.mp3`) compte aussi. Un MP3 présent seulement dans Drive crée une ligne dans la liste.
+- Les VTT et MD sont comparés par empreinte SHA-256 et preuve d'envoi, propre au compte, au dossier et à l'identifiant Drive. Un document sans preuve ou modifié est créé ou remplacé par téléversement reprenable, y compris un VTT DOWAY visible du même nom : il n'y a pas de règle « ne jamais remplacer » pour les VTT/MD envoyés. Les homonymes visibles sont signalés comme conflit plutôt que de choisir arbitrairement. La preuve est enregistrée après contrôle de taille et une erreur d'écriture arrête le lot ; une erreur d'envoi ne crée pas de preuve et les succès précédents restent acquis.
 - Les fichiers locaux restent en place. Les documents absents ne sont pas créés par l'envoi. Le parcours Drive exige les VTT et MD courants prouvés et, selon le choix, le MP3 distant ; une synthèse issue d'un ancien VTT ne termine pas le parcours.
 
 ## Travaux longs
