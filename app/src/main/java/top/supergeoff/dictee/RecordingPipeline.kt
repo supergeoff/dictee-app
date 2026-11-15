@@ -17,6 +17,18 @@ data class PipelineButton(val action: PipelineAction, val label: String, val ena
 data class PipelinePresentation(
     val steps: List<PipelineStep>, val reason: PipelineReason?, val button: PipelineButton?, val badge: String, val queueRank: Int?,
 )
+enum class SettingsDestination { STORAGE, TRANSCRIPTION, SYNTHESIS }
+
+fun PipelinePresentation.settingsDestination(input: PipelineInput): SettingsDestination {
+    val waiting = steps.single { it.stage == PipelineStage.VTT }
+    if (button?.action != PipelineAction.OPEN_SETTINGS || waiting.status != PipelineStatus.WAITING) return SettingsDestination.SYNTHESIS
+    val request = input.local.automaticProcessingRequests.lastOrNull {
+        it.recordingName == input.recording.name && it.phase == AutomaticProcessingPhase.WAITING_SETTINGS
+    }
+    return if (request != null && request.folderUri != input.local.phoneTreeUri) SettingsDestination.STORAGE
+    else SettingsDestination.TRANSCRIPTION
+}
+
 data class PipelineInput(
     val recording: Recording, val local: LocalState, val busy: Busy, val drive: DriveListing?, val connected: Boolean,
     val synthesisConfigured: Boolean, val provenance: ProvenanceStatus = ProvenanceStatus.UNKNOWN,

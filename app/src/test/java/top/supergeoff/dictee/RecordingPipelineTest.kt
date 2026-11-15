@@ -50,6 +50,17 @@ class RecordingPipelineTest {
         assertEquals(PipelineStatus.TODO, other.steps.single { it.stage == PipelineStage.VTT }.status)
     }
 
+    @Test fun settingsDestinationFollowsWaitingStageAndFolder() {
+        val request = AutomaticProcessingRequest("id", name, "folder", AutomaticProcessingPhase.WAITING_SETTINGS, "Configuration requise")
+        val base = input(r = recording(FileKind.MP3))
+        val waiting = base.copy(local = base.local.copy(phoneTreeUri = "folder", automaticProcessingRequests = listOf(request)))
+        assertEquals(SettingsDestination.TRANSCRIPTION, result(waiting).settingsDestination(waiting))
+        val changedFolder = waiting.copy(local = waiting.local.copy(phoneTreeUri = "other"))
+        assertEquals(SettingsDestination.STORAGE, result(changedFolder).settingsDestination(changedFolder))
+        val synthesis = input(r = recording(FileKind.MP3, FileKind.VTT), configured = false)
+        assertEquals(SettingsDestination.SYNTHESIS, result(synthesis).settingsDestination(synthesis))
+    }
+
     @Test fun stageTableMatchesSpec() {
         data class Case(val stage: PipelineStage, val input: PipelineInput, val expected: PipelineStatus)
         val mp3 = recording(FileKind.MP3)

@@ -148,6 +148,7 @@ private fun reasonOf(e: Throwable): String {
 class AppModel(
     private val app: Application,
     repository: LocalStateRepository? = null,
+    private val transcriptionCoordinatorFactory: ((LocalStateRepository) -> TranscriptionCoordinator)? = null,
 ) {
     val journal = Journal(File(app.filesDir, "journal")) { LocalDateTime.now() }
     private val liveFlow = MutableStateFlow(Live())
@@ -169,6 +170,7 @@ class AppModel(
     val synthesisSettings = SynthesisSettingsManager(localRepository, synthesisCredentials)
     private val synthesisClient = UrlSynthesisClient(synthesisCredentials, log = journal)
     internal val transcriptionCoordinator: TranscriptionCoordinator by lazy {
+        transcriptionCoordinatorFactory?.let { return@lazy it(localRepository) }
         val scheduler = TranscriptionSchedule(androidx.work.WorkManager.getInstance(app))
         val client = UrlTranscriptionClient(transcriptionCredentials, { task ->
             PhoneFolder(app, task.folderUri.toUri()).open(task.mp3Name)
