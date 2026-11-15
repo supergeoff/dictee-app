@@ -134,7 +134,7 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
             val configured = settings.baseUrl != "/v1" && isValidSynthesisBaseUrl(settings.baseUrl) &&
                 settings.model.isNotBlank() && settings.prompt.isNotBlank() && !settings.credentialRef.isNullOrBlank()
             val input = PipelineInput(recording, ui.local, ui.busy, ui.drive,
-                ui.link == LinkStatus.CONNECTED && !ui.recovering, configured, current?.status ?: ProvenanceStatus.UNKNOWN)
+                ui.link == LinkStatus.CONNECTED && !ui.recovering, configured, current?.status ?: ProvenanceStatus.UNKNOWN, ui.documentHashes)
             val presentation = RecordingPipeline.calculate(input)
             PipelineCard(presentation) { action ->
                 when (action) {

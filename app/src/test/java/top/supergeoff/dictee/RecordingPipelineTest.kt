@@ -29,6 +29,46 @@ class RecordingPipelineTest {
     private fun result(i: PipelineInput) = RecordingPipeline.calculate(i)
     private fun status(i: PipelineInput, stage: PipelineStage) = result(i).steps.single { it.stage == stage }.status
 
+    @Test fun driveCompletionUsesCurrentProofAndStaleMdNeverFinishesBadge() {
+        val r = recording(FileKind.MP3, FileKind.VTT, FileKind.MD)
+        val entries = r.phoneFiles.values.map { DriveFile(it.fileName, it.fileName, it.size) }
+        val hashes = r.phoneFiles.filterKeys { it != FileKind.MP3 }.values.associate { it.fileName to "hash" }
+        val destination = DriveDestination("account", "folder")
+        val receipts = entries.filter { it.name in hashes }.map { DriveReceipt(destination, it.name, it.id, "hash") }
+        val local = LocalState(driveEnabled = true, driveAccount = "account", chosenFolderId = "folder", driveReceipts = receipts)
+        val listing = DriveListing(entries.associate { it.name to it.size }, entries)
+        val base = PipelineInput(r, local, Busy(), listing, true, true, documentHashes = hashes)
+        assertEquals(PipelineStatus.DONE, status(base, PipelineStage.DRIVE))
+        assertEquals("Sur Drive", result(base).badge)
+        assertEquals(PipelineStatus.TODO, status(base.copy(documentHashes = emptyMap()), PipelineStage.DRIVE))
+        assertEquals(PipelineStatus.TODO, status(base.copy(local = local.copy(driveReceipts = emptyList())), PipelineStage.DRIVE))
+        assertNotEquals("Sur Drive", result(base.copy(provenance = ProvenanceStatus.STALE)).badge)
+    }
+
+    @Test fun counterAndPresentationAgreeOnCurrentDocuments() {
+        val r = recording(FileKind.MP3, FileKind.VTT, FileKind.MD)
+        val entries = r.phoneFiles.values.map { DriveFile(it.fileName, it.fileName, it.size) }
+        val hashes = r.phoneFiles.filterKeys { it != FileKind.MP3 }.values.associate { it.fileName to "hash" }
+        val destination = DriveDestination("account", "folder")
+        val receipts = entries.filter { it.name in hashes }.map { DriveReceipt(destination, it.name, it.id, "hash") }
+        val local = LocalState(driveEnabled = true, driveAccount = "account", chosenFolderId = "folder", driveReceipts = receipts)
+        val listing = DriveListing(entries.associate { it.name to it.size }, entries)
+        val ui = UiState(local = local, recordings = listOf(r), drive = listing, documentHashes = hashes)
+        assertTrue(ui.toSend.isEmpty())
+        assertEquals("Sur Drive", recordingListPresentation(r, ui).badge)
+        val changed = ui.copy(documentHashes = hashes + (r.phoneFiles.getValue(FileKind.VTT).fileName to "other"))
+        assertEquals(listOf(r), changed.toSend)
+        assertNotEquals("Sur Drive", recordingListPresentation(r, changed).badge)
+    }
+
+    @Test fun documentsCanBeSentWithoutLocalMp3() {
+        val r = recording(FileKind.VTT, FileKind.MD, onBox = false)
+        val local = LocalState(driveEnabled = true, driveSendChoice = DriveSendChoice.DOCUMENTS_ONLY)
+        val ui = UiState(local = local, recordings = listOf(r))
+        assertEquals(listOf(r), ui.toSend)
+        assertEquals(PipelineAction.SEND, recordingListPresentation(r, ui).button?.action)
+    }
+
     @Test fun automaticWaitingSettingsShowsItsReasonAndOpensSettings() {
         val request = AutomaticProcessingRequest("id", name, "folder", AutomaticProcessingPhase.WAITING_SETTINGS, "Le dossier du téléphone a changé.")
         val base = input(r = recording(FileKind.MP3))
@@ -87,7 +127,7 @@ class RecordingPipelineTest {
             Case(PipelineStage.MD, input(r = vtt), PipelineStatus.TODO),
             Case(PipelineStage.DRIVE, input(r = all, driveEnabled = true, busy = Busy(sending = name)), PipelineStatus.RUNNING),
             Case(PipelineStage.DRIVE, input(r = all, driveEnabled = true, errors = mapOf(Step.SEND to "erreur")), PipelineStatus.ERROR),
-            Case(PipelineStage.DRIVE, input(r = all, driveEnabled = true, drive = DriveListing(all.phoneFiles.values.associate { it.fileName to it.size })), PipelineStatus.DONE),
+            Case(PipelineStage.DRIVE, input(r = all, driveEnabled = true, drive = DriveListing(all.phoneFiles.values.associate { it.fileName to it.size })), PipelineStatus.TODO),
             Case(PipelineStage.DRIVE, input(r = all), PipelineStatus.TODO),
             Case(PipelineStage.DRIVE, input(r = all, driveEnabled = true), PipelineStatus.TODO),
         )

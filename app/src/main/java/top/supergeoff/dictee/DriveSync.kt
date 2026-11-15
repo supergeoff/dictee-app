@@ -2,6 +2,8 @@ package top.supergeoff.dictee
 
 enum class DriveSendChoice { ALL_FILES, DOCUMENTS_ONLY }
 
+data class DriveSendRequest(val names: List<String>?, val choice: DriveSendChoice)
+
 data class DriveDestination(val account: String, val folderId: String)
 
 data class DriveFile(val id: String, val name: String, val size: Long)
@@ -16,6 +18,23 @@ data class DriveReceipt(
 enum class DriveWriteAction { SKIP, CREATE, UPDATE, CONFLICT }
 
 object DriveSync {
+    fun isComplete(
+        recording: Recording, choice: DriveSendChoice, destination: DriveDestination,
+        remote: List<DriveFile>, hashes: Map<String, String>, receipts: List<DriveReceipt>,
+    ): Boolean {
+        val documentsComplete = listOf(FileKind.VTT, FileKind.MD).all { kind ->
+            val file = recording.phoneFiles[kind] ?: return@all false
+            val hash = hashes[file.fileName] ?: return@all false
+            action(file.fileName, kind, hash, destination, remote, receipts) == DriveWriteAction.SKIP
+        }
+        if (!documentsComplete) return false
+        if (choice == DriveSendChoice.DOCUMENTS_ONLY) return true
+        val names = setOf("${recording.name}.mp3") + RecordType.entries.map {
+            RecordName.fileName(it, recording.name, FileKind.MP3)
+        }
+        return remote.count { it.name in names } == 1
+    }
+
     fun requiredKinds(choice: DriveSendChoice): Set<FileKind> = when (choice) {
         DriveSendChoice.ALL_FILES -> FileKind.entries.toSet()
         DriveSendChoice.DOCUMENTS_ONLY -> setOf(FileKind.VTT, FileKind.MD)

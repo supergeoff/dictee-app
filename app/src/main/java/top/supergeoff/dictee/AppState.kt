@@ -50,6 +50,7 @@ data class UiState(
     val phoneFolder: String? = null,      // chemin affiché, null sans dossier
     val phoneFolderOk: Boolean = false,
     val phoneRevision: Long = 0,
+    val documentHashes: Map<String, String> = emptyMap(),
     val drive: DriveListing? = null,      // null si Drive est désactivé ou illisible
     val busy: Busy = Busy(),
     val message: String? = null,
@@ -60,7 +61,7 @@ data class UiState(
 
     /** Enregistrements à envoyer : aucun si Drive est désactivé. */
     val toSend: List<Recording>
-        get() = if (local.driveEnabled) Recordings.toSend(recordings, drive, local.errors) else emptyList()
+        get() = if (local.driveEnabled) Recordings.toSendCurrent(recordings, drive, local, documentHashes) else emptyList()
 }
 
 internal fun recordingListPresentation(recording: Recording, ui: UiState, provenance: ProvenanceStatus = ProvenanceStatus.UNKNOWN): PipelinePresentation {
@@ -68,7 +69,7 @@ internal fun recordingListPresentation(recording: Recording, ui: UiState, proven
     val configured = settings.baseUrl != "/v1" && isValidSynthesisBaseUrl(settings.baseUrl) &&
         settings.model.isNotBlank() && settings.prompt.isNotBlank() && !settings.credentialRef.isNullOrBlank()
     return RecordingPipeline.calculate(PipelineInput(recording, ui.local, ui.busy, ui.drive,
-        ui.link == LinkStatus.CONNECTED && !ui.recovering, configured, provenance))
+        ui.link == LinkStatus.CONNECTED && !ui.recovering, configured, provenance, ui.documentHashes))
 }
 
 /** État à afficher avant que les écrans puissent lire l'état local. */
@@ -92,9 +93,21 @@ sealed class UiRequest {
 }
 
 /** Dossier du téléphone tel que lu : ses fichiers, et s'il répond. */
-internal data class PhoneSnapshot(val files: List<PhoneFile> = emptyList(), val ok: Boolean = false, val revision: Long = 0) {
+internal data class PhoneSnapshot(val files: List<PhoneFile> = emptyList(), val ok: Boolean = false, val revision: Long = 0, val documentHashes: Map<String, String> = emptyMap(), val folderUri: String? = null) {
+    fun hashesFor(folder: String?): Map<String, String> = if (ok && folder != null && folder == folderUri) documentHashes else emptyMap()
     fun afterPromotion(): PhoneSnapshot = copy(revision = revision + 1)
 }
+
+internal fun readDocumentHashes(files: List<PhoneFile>, readHash: (String) -> String, onError: (Exception) -> Unit): Map<String, String> =
+    files.mapNotNull { file ->
+        val kind = RecordName.parse(file.fileName)?.kind
+        if (kind != FileKind.VTT && kind != FileKind.MD) null else {
+            val hash = try { readHash(file.fileName) }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) { onError(e); null }
+            hash?.let { file.fileName to it }
+        }
+    }.toMap()
 
 /** Ce qui n'est pas dans `state.json` : travaux en cours avec leur avancement, et message à afficher. */
 private data class Live(
@@ -928,7 +941,7 @@ class AppModel(
                 throw e
             } catch (e: Exception) {
                 journal.error(Source.FS, "Lecture du dossier après promotion : ${reasonOf(e)}")
-                phoneFlow.value.copy(ok = false)
+                phoneFlow.value.copy(ok = false, documentHashes = emptyMap())
             }
             if (localFlow.phoneTreeUri == folder) phoneFlow.value = snapshot.afterPromotion()
         }
@@ -938,10 +951,17 @@ class AppModel(
     private fun readFolder(uri: Uri, last: PhoneSnapshot): PhoneSnapshot =
         try {
             if (!PhoneFolder.hasAccess(app, uri)) throw PhoneStoreException(PHONE_FOLDER_LOST)
-            last.copy(files = PhoneFolder(app, uri).list(), ok = true)
-        } catch (e: PhoneStoreException) {
-            journal.error(Source.FS, e.journalText)
-            last.copy(ok = false)
+            val folder = PhoneFolder(app, uri)
+            val files = folder.list()
+            val hashes = readDocumentHashes(files, { TranscriptionAudio.sha256(folder, it) }) {
+                journal.error(Source.FS, "Lecture du document : ${reasonOf(it)}")
+            }
+            last.copy(files = files, ok = true, documentHashes = hashes, folderUri = uri.toString())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            journal.error(Source.FS, if (e is PhoneStoreException) e.journalText else reasonOf(e))
+            last.copy(ok = false, documentHashes = emptyMap())
         }
 
     /**
@@ -987,8 +1007,8 @@ class AppModel(
     }
 
     private suspend fun readListing(folderId: String) {
-        attempt { withContext(Dispatchers.IO) { driveClient().listFiles(folderId) } }
-            .onSuccess { files -> if (localFlow.chosenFolderId == folderId) driveFlow.value = DriveListing(files) }
+        attempt { withContext(Dispatchers.IO) { driveClient().listEntries(folderId) } }
+            .onSuccess { entries -> if (localFlow.chosenFolderId == folderId) driveFlow.value = DriveListing(entries.associate { it.name to it.size }, entries) }
             .onFailure { journal.error(Source.DRIVE, "lecture du dossier Drive : ${reasonOf(it)}") }
     }
 
@@ -1136,6 +1156,7 @@ class AppModel(
             phoneFolder = local.phoneTreeUri?.let { runCatching { PhoneFolder.displayPath(it.toUri()) }.getOrDefault(it) },
             phoneFolderOk = phone.ok,
             phoneRevision = phone.revision,
+            documentHashes = phone.hashesFor(local.phoneTreeUri),
             drive = listing,
             busy = busy,
             message = live.message,

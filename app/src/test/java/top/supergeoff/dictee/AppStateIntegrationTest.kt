@@ -33,6 +33,26 @@ class AppStateIntegrationTest {
         }
     }
 
+    @Test fun failedDocumentReadDropsPreviousHashInsteadOfProvingCurrentContent() {
+        val fileName = "Note-$name.vtt"
+        val files = listOf(PhoneFile(fileName, 4), PhoneFile("Note-$name.mp3", 4))
+        var failures = 0
+        val hashes = readDocumentHashes(files, { throw java.io.IOException("unreadable") }, { failures++ })
+        assertEquals(1, failures)
+        assertTrue(hashes.isEmpty())
+        val destination = DriveDestination("account", "folder")
+        val remote = listOf(DriveFile("id", fileName, 4))
+        val receipt = DriveReceipt(destination, fileName, "id", "old-hash")
+        assertEquals(DriveWriteAction.UPDATE, DriveSync.action(fileName, FileKind.VTT, hashes[fileName], destination, remote, listOf(receipt)))
+    }
+
+    @Test fun phoneSnapshotDoesNotExposeHashesAfterFailureOrFolderChange() {
+        val snapshot = PhoneSnapshot(ok = true, documentHashes = mapOf("Note-20260101120000.vtt" to "hash"), folderUri = "folder")
+        assertEquals(1, snapshot.hashesFor("folder").size)
+        assertTrue(snapshot.copy(ok = false).hashesFor("folder").isEmpty())
+        assertTrue(snapshot.hashesFor("other").isEmpty())
+    }
+
     @Test
     fun `intention capturee puis validee durablement avec la protection`() = runBlocking {
         val repo = LocalStateRepository(LocalStateStore(file()))

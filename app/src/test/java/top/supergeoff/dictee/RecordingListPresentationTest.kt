@@ -24,6 +24,6 @@ class RecordingListPresentationTest {
         cases.forEach { (r, expected) -> assertEquals(expected, recordingListPresentation(r, UiState()).badge) }
         val all = recording(FileKind.MP3, FileKind.VTT, FileKind.MD)
         val drive = DriveListing(all.phoneFiles.values.associate { it.fileName to it.size })
-        assertEquals("Sur Drive", recordingListPresentation(all, UiState(local = LocalState(driveEnabled = true), drive = drive)).badge)
+        assertEquals("MD", recordingListPresentation(all, UiState(local = LocalState(driveEnabled = true), drive = drive)).badge)
     }
 }

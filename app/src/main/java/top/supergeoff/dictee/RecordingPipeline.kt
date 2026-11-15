@@ -32,6 +32,7 @@ fun PipelinePresentation.settingsDestination(input: PipelineInput): SettingsDest
 data class PipelineInput(
     val recording: Recording, val local: LocalState, val busy: Busy, val drive: DriveListing?, val connected: Boolean,
     val synthesisConfigured: Boolean, val provenance: ProvenanceStatus = ProvenanceStatus.UNKNOWN,
+    val documentHashes: Map<String, String> = emptyMap(),
 )
 
 fun canRetrySuspendedSynthesis(task: TranscriptionTask): Boolean {
@@ -98,10 +99,11 @@ object RecordingPipeline {
             !input.synthesisConfigured -> step(PipelineStage.MD, PipelineStatus.TODO, "À configurer", "Configure la synthèse dans les réglages.")
             else -> step(PipelineStage.MD, PipelineStatus.TODO, "À faire")
         }
+        val destination = input.local.driveAccount?.let { account -> input.local.chosenFolderId?.let { DriveDestination(account, it) } }
         val drive = when {
             input.busy.sending == r.name -> step(PipelineStage.DRIVE, PipelineStatus.RUNNING, "Envoi")
             errors[Step.SEND] != null -> step(PipelineStage.DRIVE, PipelineStatus.ERROR, "Erreur", errors[Step.SEND])
-            input.local.driveEnabled && input.drive != null && r.phoneFiles.isNotEmpty() && Recordings.missingInDrive(r, input.drive).isEmpty() ->
+            input.local.driveEnabled && input.drive != null && destination != null && DriveSync.isComplete(r, input.local.driveSendChoice, destination, input.drive.entries, input.documentHashes, input.local.driveReceipts) ->
                 step(PipelineStage.DRIVE, PipelineStatus.DONE, "Sur Drive")
             !input.local.driveEnabled -> step(PipelineStage.DRIVE, PipelineStatus.TODO, "Désactivé")
             else -> step(PipelineStage.DRIVE, PipelineStatus.TODO, "À faire")
@@ -118,6 +120,8 @@ object RecordingPipeline {
             errors[Step.RECOVER] != null -> button(PipelineAction.RETRY_RECOVERY, "Réessayer", input.connected)
             !hasMp3 && r.onBox -> button(PipelineAction.RECOVER, "Récupérer", input.connected)
             automaticWaiting != null && vtt.status == PipelineStatus.WAITING -> button(PipelineAction.OPEN_SETTINGS, "Ouvrir les réglages")
+            !hasMp3 && input.local.driveEnabled && Recordings.toSendCurrent(listOf(r), input.drive, input.local, input.documentHashes).isNotEmpty() ->
+                button(PipelineAction.SEND, "Envoyer sur Drive")
             !hasMp3 -> null
             vttError != null && vttError.suspended && (vttError.phase in setOf(TranscriptionPhase.SUBMITTING, TranscriptionPhase.UNKNOWN_SUBMISSION) || isLocalTranscriptionAbandon(vttError)) -> button(PipelineAction.RETRY_VTT, "Relance indisponible", enabled = false)
             vtt.status == PipelineStatus.ERROR -> button(PipelineAction.RETRY_VTT, "Réessayer le VTT")
@@ -128,7 +132,7 @@ object RecordingPipeline {
             !hasMd -> button(PipelineAction.CREATE_MD, "Créer le MD")
             input.provenance == ProvenanceStatus.STALE -> button(PipelineAction.REDO_MD, "Relancer le MD")
             errors[Step.SEND] != null && input.local.driveEnabled -> button(PipelineAction.RETRY_SEND, "Réessayer l'envoi")
-            input.local.driveEnabled && drive.status == PipelineStatus.TODO -> button(PipelineAction.SEND, "Envoyer sur Drive")
+            input.local.driveEnabled && drive.status == PipelineStatus.TODO && Recordings.toSendCurrent(listOf(r), input.drive, input.local, input.documentHashes).isNotEmpty() -> button(PipelineAction.SEND, "Envoyer sur Drive")
             else -> null
         }
         val badge = when {
@@ -138,7 +142,7 @@ object RecordingPipeline {
             md.status == PipelineStatus.RUNNING -> "Synthèse…"
             drive.status == PipelineStatus.RUNNING -> "Envoi…"
             steps.any { it.status == PipelineStatus.WAITING } -> "En attente"
-            drive.status == PipelineStatus.DONE -> "Sur Drive"
+            drive.status == PipelineStatus.DONE && md.status == PipelineStatus.DONE && vtt.status == PipelineStatus.DONE -> "Sur Drive"
             md.status == PipelineStatus.DONE -> "MD"
             vtt.status == PipelineStatus.DONE -> "VTT"
             phone.status == PipelineStatus.DONE -> "MP3"

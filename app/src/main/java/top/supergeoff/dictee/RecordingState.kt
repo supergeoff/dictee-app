@@ -8,7 +8,7 @@ import java.util.Locale
 data class PhoneFile(val fileName: String, val size: Long)
 
 /** Contenu du dossier Drive : nom → taille, lu une fois par rafraîchissement ou par envoi. */
-data class DriveListing(val files: Map<String, Long>)
+data class DriveListing(val files: Map<String, Long>, val entries: List<DriveFile> = emptyList())
 
 /** État affiché sur la ligne d'un enregistrement, avec son libellé. */
 sealed class DisplayState(val label: String) {
@@ -117,6 +117,17 @@ object Recordings {
     fun toSend(list: List<Recording>, drive: DriveListing?, errors: Map<String, Map<Step, String>> = emptyMap()): List<Recording> {
         val candidates = sendable(list, errors)
         return if (drive == null) candidates else candidates.filter { missingInDrive(it, drive).isNotEmpty() }
+    }
+
+    fun toSendCurrent(list: List<Recording>, drive: DriveListing?, local: LocalState, hashes: Map<String, String>): List<Recording> {
+        val destination = local.driveAccount?.let { account -> local.chosenFolderId?.let { DriveDestination(account, it) } }
+        return sendable(list, local.errors).filter { recording ->
+            recording.phoneFiles.any { (kind, file) ->
+                kind in DriveSync.requiredKinds(local.driveSendChoice) &&
+                    (drive == null || destination == null || DriveSync.action(file.fileName, kind, hashes[file.fileName], destination, drive.entries, local.driveReceipts) in
+                        setOf(DriveWriteAction.CREATE, DriveWriteAction.UPDATE))
+            }
+        }
     }
 
     /** Sélectionne les fichiers manquants et signale les exclusions. */
