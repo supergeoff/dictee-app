@@ -522,15 +522,13 @@ class AppModel(
         liveFlow.update { it.copy(driveSendRequest = null) }
     }
 
-    fun confirmDriveSend(choice: DriveSendChoice) {
+    fun confirmDriveSend(choice: DriveSendChoice, displayedNames: Set<String>) {
         synchronized(driveSendRequests) {
             val request = driveSendRequests.confirm(choice) ?: return
             liveFlow.update { it.copy(driveSendRequest = null, sending = true) }
             val local = localFlow
             val current = buildUi(local.copy(driveSendChoice = choice), phoneFlow.value, driveFlow.value, box.status.value, liveFlow.value)
-            val recordings = (if (request.names == null) current.toSend else
-                Recordings.sendable(current.recordings, local.errors).filter { it.name in request.names })
-                .filter { recording -> recording.phoneFiles.keys.any { it in DriveSync.requiredKinds(choice) } }
+            val recordings = DriveSync.confirmedSendable(current.recordings, current.drive, local, current.documentHashes, request, choice, displayedNames)
             scope.launch { sendNow(request, local, recordings) }
         }
     }

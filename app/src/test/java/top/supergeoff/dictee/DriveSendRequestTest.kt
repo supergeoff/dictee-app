@@ -54,6 +54,28 @@ class DriveSendRequestTest {
         assertEquals(1, mixed.missingMd)
     }
 
+    @Test fun globalDocumentsChoiceCountsMissingBeforeTypeFilter() {
+        val audio = recording.copy(name = "20261111120001", phoneFiles = mapOf(FileKind.MP3 to PhoneFile("Note-20261111120001.mp3", 4)))
+        val local = LocalState(driveSendChoice = DriveSendChoice.DOCUMENTS_ONLY)
+        val request = DriveSendRequest(null, DriveSendChoice.DOCUMENTS_ONLY)
+        fun summary(list: List<Recording>) = DriveSync.dialogSummary(list, null, local, emptyMap(), request, request.choice)
+        val only = summary(listOf(audio))
+        assertTrue(only.sendable.isEmpty())
+        assertEquals(1, only.missingVtt)
+        assertEquals(1, only.missingMd)
+        val mixed = summary(listOf(audio, recording))
+        assertEquals(listOf(recording), mixed.sendable)
+        assertEquals(1, mixed.missingVtt)
+        assertEquals(1, mixed.missingMd)
+        val explicit = DriveSync.dialogSummary(listOf(audio, recording), null, local, emptyMap(), request.copy(names = listOf(audio.name)), request.choice)
+        assertTrue(explicit.sendable.isEmpty())
+        assertEquals(1, explicit.missingVtt)
+        assertEquals(1, explicit.missingMd)
+        val newlyEligible = audio.copy(phoneFiles = audio.phoneFiles + (FileKind.VTT to PhoneFile("Note-${audio.name}.vtt", 4)))
+        val confirmed = DriveSync.confirmedSendable(listOf(newlyEligible, recording), null, local, emptyMap(), request, request.choice, mixed.sendable.map { it.name }.toSet())
+        assertEquals(listOf(recording), confirmed)
+    }
+
     @Test fun selectionClearsOnlyOnConfirmation() {
         val requests = DriveSendRequests()
         var clears = 0

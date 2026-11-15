@@ -44,6 +44,22 @@ enum class DriveWriteAction { SKIP, CREATE, UPDATE, CONFLICT }
 data class DriveSendSummary(val sendable: List<Recording>, val missingVtt: Int, val missingMd: Int)
 
 object DriveSync {
+    fun dialogSummary(
+        recordings: List<Recording>, drive: DriveListing?, local: LocalState, hashes: Map<String, String>,
+        request: DriveSendRequest, choice: DriveSendChoice,
+    ): DriveSendSummary {
+        val explicit = request.names?.let { names -> Recordings.sendable(recordings, local.errors).filter { it.name in names } }
+        val selected = explicit ?: Recordings.toSendCurrent(recordings, drive, local.copy(driveSendChoice = choice), hashes)
+        val warnings = explicit ?: Recordings.toSendCurrent(recordings, drive, local.copy(driveSendChoice = DriveSendChoice.ALL_FILES), hashes)
+        return sendSummary(warnings, choice).copy(sendable = sendSummary(selected, choice).sendable)
+    }
+
+    fun confirmedSendable(
+        recordings: List<Recording>, drive: DriveListing?, local: LocalState, hashes: Map<String, String>,
+        request: DriveSendRequest, choice: DriveSendChoice, displayedNames: Set<String>,
+    ): List<Recording> = dialogSummary(recordings, drive, local, hashes, request, choice)
+        .sendable.filter { it.name in displayedNames }
+
     fun sendSummary(recordings: List<Recording>, choice: DriveSendChoice) = DriveSendSummary(
         recordings.filter { recording -> recording.phoneFiles.keys.any { it in requiredKinds(choice) } },
         recordings.count { FileKind.VTT !in it.phoneFiles },

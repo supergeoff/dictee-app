@@ -16,25 +16,18 @@ import androidx.compose.ui.Modifier
 import top.supergeoff.dictee.DriveSendChoice
 import top.supergeoff.dictee.DriveSendRequest
 import top.supergeoff.dictee.DriveSync
-import top.supergeoff.dictee.Recordings
 import top.supergeoff.dictee.UiState
 
 @Composable
-internal fun DriveSendDialog(ui: UiState, request: DriveSendRequest, onConfirm: (DriveSendChoice) -> Unit, onDismiss: () -> Unit) {
+internal fun DriveSendDialog(ui: UiState, request: DriveSendRequest, onConfirm: (DriveSendChoice, Set<String>) -> Unit, onDismiss: () -> Unit) {
     var choice by remember(request) { mutableStateOf(request.choice) }
-    val selected = if (request.names == null) Recordings.toSendCurrent(ui.recordings, ui.drive, ui.local.copy(driveSendChoice = choice), ui.documentHashes)
-        else Recordings.sendable(ui.recordings, ui.local.errors).filter { it.name in request.names }
-    val initialSelection = if (request.names == null)
-        Recordings.toSendCurrent(ui.recordings, ui.drive, ui.local.copy(driveSendChoice = request.choice), ui.documentHashes)
-    else selected
-    val summary = DriveSync.sendSummary(selected, choice)
-    val warnings = DriveSync.sendSummary(initialSelection, choice)
+    val summary = DriveSync.dialogSummary(ui.recordings, ui.drive, ui.local, ui.documentHashes, request, choice)
     val recordings = summary.sendable
-    val missingVtt = warnings.missingVtt
-    val missingMd = warnings.missingMd
+    val missingVtt = summary.missingVtt
+    val missingMd = summary.missingMd
     val folder = ui.local.knownFolders.firstOrNull { it.id == ui.local.chosenFolderId }?.name
         ?: ui.local.chosenFolderId ?: "à résoudre avant l'envoi"
-    DicteeDialog(title = "Envoyer sur Drive", confirm = "Envoyer", onConfirm = { onConfirm(choice) }, onDismiss = onDismiss,
+    DicteeDialog(title = "Envoyer sur Drive", confirm = "Envoyer", onConfirm = { onConfirm(choice, recordings.map { it.name }.toSet()) }, onDismiss = onDismiss,
         confirmEnabled = recordings.isNotEmpty()) {
         Column {
             Text("Compte : ${ui.local.driveAccount ?: "indisponible"}", style = Dictee.type.body, color = Dictee.colors.text)
