@@ -22,6 +22,13 @@ data class PipelineInput(
     val synthesisConfigured: Boolean, val provenance: ProvenanceStatus = ProvenanceStatus.UNKNOWN,
 )
 
+fun canRetrySuspendedSynthesis(task: TranscriptionTask): Boolean {
+    val work = task.synthesis ?: return false
+    val context = work.context ?: return false
+    return task.phase == TranscriptionPhase.SYNTHESIZING && work.phase == SynthesisPhase.SUSPENDED &&
+        (work.stagedSha256 != null || (!context.vttSha256.isNullOrBlank() && !context.systemPrompt.isNullOrBlank()))
+}
+
 object RecordingPipeline {
     fun calculate(input: PipelineInput): PipelinePresentation {
         val r = input.recording
@@ -59,6 +66,7 @@ object RecordingPipeline {
             else -> step(PipelineStage.VTT, PipelineStatus.TODO, "À faire")
         }
         val mdSuspended = synthesis?.phase == SynthesisPhase.SUSPENDED && input.synthesisConfigured
+        val mdRetryAvailable = task != null && canRetrySuspendedSynthesis(task)
         val md = when {
             rank != null && inSynthesis && rank == 1 -> {
                 val attempt = synthesis?.attempts?.coerceAtLeast(1) ?: 1
@@ -68,7 +76,7 @@ object RecordingPipeline {
                 step(PipelineStage.MD, PipelineStatus.RUNNING, "Synthèse $attempt/3", reason)
             }
             rank != null && inSynthesis -> step(PipelineStage.MD, PipelineStatus.WAITING, "En attente", waitingReason)
-            mdSuspended -> step(PipelineStage.MD, PipelineStatus.ERROR, "Suspendue", synthesis?.suspensionReason ?: task?.suspensionReason ?: "Synthèse suspendue.")
+            mdSuspended -> step(PipelineStage.MD, PipelineStatus.ERROR, "Suspendue", if (!mdRetryAvailable) "Relance indisponible : contexte de synthèse incomplet." else synthesis?.suspensionReason ?: task?.suspensionReason ?: "Synthèse suspendue.")
             hasMd && input.provenance == ProvenanceStatus.STALE -> step(PipelineStage.MD, PipelineStatus.TODO, "Ancien VTT", "Cette synthèse utilise l'ancien VTT.")
             hasMd -> step(PipelineStage.MD, PipelineStatus.DONE, "Fait")
             !input.synthesisConfigured -> step(PipelineStage.MD, PipelineStatus.TODO, "À configurer", "Configure la synthèse dans les réglages.")
@@ -98,7 +106,7 @@ object RecordingPipeline {
             vtt.status == PipelineStatus.ERROR -> button(PipelineAction.RETRY_VTT, "Réessayer le VTT")
             !hasVtt && !hasMd -> button(PipelineAction.CREATE_VTT_AND_MD, "Créer le VTT et le MD")
             !hasVtt -> button(PipelineAction.CREATE_VTT, "Créer le VTT")
-            mdSuspended -> button(PipelineAction.RETRY_MD, "Relancer le MD")
+            mdSuspended -> button(PipelineAction.RETRY_MD, "Relancer le MD", enabled = mdRetryAvailable)
             !hasMd && !input.synthesisConfigured -> button(PipelineAction.OPEN_SETTINGS, "Ouvrir les réglages")
             !hasMd -> button(PipelineAction.CREATE_MD, "Créer le MD")
             input.provenance == ProvenanceStatus.STALE -> button(PipelineAction.REDO_MD, "Relancer le MD")

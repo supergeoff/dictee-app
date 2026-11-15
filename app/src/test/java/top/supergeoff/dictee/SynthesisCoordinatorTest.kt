@@ -195,11 +195,19 @@ class SynthesisCoordinatorTest {
         val initial = task()
         store.save(LocalState(transcriptionTasks = listOf(initial.copy(suspended = true,
             synthesis = initial.synthesis!!.copy(phase = SynthesisPhase.SUSPENDED, context = null, attempts = 1, stagedSha256 = "a".repeat(64))))))
+        val state = store.load()
+        val recording = Recording(initial.recordingName, RecordType.NOTE, 100, true,
+            mapOf(FileKind.MP3 to PhoneFile(initial.mp3Name, 100), FileKind.VTT to PhoneFile(initial.vttName, 100)), DisplayState.OnBox)
+        val presentation = RecordingPipeline.calculate(PipelineInput(recording, state, Busy(), null, true, true))
+        assertEquals(PipelineAction.RETRY_MD, presentation.button?.action)
+        assertFalse(presentation.button!!.enabled)
+        assertTrue(presentation.reason!!.text.contains("contexte"))
         val coordinator = coordinator(LocalStateRepository(store))
         coordinator.retrySynthesis("id")
         coordinator.runBounded("id")
         assertEquals(0, calls)
         assertEquals(1, store.load().transcriptionTasks.single().synthesis!!.attempts)
+        assertTrue(store.load().transcriptionTasks.single().suspended)
     }
 
     @Test fun invalidResponseSuspendsImmediately() = runBlocking {

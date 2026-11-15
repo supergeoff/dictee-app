@@ -76,15 +76,38 @@ class TranscriptionCoordinatorTest {
         val client = FakeClient()
         val coordinator = TranscriptionCoordinator(repository, client, TranscriptionSettingsManager(repository, credentials),
             RecoverySafety(repository), verifyAudio = { true }, prepare = { emptyList() }, schedule = { })
-        assertEquals(listOf(pending.localId), coordinator.start(setOf(pending.recordingName, uncertain.recordingName)))
+        assertEquals(listOf(pending.localId), coordinator.start(setOf(pending.recordingName), resumeRecording = true))
         val tasks = repository.awaitInitialized().transcriptionTasks
         assertFalse(tasks.first().suspended)
         assertEquals(0, tasks.first().submitAttempts)
         assertTrue(tasks.last().suspended)
+        assertTrue(coordinator.start(setOf(uncertain.recordingName), resumeRecording = true).isEmpty())
+        assertTrue(repository.awaitInitialized().transcriptionTasks.last().suspended)
         coordinator.runBounded(pending.localId)
         assertEquals(1, client.submissions)
         coordinator.runBounded(uncertain.localId)
         assertEquals(1, client.submissions)
+    }
+
+    @Test fun `collective requests never resume excluded suspended tasks with or without selection`() = runBlocking {
+        for (selected in listOf(false, true)) {
+            val suspended = task().copy(suspended = true, suspensionReason = "attente")
+            val eligible = task(id = "eligible").copy(recordingName = "20261112120000")
+            store.save(LocalState(transcriptionTasks = listOf(suspended)))
+            val repo = LocalStateRepository(store)
+            val client = FakeClient()
+            val scheduled = mutableListOf<String>()
+            val coordinator = TranscriptionCoordinator(repo, client, TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
+                verifyAudio = { true }, prepareRequested = { _, _, active ->
+                    assertTrue(suspended.recordingName in active)
+                    listOf(eligible)
+                }, schedule = { scheduled += it })
+            val names = if (selected) setOf(suspended.recordingName, eligible.recordingName) else null
+            assertEquals(listOf(eligible.localId), coordinator.start(names))
+            assertTrue(repo.awaitInitialized().transcriptionTasks.first().suspended)
+            assertEquals(listOf(eligible.localId), scheduled)
+            assertEquals(0, client.submissions)
+        }
     }
 
     @Test fun `missing request resumes suspended tracking and saving without submitting again`() = runBlocking {
@@ -96,7 +119,7 @@ class TranscriptionCoordinatorTest {
             val coordinator = TranscriptionCoordinator(repo, client, TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
                 verifyAudio = { true }, prepare = { emptyList() }, schedule = { },
                 saveVtt = { _, _, promote -> promote {} })
-            assertEquals(listOf(suspended.localId), coordinator.start(setOf(suspended.recordingName)))
+            assertEquals(listOf(suspended.localId), coordinator.start(setOf(suspended.recordingName), resumeRecording = true))
             assertFalse(store.load().transcriptionTasks.single().suspended)
             coordinator.runBounded(suspended.localId)
             assertEquals(0, client.submissions)

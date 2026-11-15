@@ -80,7 +80,7 @@ class SynthesisRecordingUiTest {
         val presentation = PipelinePresentation(steps, PipelineReason(PipelineStage.MD, "Synthèse suspendue."),
             PipelineButton(PipelineAction.RETRY_MD, "Relancer le MD"), "Erreur", null)
         compose.setContent { DicteeTheme(true) { PipelineCard(presentation) { action = it } } }
-        compose.onNodeWithText("Synthèse suspendue.").assertIsDisplayed()
+        compose.onNodeWithText("MD · Synthèse suspendue.").assertIsDisplayed()
         compose.onNodeWithText("Relancer le MD").performClick()
         compose.runOnIdle { assertEquals(PipelineAction.RETRY_MD, action) }
     }

@@ -139,14 +139,10 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
                     PipelineAction.REMOVE_FROM_QUEUE -> model.cancelTranscription(name)
                     PipelineAction.RECOVER, PipelineAction.RETRY_RECOVERY -> model.recover(listOf(name))
                     PipelineAction.SEND, PipelineAction.RETRY_SEND -> model.send(listOf(name))
-                    PipelineAction.CREATE_VTT, PipelineAction.CREATE_VTT_AND_MD, PipelineAction.RETRY_VTT, PipelineAction.CREATE_MD ->
+                    PipelineAction.CREATE_VTT, PipelineAction.CREATE_VTT_AND_MD, PipelineAction.CREATE_MD ->
                         model.transcribe(setOf(name), RequestedWork.MISSING)
-                    PipelineAction.RETRY_MD -> {
-                        val work = task?.synthesis
-                        val resumable = task?.phase == TranscriptionPhase.SYNTHESIZING && work?.context != null &&
-                            (work.stagedSha256 != null || (!work.context.vttSha256.isNullOrBlank() && !work.context.systemPrompt.isNullOrBlank()))
-                        if (resumable) model.retrySynthesis(task!!.localId) else model.transcribe(setOf(name), RequestedWork.MISSING)
-                    }
+                    PipelineAction.RETRY_VTT -> model.transcribe(setOf(name), RequestedWork.MISSING, resumeRecording = true)
+                    PipelineAction.RETRY_MD -> task?.let { model.retrySynthesis(it.localId) }
                     PipelineAction.REDO_MD -> model.transcribe(setOf(name), RequestedWork.REDO_MD)
                     PipelineAction.OPEN_SETTINGS -> onSettings()
                 }

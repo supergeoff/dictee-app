@@ -462,13 +462,13 @@ class AppModel(
      * Lance la transcription de [names] (null : tout ce qui est éligible). La planification WorkManager est confirmée avant
      * la tâche durable et le service ; la boucle interactive suit ensuite les tâches jusqu'à leur fin ou leur suspension.
      */
-    fun transcribe(names: Set<String>?, request: RequestedWork = RequestedWork.MISSING) {
+    fun transcribe(names: Set<String>?, request: RequestedWork = RequestedWork.MISSING, resumeRecording: Boolean = false) {
         scope.launch {
             jobs.track {
                 try {
                     if (request == RequestedWork.MISSING) announceExclusions(names)
                     logTranscriptionRequest(names, request)
-                    val started = transcriptionCoordinator.start(names, request)
+                    val started = transcriptionCoordinator.start(names, request, resumeRecording)
                     if (started.isEmpty()) reportUnconfiguredSynthesis(names, request)
                     if (started.isNotEmpty()) transcriptionLifecycle.request().join()
                 } catch (e: CancellationException) {

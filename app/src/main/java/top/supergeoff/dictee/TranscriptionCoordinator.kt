@@ -80,9 +80,10 @@ class TranscriptionCoordinator(
         for (task in all.filterNot { it.phase.isTerminal() }) schedule(task.localId)
     }
 
-    suspend fun start(names: Set<String>?, request: RequestedWork = RequestedWork.MISSING): List<String> {
+    suspend fun start(names: Set<String>?, request: RequestedWork = RequestedWork.MISSING, resumeRecording: Boolean = false): List<String> {
+        require(!resumeRecording || (request == RequestedWork.MISSING && names?.size == 1))
         val source = if (request == RequestedWork.REDO_MD) Source.LLM else Source.STT
-        val resumed = if (request == RequestedWork.MISSING) resumeSuspendedTranscriptions(names) else emptyList()
+        val resumed = if (resumeRecording) resumeSuspendedTranscriptions(checkNotNull(names)) else emptyList()
         val existing = withMutexJournal(source, null) { repository.awaitInitialized().transcriptionTasks }
         val active = existing.filterNot { it.phase.isTerminal() }.map { it.recordingName }.toSet()
         // La préparation relit le dossier : elle ne tient aucun verrou, un appui ne doit pas attendre un appel réseau.
@@ -96,9 +97,9 @@ class TranscriptionCoordinator(
         } else commitPrepared(prepared)
     }
 
-    private suspend fun resumeSuspendedTranscriptions(names: Set<String>?): List<String> = mutex.withLock {
+    private suspend fun resumeSuspendedTranscriptions(names: Set<String>): List<String> = mutex.withLock {
         val tasks = repository.awaitInitialized().transcriptionTasks.filter {
-            it.suspended && !isLocalTranscriptionAbandon(it) && (names == null || it.recordingName in names) &&
+            it.suspended && !isLocalTranscriptionAbandon(it) && it.recordingName in names &&
                 it.phase in setOf(TranscriptionPhase.PENDING, TranscriptionPhase.TRACKING, TranscriptionPhase.SAVING)
         }
         if (tasks.isEmpty()) return@withLock emptyList()
@@ -178,8 +179,7 @@ class TranscriptionCoordinator(
     suspend fun retrySynthesis(localId: String) = mutex.withLock {
         val task = repository.awaitInitialized().transcriptionTasks.firstOrNull { it.localId == localId } ?: return@withLock
         val work = task.synthesis ?: return@withLock
-        if (task.phase != TranscriptionPhase.SYNTHESIZING || work.phase != SynthesisPhase.SUSPENDED || work.context == null ||
-            (work.stagedSha256 == null && (work.context.vttSha256.isNullOrBlank() || work.context.systemPrompt.isNullOrBlank()))) return@withLock
+        if (!canRetrySuspendedSynthesis(task)) return@withLock
         val recovered = try {
             withContext(Dispatchers.IO) { promotionGuard.withLock {
                 work.stagedSha256 ?: if (work.attempts > 0) synthesisStorage?.stagedSha256(localId) else null

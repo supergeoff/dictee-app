@@ -90,6 +90,14 @@ class RecordingPipelineTest {
         assertFalse(result(input(connected = false)).button!!.enabled)
     }
 
+    @Test fun suspendedSynthesisWithMissingContextCannotRetry() {
+        val suspended = task(TranscriptionPhase.SYNTHESIZING, suspended = true, work = work(SynthesisPhase.SUSPENDED))
+        val presentation = result(input(r = recording(FileKind.MP3, FileKind.VTT), tasks = listOf(suspended)))
+        assertEquals(PipelineAction.RETRY_MD, presentation.button?.action)
+        assertFalse(presentation.button!!.enabled)
+        assertTrue(presentation.reason!!.text.contains("contexte"))
+    }
+
     @Test fun queueRankIgnoresSuspendedAndTerminalTasks() {
         val names = listOf("20261109120000", "20261110120000", name)
         val tasks = listOf(task(name = "20261101120000", suspended = true), task(TranscriptionPhase.COMPLETED, name = "20261102120000")) + names.map { task(name = it) }
