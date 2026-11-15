@@ -359,39 +359,35 @@ private fun ActionBar(ui: UiState, model: AppModel, checked: Set<String>?, onDon
     val transcribe = Recordings.toTranscribe(ui.recordings, checked, ui.local.errors, active).candidates.map { it.name }
     val recoverCount = recoverNames?.size ?: ui.toRecover.size
     val sendCount = sendNames?.size ?: ui.toSend.size
+    ActionBarButtons(
+        recoverText = if (ui.recovering) "Récupération…" else "Récupérer ($recoverCount)",
+        recoverEnabled = ui.link == LinkStatus.CONNECTED && !ui.recovering && recoverCount > 0,
+        transcribeCount = transcribe.size,
+        sendText = if (ui.sending) "Envoi…" else "Envoyer ($sendCount)",
+        sendEnabled = !ui.sending && sendCount > 0,
+        driveEnabled = ui.local.driveEnabled,
+        onRecover = { model.recover(recoverNames); onDone() },
+        onTranscribe = { model.transcribe(checked); onDone() },
+        onSend = { model.send(sendNames); onDone() },
+    )
+}
+
+@Composable
+internal fun ActionBarButtons(
+    recoverText: String, recoverEnabled: Boolean, transcribeCount: Int,
+    sendText: String, sendEnabled: Boolean, driveEnabled: Boolean,
+    onRecover: () -> Unit, onTranscribe: () -> Unit, onSend: () -> Unit,
+) {
     Column(modifier = Modifier.fillMaxWidth().background(Dictee.colors.surface).navigationBarsPadding()) {
         HorizontalDivider(color = Dictee.colors.border)
         Row(
             modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            PrimaryButton(
-                text = if (ui.recovering) "Récupération…" else "Récupérer ($recoverCount)",
-                enabled = ui.link == LinkStatus.CONNECTED && !ui.recovering && recoverCount > 0,
-                modifier = Modifier.weight(1f),
-                icon = R.drawable.ic_download,
-            ) {
-                model.recover(recoverNames)
-                onDone()
-            }
-            SecondaryButton(
-                text = "VTT + MD (${transcribe.size})",
-                enabled = transcribe.isNotEmpty(),
-                modifier = Modifier.weight(1f),
-            ) {
-                model.transcribe(checked)
-                onDone()
-            }
-            if (ui.local.driveEnabled) {
-                SecondaryButton(
-                    text = if (ui.sending) "Envoi…" else "Envoyer ($sendCount)",
-                    enabled = !ui.sending && sendCount > 0,
-                    modifier = Modifier.weight(1f),
-                    icon = R.drawable.ic_upload,
-                ) {
-                    model.send(sendNames)
-                    onDone()
-                }
+            ActionBarButton(recoverText, primary = true, enabled = recoverEnabled, modifier = Modifier.weight(1f), onClick = onRecover)
+            ActionBarButton("VTT + MD ($transcribeCount)", primary = false, enabled = transcribeCount > 0, modifier = Modifier.weight(1f), onClick = onTranscribe)
+            if (driveEnabled) {
+                ActionBarButton(sendText, primary = false, enabled = sendEnabled, modifier = Modifier.weight(1f), onClick = onSend)
             }
         }
     }
