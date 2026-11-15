@@ -8,6 +8,13 @@ class RecordingListPresentationTest {
     private fun recording(vararg kinds: FileKind) = Recording(name, RecordType.NOTE, 100, true,
         kinds.associateWith { PhoneFile(RecordName.fileName(RecordType.NOTE, name, it), 100) }, DisplayState.OnBox)
 
+    @Test fun staleProvenanceMatchesDetailPipeline() {
+        val all = recording(FileKind.MP3, FileKind.VTT, FileKind.MD)
+        val ui = UiState()
+        val detail = RecordingPipeline.calculate(PipelineInput(all, ui.local, ui.busy, ui.drive, false, false, ProvenanceStatus.STALE))
+        assertEquals(detail.badge, recordingListPresentation(all, ui, ProvenanceStatus.STALE).badge)
+    }
+
     @Test fun listBadgeUsesPipeline() {
         val cases = listOf(
             recording(FileKind.MP3) to "MP3",

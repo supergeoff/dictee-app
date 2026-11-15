@@ -63,12 +63,12 @@ data class UiState(
         get() = if (local.driveEnabled) Recordings.toSend(recordings, drive, local.errors) else emptyList()
 }
 
-internal fun recordingListPresentation(recording: Recording, ui: UiState): PipelinePresentation {
+internal fun recordingListPresentation(recording: Recording, ui: UiState, provenance: ProvenanceStatus = ProvenanceStatus.UNKNOWN): PipelinePresentation {
     val settings = ui.local.synthesisSettings
     val configured = settings.baseUrl != "/v1" && isValidSynthesisBaseUrl(settings.baseUrl) &&
         settings.model.isNotBlank() && settings.prompt.isNotBlank() && !settings.credentialRef.isNullOrBlank()
     return RecordingPipeline.calculate(PipelineInput(recording, ui.local, ui.busy, ui.drive,
-        ui.link == LinkStatus.CONNECTED && !ui.recovering, configured))
+        ui.link == LinkStatus.CONNECTED && !ui.recovering, configured, provenance))
 }
 
 /** État à afficher avant que les écrans puissent lire l'état local. */

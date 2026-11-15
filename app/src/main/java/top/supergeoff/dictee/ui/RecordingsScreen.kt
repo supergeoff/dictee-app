@@ -34,6 +34,7 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -45,6 +46,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import top.supergeoff.dictee.AppModel
 import top.supergeoff.dictee.LinkStatus
+import top.supergeoff.dictee.FileKind
+import top.supergeoff.dictee.ProvenanceStatus
 import top.supergeoff.dictee.R
 import top.supergeoff.dictee.RecordName
 import top.supergeoff.dictee.RecordType
@@ -57,6 +60,8 @@ import top.supergeoff.dictee.recordingListPresentation
 import top.supergeoff.dictee.PipelinePresentation
 import top.supergeoff.dictee.PipelineStatus
 import java.time.LocalDate
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Filtres de la liste, chacun avec son compteur. « Sur le boîtier » garde ce qui n'est pas encore récupéré.
@@ -139,6 +144,7 @@ fun RecordingsScreen(ui: UiState, model: AppModel, onOpen: (name: String) -> Uni
                 else -> RecordingList(
                     recordings = shown,
                     ui = ui,
+                    model = model,
                     checked = checked,
                     onClick = { name -> if (checked != null) selection.toggle(name) else onOpen(name) },
                     onLongClick = { name -> if (checked == null) selection.start(name) },
@@ -213,6 +219,7 @@ private fun Filters(recordings: List<Recording>, selected: Filter, onSelect: (Fi
 private fun RecordingList(
     recordings: List<Recording>,
     ui: UiState,
+    model: AppModel,
     checked: Set<String>?,
     onClick: (name: String) -> Unit,
     onLongClick: (name: String) -> Unit,
@@ -224,7 +231,7 @@ private fun RecordingList(
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         // Le libellé du jour n'a pas d'année : la clé est le premier enregistrement du groupe, unique par construction.
-        items(groups, key = { it.second.first().name }) { (day, group) -> DayGroup(day, group, ui, checked, onClick, onLongClick) }
+        items(groups, key = { it.second.first().name }) { (day, group) -> DayGroup(day, group, ui, model, checked, onClick, onLongClick) }
     }
 }
 
@@ -234,6 +241,7 @@ private fun DayGroup(
     day: String,
     recordings: List<Recording>,
     ui: UiState,
+    model: AppModel,
     checked: Set<String>?,
     onClick: (name: String) -> Unit,
     onLongClick: (name: String) -> Unit,
@@ -244,9 +252,15 @@ private fun DayGroup(
         Column(modifier = Modifier.fillMaxWidth().card()) {
             recordings.forEachIndexed { index, recording ->
                 if (index > 0) HorizontalDivider(color = colors.border)
+                val md = recording.phoneFiles[FileKind.MD]
+                val vtt = recording.phoneFiles[FileKind.VTT]
+                val provenance by produceState(ProvenanceStatus.UNKNOWN, md, vtt, ui.local.synthesisProvenance, ui.local.transcriptionTasks, ui.refreshing, ui.phoneRevision) {
+                    value = ProvenanceStatus.UNKNOWN
+                    if (md != null) value = withContext(Dispatchers.IO) { model.readSynthesis(md.fileName, vtt?.fileName).getOrNull()?.status } ?: ProvenanceStatus.UNKNOWN
+                }
                 RecordingRow(
                     recording = recording,
-                    presentation = recordingListPresentation(recording, ui),
+                    presentation = recordingListPresentation(recording, ui, provenance),
                     subject = ui.local.recordingSubjects[recording.name],
                     checked = checked?.let { recording.name in it },
                     onClick = { onClick(recording.name) },
