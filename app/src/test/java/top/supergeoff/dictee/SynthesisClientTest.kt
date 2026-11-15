@@ -68,6 +68,15 @@ class SynthesisClientTest {
         assertNull(client.subject(context, vtt))
     }
 
+    @Test fun subjectHttpErrorAndTimeoutConfiguration() = runBlocking {
+        val client = client(timeout = 7_200_000)
+        reply(body = response("Sujet valide"))
+        assertEquals("Sujet valide", client.subject(context, vtt))
+        assertEquals(60_000, connections.single().readTimeout)
+        reply(500, "provider-sensitive synthetic-secret")
+        expect(SynthesisFailureKind.TRANSIENT) { client.subject(context, vtt) }
+    }
+
     @Test fun chatSendsFrozenSystemAndCompleteVtt() = runBlocking {
         reply()
         val client = client()

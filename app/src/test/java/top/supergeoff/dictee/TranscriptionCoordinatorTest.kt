@@ -87,6 +87,23 @@ class TranscriptionCoordinatorTest {
         assertEquals(1, client.submissions)
     }
 
+    @Test fun `missing request resumes suspended tracking and saving without submitting again`() = runBlocking {
+        for (phase in listOf(TranscriptionPhase.TRACKING, TranscriptionPhase.SAVING)) {
+            val suspended = task(phase = phase).copy(suspended = true, serverId = "server-1")
+            store.save(LocalState(transcriptionTasks = listOf(suspended)))
+            val repo = LocalStateRepository(store)
+            val client = FakeClient().apply { onGet = { completed() } }
+            val coordinator = TranscriptionCoordinator(repo, client, TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
+                verifyAudio = { true }, prepare = { emptyList() }, schedule = { },
+                saveVtt = { _, _, promote -> promote {} })
+            assertEquals(listOf(suspended.localId), coordinator.start(setOf(suspended.recordingName)))
+            assertFalse(store.load().transcriptionTasks.single().suspended)
+            coordinator.runBounded(suspended.localId)
+            assertEquals(0, client.submissions)
+            assertEquals(1, client.reads)
+        }
+    }
+
     @Test fun `schedule is confirmed before durable task creation and service launch`() = runBlocking {
         val repository = LocalStateRepository(store)
         val client = FakeClient()

@@ -1,5 +1,11 @@
 package top.supergeoff.dictee.ui
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -18,6 +24,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.style.TextAlign
@@ -36,6 +44,10 @@ internal fun PipelineStage.title(): String = when (this) {
 
 @Composable
 internal fun PipelineCard(presentation: PipelinePresentation, onAction: (PipelineAction) -> Unit) {
+    val rotation = rememberInfiniteTransition(label = "progression").animateFloat(
+        initialValue = 0f, targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(1200, easing = LinearEasing), RepeatMode.Restart), label = "rotation",
+    )
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Column(Modifier.fillMaxWidth().card().padding(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
@@ -71,7 +83,7 @@ internal fun PipelineCard(presentation: PipelinePresentation, onAction: (Pipelin
                                     PipelineStatus.ERROR -> Text("!", color = color, style = Dictee.type.captionStrong)
                                     else -> Canvas(Modifier.size(22.dp)) {
                                         val stroke = Stroke(1.5.dp.toPx(), pathEffect = if (step.status == PipelineStatus.WAITING) PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx())) else null)
-                                        if (step.status == PipelineStatus.RUNNING) drawArc(color, -90f, 260f, false, style = stroke)
+                                        if (step.status == PipelineStatus.RUNNING) drawArc(color, -90f + rotation.value, 260f, false, style = stroke)
                                         else drawCircle(color, style = stroke)
                                     }
                                 }
@@ -89,7 +101,12 @@ internal fun PipelineCard(presentation: PipelinePresentation, onAction: (Pipelin
                     PipelineStatus.WAITING -> Dictee.colors.warningSurface
                     else -> Dictee.colors.muted
                 }
-                Text("${reason.stage.title()} · ${reason.text}", modifier = Modifier.fillMaxWidth().background(background, RoundedCornerShape(10.dp)).padding(12.dp), style = Dictee.type.caption, color = Dictee.colors.text)
+                val reasonIndex = presentation.steps.indexOfFirst { it.stage == reason.stage }
+                Text("${reason.stage.title()} · ${reason.text}", modifier = Modifier.fillMaxWidth().drawBehind {
+                    val x = size.width * (reasonIndex + .5f) / presentation.steps.size
+                    val tip = 5.dp.toPx()
+                    drawPath(Path().apply { moveTo(x - tip, 0f); lineTo(x, -tip); lineTo(x + tip, 0f); close() }, background)
+                }.background(background, RoundedCornerShape(10.dp)).padding(12.dp), style = Dictee.type.caption, color = Dictee.colors.text)
             }
         }
         presentation.button?.let { action ->

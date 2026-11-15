@@ -110,6 +110,20 @@ class RecordingPipelineTest {
         assertFalse(cancellingPresentation.button!!.enabled)
     }
 
+    @Test fun uncertainSubmissionCannotBeRetried() {
+        val uncertain = task(TranscriptionPhase.UNKNOWN_SUBMISSION, suspended = true)
+        val presentation = result(input(r = recording(FileKind.MP3), tasks = listOf(uncertain)))
+        assertFalse(presentation.button!!.enabled)
+        assertTrue(presentation.reason!!.text.contains("risque"))
+    }
+
+    @Test fun suspendedTaskWithIncompleteContextCannotBeRetried() {
+        val invalid = task(suspended = true).copy(encryptedKeyRef = "")
+        val presentation = result(input(r = recording(FileKind.MP3), tasks = listOf(invalid)))
+        assertFalse(presentation.button!!.enabled)
+        assertTrue(presentation.reason!!.text.contains("contexte"))
+    }
+
     @Test fun callingSynthesisDoesNotShowRetryReason() {
         val calling = work().copy(nextAttemptAtMillis = 123456789L)
         val presentation = result(input(r = recording(FileKind.MP3, FileKind.VTT), tasks = listOf(task(TranscriptionPhase.SYNTHESIZING, work = calling))))

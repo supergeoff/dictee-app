@@ -211,7 +211,7 @@ private fun TextAction(text: String, onClick: () -> Unit) {
 
 /** Le formulaire reste dans le modèle pendant la sauvegarde et ne préremplit jamais la clé. */
 @Composable
-private fun TranscriptionSection(local: LocalState, form: TranscriptionSettingsForm) {
+internal fun TranscriptionSection(local: LocalState, form: TranscriptionSettingsForm) {
     LaunchedEffect(form) { form.initialize(local.transcriptionSettings) }
     val draft by form.state.collectAsState()
     val settings = local.transcriptionSettings
@@ -221,7 +221,7 @@ private fun TranscriptionSection(local: LocalState, form: TranscriptionSettingsF
                 Text("L’ancienne adresse de transcription était invalide. Saisis une adresse de serveur et enregistre les réglages.", color = Dictee.colors.textSecondary)
             }
             OutlinedTextField(draft.baseUrl, form::setBaseUrl, enabled = draft.initialized && !draft.saving, label = { Text("Adresse du serveur (/v1)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(draft.secret, form::setSecret, enabled = draft.initialized && !draft.saving, label = { Text("Clé") }, placeholder = { if (settings.credentialRef != null) Text("••••••••") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(draft.secret, form::setSecret, enabled = draft.initialized && !draft.saving, label = { Text("Clé") }, placeholder = { if (settings.credentialRef != null) Text("••••••••") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth().testTag("transcription-secret"))
             Text(if (settings.credentialRef == null) "Aucune clé enregistrée" else "Une clé est enregistrée. Saisis une nouvelle clé pour la remplacer.", color = Dictee.colors.textSecondary)
             OutlinedTextField(draft.language, form::setLanguage, enabled = draft.initialized && !draft.saving, label = { Text("Langue") }, supportingText = { Text("auto : détection automatique (français et anglais).") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(draft.model, form::setModel, enabled = draft.initialized && !draft.saving, label = { Text("Modèle") }, singleLine = true, modifier = Modifier.fillMaxWidth())

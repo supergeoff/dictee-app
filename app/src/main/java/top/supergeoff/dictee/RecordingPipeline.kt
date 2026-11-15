@@ -51,6 +51,8 @@ object RecordingPipeline {
                 step(PipelineStage.VTT, PipelineStatus.RUNNING, label)
             }
             rank != null && !inSynthesis -> step(PipelineStage.VTT, PipelineStatus.WAITING, "En attente", waitingReason)
+            vttError?.phase in setOf(TranscriptionPhase.SUBMITTING, TranscriptionPhase.UNKNOWN_SUBMISSION) -> step(PipelineStage.VTT, PipelineStatus.ERROR, "Envoi incertain", "La demande a peut-être été reçue. Relance impossible sans risque de double soumission.")
+            vttError != null && isLocalTranscriptionAbandon(vttError) -> step(PipelineStage.VTT, PipelineStatus.ERROR, "Contexte incomplet", "La relance est indisponible car le contexte de transcription est incomplet.")
             vttError != null -> step(PipelineStage.VTT, PipelineStatus.ERROR, "Erreur", vttError.suspensionReason ?: vttError.error ?: "Transcription impossible.")
             errors[Step.TRANSCRIBE] != null && !hasVtt -> step(PipelineStage.VTT, PipelineStatus.ERROR, "Erreur", errors[Step.TRANSCRIBE])
             hasVtt -> step(PipelineStage.VTT, PipelineStatus.DONE, "Fait")
@@ -92,6 +94,7 @@ object RecordingPipeline {
             errors[Step.RECOVER] != null -> button(PipelineAction.RETRY_RECOVERY, "Réessayer", input.connected)
             !hasMp3 && r.onBox -> button(PipelineAction.RECOVER, "Récupérer", input.connected)
             !hasMp3 -> null
+            vttError != null && vttError.suspended && (vttError.phase in setOf(TranscriptionPhase.SUBMITTING, TranscriptionPhase.UNKNOWN_SUBMISSION) || isLocalTranscriptionAbandon(vttError)) -> button(PipelineAction.RETRY_VTT, "Relance indisponible", enabled = false)
             vtt.status == PipelineStatus.ERROR -> button(PipelineAction.RETRY_VTT, "Réessayer le VTT")
             !hasVtt && !hasMd -> button(PipelineAction.CREATE_VTT_AND_MD, "Créer le VTT et le MD")
             !hasVtt -> button(PipelineAction.CREATE_VTT, "Créer le VTT")
