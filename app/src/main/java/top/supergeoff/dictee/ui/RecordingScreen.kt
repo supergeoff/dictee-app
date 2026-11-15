@@ -73,6 +73,8 @@ import top.supergeoff.dictee.PipelineAction
 import top.supergeoff.dictee.PipelineInput
 import top.supergeoff.dictee.RecordingPipeline
 import top.supergeoff.dictee.isValidSynthesisBaseUrl
+import top.supergeoff.dictee.SettingsDestination
+import top.supergeoff.dictee.settingsDestination
 
 /**
  * Fiche d'un enregistrement : parcours et action principale, lecteur du MP3, puis documents en lecture seule.
@@ -80,7 +82,7 @@ import top.supergeoff.dictee.isValidSynthesisBaseUrl
  * Si l'enregistrement quitte la liste (fichier retiré du dossier), la fiche se ferme : elle n'aurait plus rien à montrer.
  */
 @Composable
-fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Unit, onSettings: () -> Unit) {
+fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Unit, onSettings: (SettingsDestination) -> Unit) {
     val recording = ui.recordings.firstOrNull { it.name == name }
     if (recording == null) {
         LaunchedEffect(Unit) { onBack() }
@@ -131,8 +133,9 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
             val settings = ui.local.synthesisSettings
             val configured = settings.baseUrl != "/v1" && isValidSynthesisBaseUrl(settings.baseUrl) &&
                 settings.model.isNotBlank() && settings.prompt.isNotBlank() && !settings.credentialRef.isNullOrBlank()
-            val presentation = RecordingPipeline.calculate(PipelineInput(recording, ui.local, ui.busy, ui.drive,
-                ui.link == LinkStatus.CONNECTED && !ui.recovering, configured, current?.status ?: ProvenanceStatus.UNKNOWN))
+            val input = PipelineInput(recording, ui.local, ui.busy, ui.drive,
+                ui.link == LinkStatus.CONNECTED && !ui.recovering, configured, current?.status ?: ProvenanceStatus.UNKNOWN)
+            val presentation = RecordingPipeline.calculate(input)
             PipelineCard(presentation) { action ->
                 when (action) {
                     PipelineAction.CANCEL_VTT, PipelineAction.CANCEL_MD -> confirmCancel = true
@@ -144,7 +147,7 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
                     PipelineAction.RETRY_VTT -> model.transcribe(setOf(name), RequestedWork.MISSING, resumeRecording = true)
                     PipelineAction.RETRY_MD -> task?.let { model.retrySynthesis(it.localId) }
                     PipelineAction.REDO_MD -> model.transcribe(setOf(name), RequestedWork.REDO_MD)
-                    PipelineAction.OPEN_SETTINGS -> onSettings()
+                    PipelineAction.OPEN_SETTINGS -> onSettings(presentation.settingsDestination(input))
                 }
             }
             val mp3 = recording.phoneFiles[FileKind.MP3]

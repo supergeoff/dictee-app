@@ -33,7 +33,7 @@ data class KnownFolder(val id: String, val name: String, val origin: FolderOrigi
 /** Étape de traitement d'un enregistrement, dont l'erreur est gardée jusqu'à une réussite. */
 enum class Step { RECOVER, SEND, TRANSCRIBE }
 
-/** État local tenu dans `state.json`, version 5. */
+/** État local tenu dans `state.json`, version 6. */
 data class LocalState(
     val deviceAddress: String? = null,
     val deviceName: String? = null,
@@ -52,7 +52,33 @@ data class LocalState(
     val synthesisSettings: SynthesisSettings = SynthesisSettings(),
     val synthesisProvenance: List<SynthesisProvenance> = emptyList(),
     val recordingSubjects: Map<String, String> = emptyMap(),
+    val autoProcessAfterRecovery: Boolean = false,
+    val automaticProcessingRequests: List<AutomaticProcessingRequest> = emptyList(),
 ) {
+    /** Capture le réglage au début d'un transfert, sans activer rétroactivement les anciens MP3. */
+    fun beginAutomaticRecovery(name: String, folderUri: String, id: String): LocalState {
+        val sameFile = automaticProcessingRequests.filter { it.recordingName == name && it.folderUri == folderUri }
+        return if (autoProcessAfterRecovery) {
+            copy(automaticProcessingRequests = automaticProcessingRequests.filterNot { it in sameFile } +
+                AutomaticProcessingRequest(id, name, folderUri, AutomaticProcessingPhase.RECOVERING))
+        } else {
+            copy(automaticProcessingRequests = automaticProcessingRequests.filterNot {
+                it.recordingName == name && it.folderUri == folderUri && it.phase == AutomaticProcessingPhase.RECOVERING
+            })
+        }
+    }
+
+    /** Valide l'intention uniquement après succès et retire toute intention après un échec. */
+    fun finishAutomaticRecovery(result: RecoveryResult, folderUri: String): LocalState {
+        val success = result is RecoveryResult.Ok
+        val requests = automaticProcessingRequests.mapNotNull { request ->
+            if (request.recordingName != result.name || request.folderUri != folderUri ||
+                request.phase != AutomaticProcessingPhase.RECOVERING) request
+            else if (success) request.copy(phase = AutomaticProcessingPhase.READY) else null
+        }
+        return if (requests == automaticProcessingRequests) this else copy(automaticProcessingRequests = requests)
+    }
+
     /** Ajoute l'erreur de cette étape, ou remplace celle qu'elle avait déjà pour ce nom. */
     fun withError(name: String, step: Step, message: String): LocalState =
         copy(errors = errors + (name to (errors[name].orEmpty() + (step to message))))
@@ -167,6 +193,14 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
                 }
             })
             .put("recordingSubjects", JSONObject().apply { state.recordingSubjects.forEach { (name, subject) -> put(name, subject) } })
+            .put("autoProcessAfterRecovery", state.autoProcessAfterRecovery)
+            .put("automaticProcessingRequests", JSONArray().apply {
+                state.automaticProcessingRequests.forEach { request ->
+                    put(JSONObject().put("id", request.id).put("recordingName", request.recordingName)
+                        .put("folderUri", request.folderUri).put("phase", request.phase.name)
+                        .put("reason", request.reason ?: JSONObject.NULL))
+                }
+            })
             .put("transcriptionTasks", JSONArray().apply {
                 state.transcriptionTasks.forEach { task ->
                     put(JSONObject()
@@ -221,6 +255,17 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
             recordingSubjects = if (version >= 5) json.objectOrNull("recordingSubjects")?.let { subjects ->
                 subjects.keys().asSequence().mapNotNull { name -> subjects.stringOrNull(name)?.let { name to it } }.toMap()
             }.orEmpty() else emptyMap(),
+            autoProcessAfterRecovery = if (version >= 6) json.booleanOr("autoProcessAfterRecovery", false) else false,
+            automaticProcessingRequests = if (version >= 6) json.arrayOrNull("automaticProcessingRequests")?.let { requests ->
+                List(requests.length()) { i ->
+                    val request = requests.getJSONObject(i)
+                    val phaseName = request.getString("phase")
+                    val phase = AutomaticProcessingPhase.entries.firstOrNull { it.name == phaseName }
+                        ?: throw JSONException("Phase de traitement automatique inconnue : $phaseName")
+                    AutomaticProcessingRequest(request.getString("id"), request.getString("recordingName"),
+                        request.getString("folderUri"), phase, request.stringOrNull("reason"))
+                }
+            }.orEmpty() else emptyList(),
         )
     }
 
@@ -354,7 +399,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
     }
 
     private companion object {
-        const val VERSION = 5
+        const val VERSION = 6
     }
 }
 
@@ -484,7 +529,7 @@ private inline fun <reified T : Enum<T>> String?.toEnumOr(default: T): T =
     enumValues<T>().firstOrNull { it.name == this } ?: default
 
 /** Sérialise les transferts et marque durablement un MP3 avant de pouvoir l'écrire.
- * Les futurs traitements lisant des MP3 doivent aussi utiliser ce verrou et l'état du dépôt. */
+ * La création d'une tâche lisant un MP3 partage ce verrou ; une tâche active protège ensuite son enregistrement. */
 class RecoverySafety(private val repository: LocalStateRepository) {
     private val transferMutex = kotlinx.coroutines.sync.Mutex()
 
@@ -510,6 +555,32 @@ class RecoverySafety(private val repository: LocalStateRepository) {
         } catch (e: Exception) {
             throw RecoveryGuardException(e)
         }
+    }
+
+    suspend fun begin(name: String, folderUri: String) {
+        try {
+            repository.updateDurably { state ->
+                check(state.transcriptionTasks.none { !it.phase.isTerminal() && it.recordingName == name }) {
+                    "Enregistrement utilisé par une transcription active"
+                }
+                state.withError(name, Step.RECOVER, "Récupération interrompue ou en cours")
+                    .beginAutomaticRecovery(name, folderUri, java.util.UUID.randomUUID().toString())
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (e: Exception) { throw RecoveryGuardException(e) }
+    }
+
+    suspend fun finish(result: RecoveryResult, folderUri: String) {
+        try {
+            repository.updateDurably { state ->
+                val protected = when (result) {
+                    is RecoveryResult.Ok -> state.withoutError(result.name, Step.RECOVER)
+                    is RecoveryResult.Failed -> state.withError(result.name, Step.RECOVER, result.reason)
+                }
+                protected.finishAutomaticRecovery(result, folderUri)
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (e: Exception) { throw RecoveryGuardException(e) }
     }
 
     suspend fun finish(result: RecoveryResult) {

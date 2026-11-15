@@ -17,6 +17,18 @@ data class PipelineButton(val action: PipelineAction, val label: String, val ena
 data class PipelinePresentation(
     val steps: List<PipelineStep>, val reason: PipelineReason?, val button: PipelineButton?, val badge: String, val queueRank: Int?,
 )
+enum class SettingsDestination { STORAGE, TRANSCRIPTION, SYNTHESIS }
+
+fun PipelinePresentation.settingsDestination(input: PipelineInput): SettingsDestination {
+    val waiting = steps.single { it.stage == PipelineStage.VTT }
+    if (button?.action != PipelineAction.OPEN_SETTINGS || waiting.status != PipelineStatus.WAITING) return SettingsDestination.SYNTHESIS
+    val request = input.local.automaticProcessingRequests.lastOrNull {
+        it.recordingName == input.recording.name && it.phase == AutomaticProcessingPhase.WAITING_SETTINGS
+    }
+    return if (request != null && request.folderUri != input.local.phoneTreeUri) SettingsDestination.STORAGE
+    else SettingsDestination.TRANSCRIPTION
+}
+
 data class PipelineInput(
     val recording: Recording, val local: LocalState, val busy: Busy, val drive: DriveListing?, val connected: Boolean,
     val synthesisConfigured: Boolean, val provenance: ProvenanceStatus = ProvenanceStatus.UNKNOWN,
@@ -50,6 +62,9 @@ object RecordingPipeline {
             r.onBox -> step(PipelineStage.PHONE, PipelineStatus.TODO, "Sur le boîtier")
             else -> step(PipelineStage.PHONE, PipelineStatus.TODO, "Absent")
         }
+        val automaticWaiting = input.local.automaticProcessingRequests.lastOrNull {
+            it.recordingName == r.name && it.phase == AutomaticProcessingPhase.WAITING_SETTINGS
+        }?.takeIf { input.busy.recovering != r.name && rank == null && task?.phase != TranscriptionPhase.CANCEL_REQUESTED }
         val vttError = task?.takeIf { !inSynthesis && (it.phase == TranscriptionPhase.FAILED || it.suspended) }
         val vtt = when {
             task?.phase == TranscriptionPhase.CANCEL_REQUESTED || (rank == 1 && !inSynthesis) -> {
@@ -62,6 +77,7 @@ object RecordingPipeline {
             vttError != null && isLocalTranscriptionAbandon(vttError) -> step(PipelineStage.VTT, PipelineStatus.ERROR, "Contexte incomplet", "La relance est indisponible car le contexte de transcription est incomplet.")
             vttError != null -> step(PipelineStage.VTT, PipelineStatus.ERROR, "Erreur", vttError.suspensionReason ?: vttError.error ?: "Transcription impossible.")
             errors[Step.TRANSCRIBE] != null && !hasVtt -> step(PipelineStage.VTT, PipelineStatus.ERROR, "Erreur", errors[Step.TRANSCRIBE])
+            automaticWaiting != null -> step(PipelineStage.VTT, PipelineStatus.WAITING, "À configurer", automaticWaiting.reason)
             hasVtt -> step(PipelineStage.VTT, PipelineStatus.DONE, "Fait")
             else -> step(PipelineStage.VTT, PipelineStatus.TODO, "À faire")
         }
@@ -101,6 +117,7 @@ object RecordingPipeline {
             input.busy.recovering == r.name -> null
             errors[Step.RECOVER] != null -> button(PipelineAction.RETRY_RECOVERY, "Réessayer", input.connected)
             !hasMp3 && r.onBox -> button(PipelineAction.RECOVER, "Récupérer", input.connected)
+            automaticWaiting != null && vtt.status == PipelineStatus.WAITING -> button(PipelineAction.OPEN_SETTINGS, "Ouvrir les réglages")
             !hasMp3 -> null
             vttError != null && vttError.suspended && (vttError.phase in setOf(TranscriptionPhase.SUBMITTING, TranscriptionPhase.UNKNOWN_SUBMISSION) || isLocalTranscriptionAbandon(vttError)) -> button(PipelineAction.RETRY_VTT, "Relance indisponible", enabled = false)
             vtt.status == PipelineStatus.ERROR -> button(PipelineAction.RETRY_VTT, "Réessayer le VTT")

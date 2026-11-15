@@ -67,7 +67,7 @@ class TranscriptionWorkerRunnerTest {
         val service = launch { observeServiceWork(ui, jobs) { _, active -> if (active == 0) stopped.complete(Unit) } }
         val scheduler = TestCoroutineScheduler()
         val interactiveScope = kotlinx.coroutines.CoroutineScope(coroutineContext + UnconfinedTestDispatcher(scheduler))
-        val lifecycle = InteractiveTranscriptionLifecycle(interactiveScope) { runner.run() }
+        val lifecycle = InteractiveTranscriptionLifecycle(interactiveScope) { excluded -> runner.run(excluded) }
         val interactive = launch { try { lifecycle.request().join() } finally { jobs.end() } }
         withTimeout(5_000) { entered.await() }
         scheduler.advanceTimeBy(100)
@@ -108,7 +108,7 @@ class TranscriptionWorkerRunnerTest {
             })
         val scheduler = TestCoroutineScheduler()
         val interactiveScope = kotlinx.coroutines.CoroutineScope(coroutineContext + UnconfinedTestDispatcher(scheduler))
-        val lifecycle = InteractiveTranscriptionLifecycle(interactiveScope) { runner.run() }
+        val lifecycle = InteractiveTranscriptionLifecycle(interactiveScope) { excluded -> runner.run(excluded) }
         val first = lifecycle.request()
         withTimeout(5_000) { waiting.await() }
         val second = lifecycle.request()
@@ -155,6 +155,39 @@ class TranscriptionWorkerRunnerTest {
         assertEquals(listOf("local-1"), scheduled)
         assertEquals(TranscriptionPhase.COMPLETED, disk.load().transcriptionTasks.single().phase)
         assertEquals(listOf("local-1"), removed)
+    }
+
+    @Test fun `new request during handoff follows other work without retrying handed off task`() = runBlocking {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val seen = mutableListOf<Set<String>>()
+        val lifecycle = InteractiveTranscriptionLifecycle(this) { excluded ->
+            seen += excluded.toSet()
+            if (seen.size == 1) {
+                entered.complete(Unit)
+                release.await()
+                excluded.add("timed-out")
+                InteractiveRun.Handoff
+            } else InteractiveRun.QueueEmpty
+        }
+        val first = lifecycle.request()
+        withTimeout(5_000) { entered.await() }
+        val second = lifecycle.request()
+        release.complete(Unit)
+        withTimeout(5_000) { first.join(); second.join() }
+        assertEquals(listOf(emptySet<String>(), setOf("timed-out")), seen)
+    }
+
+    @Test fun `interactive handoff excludes timed out task from next read`() = runBlocking {
+        disk.save(LocalState(transcriptionTasks = listOf(synthesisTask())))
+        val repo = LocalStateRepository(disk)
+        val coordinator = synthesisCoordinator(repo, synthesisClient { CompletableDeferred<Unit>().await(); byteArrayOf() }) { 1_000L }
+        val worker = TranscriptionWorkerRunner(repo, coordinator, {})
+        val runner = TranscriptionInteractiveRunner(repo, coordinator, worker, timeoutMs = 100)
+        val excluded = mutableSetOf<String>()
+        assertEquals(InteractiveRun.Handoff, runner.run(excluded))
+        assertEquals(setOf("local-1"), excluded)
+        assertEquals(InteractiveRun.QueueEmpty, runner.run(excluded))
     }
 
     @Test fun `stopping interactive lifecycle leaves scheduled synthesis to worker`() = runBlocking {
@@ -349,6 +382,50 @@ class TranscriptionWorkerRunnerTest {
         assertEquals(listOf("vtt", "md"), order)
         assertEquals(setOf("vtt", "md"), removed.toSet())
         assertTrue(disk.load().transcriptionTasks.first { it.localId == "blocked" }.suspended)
+    }
+
+    @Test fun `worker reports durable completion even when callback fails and processes next task`() = runBlocking {
+        val first = synthesisTask("first", "20261110120000")
+        val second = synthesisTask("second", "20261111120000")
+        disk.save(LocalState(transcriptionTasks = listOf(first, second)))
+        val repo = LocalStateRepository(disk)
+        val phone = MemoryStore().apply { files["audio.vtt"] = vtt }
+        val notices = mutableListOf<ProcessingResultNotice>()
+        val coordinator = TranscriptionCoordinator(repo, Client(), TranscriptionSettingsManager(repo, credentials), RecoverySafety(repo),
+            verifyAudio = { true }, synthesisClient = synthesisClient { "# Synthèse".toByteArray() },
+            synthesisStorage = SynthesisStorage(File(tmp.root, "notice-stage")), phoneStore = { phone },
+            synthesisCredentialAccessible = { true }, onProcessingResult = { notice ->
+                assertEquals(TranscriptionPhase.COMPLETED, disk.load().transcriptionTasks.first { it.localId == notice.taskId }.phase)
+                notices += notice
+                throw IllegalStateException("notification inaccessible")
+            })
+        val worker = TranscriptionWorkerRunner(repo, coordinator, {})
+        worker.run("first", 0)
+        // Each task needs a distinct destination to avoid replacing the first MD.
+        phone.files.remove("audio.md")
+        worker.run("second", 0)
+        assertEquals(listOf("first", "second"), notices.map { it.taskId })
+        assertTrue(disk.load().transcriptionTasks.all { it.phase == TranscriptionPhase.COMPLETED })
+    }
+
+    @Test fun `worker reports persisted inaccessible credentials suspension once`() = runBlocking {
+        disk.save(LocalState(transcriptionTasks = listOf(task())))
+        val repo = LocalStateRepository(disk)
+        val inaccessible = object : CredentialStore {
+            override fun save(secret: String) = "ref"
+            override fun read(ref: String): String = throw IllegalStateException("secret")
+            override fun remove(ref: String) = Unit
+        }
+        val notices = mutableListOf<ProcessingResultNotice>()
+        val coordinator = TranscriptionCoordinator(repo, Client(), TranscriptionSettingsManager(repo, inaccessible), RecoverySafety(repo),
+            verifyAudio = { true }, onProcessingResult = {
+                assertTrue(disk.load().transcriptionTasks.single().suspended)
+                notices += it
+            })
+        val worker = TranscriptionWorkerRunner(repo, coordinator, {})
+        worker.run("local-1", 0)
+        worker.run("local-1", 0)
+        assertTrue(notices.single().text.endsWith("Clé inaccessible. Vérifie les réglages de transcription."))
     }
 
     @Test fun `notification identifies synthesis instead of transcription`() {

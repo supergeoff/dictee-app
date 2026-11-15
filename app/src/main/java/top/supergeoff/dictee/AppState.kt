@@ -148,6 +148,7 @@ private fun reasonOf(e: Throwable): String {
 class AppModel(
     private val app: Application,
     repository: LocalStateRepository? = null,
+    private val transcriptionCoordinatorFactory: ((LocalStateRepository) -> TranscriptionCoordinator)? = null,
 ) {
     val journal = Journal(File(app.filesDir, "journal")) { LocalDateTime.now() }
     private val liveFlow = MutableStateFlow(Live())
@@ -169,6 +170,7 @@ class AppModel(
     val synthesisSettings = SynthesisSettingsManager(localRepository, synthesisCredentials)
     private val synthesisClient = UrlSynthesisClient(synthesisCredentials, log = journal)
     internal val transcriptionCoordinator: TranscriptionCoordinator by lazy {
+        transcriptionCoordinatorFactory?.let { return@lazy it(localRepository) }
         val scheduler = TranscriptionSchedule(androidx.work.WorkManager.getInstance(app))
         val client = UrlTranscriptionClient(transcriptionCredentials, { task ->
             PhoneFolder(app, task.folderUri.toUri()).open(task.mp3Name)
@@ -182,6 +184,11 @@ class AppModel(
                 val folder = state.phoneTreeUri ?: throw PhoneStoreException(PHONE_FOLDER_LOST)
                 TranscriptionPreparation.prepare(PhoneFolder(app, folder.toUri()), folder,
                     state.transcriptionSettings, state.errors, names, state.synthesisSettings, request, active) { java.util.UUID.randomUUID().toString() }
+            } },
+            prepareAutomatic = { name, folder -> withContext(Dispatchers.IO) {
+                val state = localRepository.awaitInitialized()
+                TranscriptionPreparation.prepareAutomatic(PhoneFolder(app, folder.toUri()), folder,
+                    state.transcriptionSettings, state.errors, name, state.synthesisSettings) { java.util.UUID.randomUUID().toString() }
             } },
             synthesisClient = synthesisClient,
             synthesisStorage = SynthesisStorage(File(app.filesDir, "synthesis")),
@@ -199,7 +206,12 @@ class AppModel(
                 } finally { spool.delete() }
             } },
             onFilesPromoted = { folder -> readPhoneAfterPromotion(folder) },
-            launch = { startWork() })
+            onProcessingResult = ProcessingNotifications(app)::show,
+            launch = { transcriptionStarter.requestAutomatic() })
+    }
+
+    private val automaticProcessingCoordinator by lazy {
+        AutomaticProcessingCoordinator(localRepository, transcriptionCoordinator, journal)
     }
 
     private val scope = CoroutineScope(
@@ -229,6 +241,16 @@ class AppModel(
     internal val jobs = ActiveWork()
 
     private val foregroundBoxGate = ForegroundBoxGate()
+    private val transcriptionLifecycle by lazy { InteractiveTranscriptionLifecycle(scope, ::followTranscriptions) }
+    private val transcriptionStarter by lazy {
+        InteractiveTranscriptionStarter(scope, jobs, ::startWork, transcriptionLifecycle,
+            canResume = { foregroundBoxGate.isForeground },
+            canLaunchAutomatically = { foregroundBoxGate.isForeground || liveFlow.value.recovering })
+    }
+
+    init {
+        scope.launch { reconcileProcessing() }
+    }
     @Volatile private var searching = false   // la feuille de recherche du boîtier est ouverte : le modèle ne rouvre pas la liaison
     @Volatile private var afterBluetooth: (() -> Unit)? = null
     @Volatile private var afterPhoneFolder: (() -> Unit)? = null
@@ -273,8 +295,24 @@ class AppModel(
 
     fun onForeground() {
         foregroundBoxGate.onForeground()
-        scope.launch { transcriptionCoordinator.reconcile() }
+        scope.launch { reconcileProcessing() }
         scope.launch { refreshWhenForeground(refreshCoordinator, { foregroundBoxGate.isForeground }, ::readForRefresh) }
+    }
+
+    private suspend fun reconcileProcessing() {
+        try { transcriptionCoordinator.reconcile() }
+        catch (e: CancellationException) { throw e }
+        catch (e: Exception) { journal.error(Source.APP, "Reprise des traitements impossible : ${reasonOf(e)}") }
+        reconcileAutomaticProcessing()
+        try { transcriptionStarter.resume(localRepository) }
+        catch (e: CancellationException) { throw e }
+        catch (e: Exception) { journal.error(Source.APP, "Reprise du suivi impossible : ${reasonOf(e)}") }
+    }
+
+    private suspend fun reconcileAutomaticProcessing() {
+        try { automaticProcessingCoordinator.reconcile() }
+        catch (e: CancellationException) { throw e }
+        catch (e: Exception) { journal.error(Source.APP, "Programmation automatique impossible : ${reasonOf(e)}") }
     }
 
     fun onBackground() {
@@ -383,7 +421,7 @@ class AppModel(
         jobs.begin()
         try {
             startWork()
-            recoverySafety.withTransferLock { runRecovery(address, uri, entries) }
+            runRecovery(address, uri, entries)
         } finally {
             jobs.end()
             liveFlow.update { it.copy(recovering = false, recovery = null, recoveryName = null) }
@@ -409,7 +447,10 @@ class AppModel(
                 box.withSession(address) { session ->
                     connected = true
                     RecoveryJob(session, PhoneFolder(app, uri), File(app.cacheDir, "recovery"), journal)
-                        .run(entries, ::publishRecovery, ::applyRecovery) { entry -> recoverySafety.begin(entry.name) }
+                        .run(entries, ::publishRecovery, ::applyRecovery,
+                            beforeRecovery = { entry -> recoverySafety.begin(entry.name, uri.toString()) },
+                            validateResult = { result -> recoverySafety.finish(result, uri.toString()) },
+                            withRecoveryLock = { block -> recoverySafety.withTransferLock(block) })
                 }
             }
         }
@@ -419,7 +460,7 @@ class AppModel(
                 val message = reasonOf(e)
                 say(message)
                 journal.error(Source.FS, message)
-            } else if (connected) markRecoveryFailed(e) else say(OUT_OF_RANGE)
+            } else if (connected) markRecoveryFailed(e, uri.toString()) else say(OUT_OF_RANGE)
         }
         readPhone()
         if (!foregroundBoxGate.isForeground) box.close()
@@ -433,13 +474,15 @@ class AppModel(
     }
 
     private suspend fun applyRecovery(result: RecoveryResult) {
-        recoverySafety.finish(result)
         readPhone()
+        reconcileAutomaticProcessing()
     }
 
-    private suspend fun markRecoveryFailed(e: Throwable) {
+    private suspend fun markRecoveryFailed(e: Throwable, folderUri: String) {
         liveFlow.value.recoveryName?.let { name ->
-            recoverySafety.finish(RecoveryResult.Failed(name, reasonOf(e), true))
+            recoverySafety.withTransferLock {
+                recoverySafety.finish(RecoveryResult.Failed(name, reasonOf(e), true), folderUri)
+            }
         }
     }
 
@@ -455,8 +498,6 @@ class AppModel(
             if (localFlow.driveEnabled && !liveFlow.value.sending) sendNow(names)
         }
     }
-
-    private val transcriptionLifecycle = InteractiveTranscriptionLifecycle(scope, ::followTranscriptions)
 
     /**
      * Lance la transcription de [names] (null : tout ce qui est éligible). La planification WorkManager est confirmée avant
@@ -521,10 +562,10 @@ class AppModel(
         synthesisSelectionMessage(current.recordings, names, state.errors, active)?.let { say(it) }
     }
 
-    private suspend fun followTranscriptions(): InteractiveRun {
+    private suspend fun followTranscriptions(excluded: MutableSet<String>): InteractiveRun {
         val scheduler = TranscriptionSchedule(androidx.work.WorkManager.getInstance(app))
         val runner = TranscriptionWorkerRunner(localRepository, transcriptionCoordinator, scheduler::cancel)
-        return TranscriptionInteractiveRunner(localRepository, transcriptionCoordinator, runner).run()
+        return TranscriptionInteractiveRunner(localRepository, transcriptionCoordinator, runner).run(excluded)
     }
 
     /** Demande l'annulation de la transcription de [name] ; l'intention est persistée avant tout appel au serveur. */
@@ -811,8 +852,11 @@ class AppModel(
 
     fun setTheme(theme: ThemeChoice) { appLocalState.setTheme(theme) }
 
+    fun setAutoProcessAfterRecovery(enabled: Boolean) { update { it.copy(autoProcessAfterRecovery = enabled) } }
+
     val transcriptionForm = TranscriptionSettingsForm(scope) { settings, secret ->
         withContext(Dispatchers.IO) { transcriptionSettings.save(settings, secret) }
+        reconcileAutomaticProcessing()
     }
     val synthesisForm = SynthesisSettingsForm(scope,
         save = { settings, secret -> withContext(Dispatchers.IO) { synthesisSettings.saveService(settings, secret) } },

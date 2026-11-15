@@ -86,6 +86,21 @@ class RecoveryJobTest {
     }
 
     @Test
+    fun `validation sous garde et resultat hors garde pour chaque entree`() = runTest {
+        var locked = false
+        val events = mutableListOf<String>()
+        val labels = mutableListOf<String>()
+        job(sending(), MemoryStore()).run(listOf(entry(b), entry(a)), { _, p -> labels += p.label() },
+            onResult = { assertTrue(!locked); events += "result:${it.name}" },
+            beforeRecovery = { assertTrue(locked); events += "begin:${it.name}" },
+            validateResult = { assertTrue(locked); events += "validate:${it.name}" },
+            withRecoveryLock = { block -> locked = true; try { block() } finally { locked = false } })
+        assertEquals(listOf("begin:$a", "validate:$a", "result:$a", "begin:$b", "validate:$b", "result:$b"), events)
+        assertEquals("Récupération 1/2 · 0 %", labels.first())
+        assertEquals("Récupération 2/2 · 100 %", labels.last())
+    }
+
+    @Test
     fun `l'avancement compte la file et suit les octets`() = runTest {
         val labels = mutableListOf<String>()
         job(sending(), MemoryStore()).run(listOf(entry(b), entry(a)), { _, p -> labels += p.label() }, {})

@@ -141,7 +141,7 @@ class TranscriptionSettingsManager(private val repository: LocalStateRepository,
     }
 
     /** Appelé par un futur coordinateur avant tout effet réseau. */
-    suspend fun readForTask(localId: String): String? {
+    suspend fun readForTask(localId: String, onTransition: (TranscriptionTask, TranscriptionTask) -> Unit = { _, _ -> }): String? {
         val task = repository.awaitInitialized().transcriptionTasks.firstOrNull { it.localId == localId } ?: return null
         if (task.serverAddress.isEmpty()) return null
         return try {
@@ -149,14 +149,18 @@ class TranscriptionSettingsManager(private val repository: LocalStateRepository,
         } catch (e: CancellationException) { throw e }
         catch (_: Exception) {
             try {
+                var transition: Pair<TranscriptionTask, TranscriptionTask>? = null
                 repository.updateDurably { state ->
                     state.copy(transcriptionTasks = state.transcriptionTasks.map { current ->
                         if (current.localId == localId && current.encryptedKeyRef == task.encryptedKeyRef &&
-                            !current.phase.isTerminal())
-                            current.copy(suspended = true, suspensionReason = "Clé inaccessible. Vérifie les réglages de transcription.")
-                        else current
+                            !current.phase.isTerminal()) {
+                            val next = current.copy(suspended = true, suspensionReason = "Clé inaccessible. Vérifie les réglages de transcription.")
+                            transition = current to next
+                            next
+                        } else current
                     })
                 }
+                transition?.let { (previous, next) -> try { onTransition(previous, next) } catch (_: Exception) { } }
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) { throw CredentialException() }
             null

@@ -34,6 +34,55 @@ class AppStateIntegrationTest {
     }
 
     @Test
+    fun `intention capturee puis validee durablement avec la protection`() = runBlocking {
+        val repo = LocalStateRepository(LocalStateStore(file()))
+        repo.updateDurably { it.copy(autoProcessAfterRecovery = true) }
+        val safety = RecoverySafety(repo)
+        safety.begin(name, "folder")
+        var state = LocalStateStore(file()).load()
+        assertTrue(Step.RECOVER in state.errors.getValue(name))
+        assertEquals(AutomaticProcessingPhase.RECOVERING, state.automaticProcessingRequests.single().phase)
+        repo.updateDurably { it.copy(autoProcessAfterRecovery = false) }
+        safety.finish(RecoveryResult.Ok(name, "Call-$name.mp3", 10), "folder")
+        state = LocalStateStore(file()).load()
+        assertFalse(state.errors.containsKey(name))
+        assertEquals(AutomaticProcessingPhase.READY, state.automaticProcessingRequests.single().phase)
+    }
+
+    @Test
+    fun `une tache devenue active interdit le debut de la recuperation`() = runBlocking {
+        val repo = LocalStateRepository(LocalStateStore(file()))
+        val task = sampleTask()
+        repo.updateDurably { it.copy(transcriptionTasks = listOf(task)) }
+        val safety = RecoverySafety(repo)
+        try {
+            safety.withTransferLock { safety.begin(task.recordingName, task.folderUri) }
+            fail("le MP3 actif ne doit pas être remplacé")
+        } catch (_: RecoveryGuardException) { }
+        assertTrue(repo.awaitInitialized().automaticProcessingRequests.isEmpty())
+    }
+
+    @Test
+    fun `echec de validation durable conserve protection et intention non programmable`() = runBlocking {
+        val writes = AtomicInteger()
+        val disk = LocalStateStore(file(), rename = { from, to ->
+            if (writes.incrementAndGet() == 3) false else from.renameTo(to)
+        })
+        val repo = LocalStateRepository(disk)
+        repo.updateDurably { it.copy(autoProcessAfterRecovery = true) }
+        val safety = RecoverySafety(repo)
+        safety.begin(name, "folder")
+        try {
+            safety.finish(RecoveryResult.Ok(name, "Call-$name.mp3", 10), "folder")
+            fail("la validation doit échouer")
+        } catch (_: RecoveryGuardException) { }
+        val state = LocalStateStore(file()).load()
+        assertTrue(Step.RECOVER in state.errors.getValue(name))
+        assertEquals(AutomaticProcessingPhase.RECOVERING, state.automaticProcessingRequests.single().phase)
+        assertTrue(state.transcriptionTasks.isEmpty())
+    }
+
+    @Test
     fun `la recuperation echouee conserve la protection pendant et apres un echec de sauvegarde`() = runBlocking {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)

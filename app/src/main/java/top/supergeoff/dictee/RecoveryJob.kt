@@ -2,6 +2,8 @@ package top.supergeoff.dictee
 
 import java.io.File
 
+private suspend fun withoutRecoveryLock(block: suspend () -> RecoveryResult): RecoveryResult = block()
+
 /** Résultat de la récupération d'un enregistrement, identifié par son nom à 14 chiffres. */
 sealed class RecoveryResult {
     abstract val name: String
@@ -24,6 +26,14 @@ class RecoveryJob(
     private val log: Log,
 ) {
 
+    /** Conserve l'appel historique avec une lambda finale de préparation. */
+    suspend fun run(
+        entries: List<ListItem.Entry>,
+        onProgress: (name: String, progress: Progress) -> Unit,
+        onResult: suspend (RecoveryResult) -> Unit,
+        beforeRecovery: suspend (ListItem.Entry) -> Unit,
+    ): List<RecoveryResult> = run(entries, onProgress, onResult, beforeRecovery, {}, ::withoutRecoveryLock)
+
     /**
      * Vide [cacheDir], puis récupère les [entries] de la plus ancienne à la plus récente.
      * [onProgress] reçoit le nom en cours avec son avancement : 0 % au départ, puis les octets reçus.
@@ -35,6 +45,8 @@ class RecoveryJob(
         onProgress: (name: String, progress: Progress) -> Unit,
         onResult: suspend (RecoveryResult) -> Unit,
         beforeRecovery: suspend (ListItem.Entry) -> Unit = {},
+        validateResult: suspend (RecoveryResult) -> Unit = {},
+        withRecoveryLock: suspend (suspend () -> RecoveryResult) -> RecoveryResult = ::withoutRecoveryLock,
     ): List<RecoveryResult> {
         cacheDir.mkdirs()
         cacheDir.listFiles().orEmpty().forEach { it.deleteRecursively() }
@@ -42,9 +54,12 @@ class RecoveryJob(
         val results = mutableListOf<RecoveryResult>()
         for ((i, entry) in queue.withIndex()) {
             fun progress(percent: Int) = Progress(ProgressKind.RECOVERY, i + 1, queue.size, percent)
-            beforeRecovery(entry)
-            onProgress(entry.name, progress(0))
-            val result = recover(entry) { received, expected -> onProgress(entry.name, progress(percentOf(received, expected))) }
+            val result = withRecoveryLock {
+                beforeRecovery(entry)
+                onProgress(entry.name, progress(0))
+                recover(entry) { received, expected -> onProgress(entry.name, progress(percentOf(received, expected))) }
+                    .also { validateResult(it) }
+            }
             results += result
             onResult(result)
             if (result is RecoveryResult.Failed && result.stopsQueue) break

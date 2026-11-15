@@ -58,6 +58,7 @@ import top.supergeoff.dictee.LocalState
 import top.supergeoff.dictee.R
 import top.supergeoff.dictee.ThemeChoice
 import top.supergeoff.dictee.UiState
+import top.supergeoff.dictee.SettingsDestination
 
 private val SegmentShape = RoundedCornerShape(Tokens.RADIUS_INNER_DP.dp)
 
@@ -77,10 +78,19 @@ fun SettingsScreen(
     onDriveFolders: () -> Unit,
     onJournal: () -> Unit,
     onPrompt: () -> Unit,
-    scrollToSynthesis: Boolean = false,
+    destination: SettingsDestination? = null,
 ) {
-    val synthesisBringIntoView = androidx.compose.runtime.remember { androidx.compose.foundation.relocation.BringIntoViewRequester() }
-    LaunchedEffect(scrollToSynthesis) { if (scrollToSynthesis) synthesisBringIntoView.bringIntoView() }
+    val storageBringIntoView = remember { androidx.compose.foundation.relocation.BringIntoViewRequester() }
+    val transcriptionBringIntoView = remember { androidx.compose.foundation.relocation.BringIntoViewRequester() }
+    val synthesisBringIntoView = remember { androidx.compose.foundation.relocation.BringIntoViewRequester() }
+    LaunchedEffect(destination) {
+        when (destination) {
+            SettingsDestination.STORAGE -> storageBringIntoView.bringIntoView()
+            SettingsDestination.TRANSCRIPTION -> transcriptionBringIntoView.bringIntoView()
+            SettingsDestination.SYNTHESIS -> synthesisBringIntoView.bringIntoView()
+            null -> Unit
+        }
+    }
     Column(modifier = Modifier.fillMaxSize().background(Dictee.colors.background)) {
         TopBar("Réglages", onBack)
         Column(
@@ -92,9 +102,13 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
             BoxSection(ui.local, busy = ui.recovering, onAssociate = onAssociate)
-            StorageSection(ui.phoneFolder, busy = ui.recovering || ui.sending, onChange = model::choosePhoneFolder)
+            androidx.compose.foundation.layout.Box(Modifier.bringIntoViewRequester(storageBringIntoView)) {
+                StorageSection(ui.phoneFolder, busy = ui.recovering || ui.sending, onChange = model::choosePhoneFolder)
+            }
             DriveSection(ui.local, model, onDriveFolders)
-            TranscriptionSection(ui.local, model.transcriptionForm)
+            androidx.compose.foundation.layout.Box(Modifier.bringIntoViewRequester(transcriptionBringIntoView)) {
+                TranscriptionSection(ui.local, model.transcriptionForm, model::setAutoProcessAfterRecovery)
+            }
             androidx.compose.foundation.layout.Box(Modifier.bringIntoViewRequester(synthesisBringIntoView)) {
                 SynthesisSection(ui.local.synthesisSettings, model.synthesisForm, onPrompt)
             }
@@ -209,14 +223,30 @@ private fun TextAction(text: String, onClick: () -> Unit) {
     }
 }
 
+@Composable
+internal fun AutomaticProcessingSetting(enabled: Boolean, onEnabledChange: (Boolean) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        GroupCard {
+            ListRow(
+                title = "Créer le VTT et le MD après récupération",
+                modifier = Modifier.toggleable(value = enabled, role = Role.Switch, onValueChange = onEnabledChange),
+                weight = FontWeight.Normal,
+            ) { Toggle(enabled) }
+        }
+        Text("Après chaque récupération, crée les fichiers manquants. L’envoi sur Drive reste manuel.",
+            style = Dictee.type.caption, color = Dictee.colors.textSecondary)
+    }
+}
+
 /** Le formulaire reste dans le modèle pendant la sauvegarde et ne préremplit jamais la clé. */
 @Composable
-internal fun TranscriptionSection(local: LocalState, form: TranscriptionSettingsForm) {
+internal fun TranscriptionSection(local: LocalState, form: TranscriptionSettingsForm, onAutoProcessChange: (Boolean) -> Unit = {}) {
     LaunchedEffect(form) { form.initialize(local.transcriptionSettings) }
     val draft by form.state.collectAsState()
     val settings = local.transcriptionSettings
     Section("Transcription") {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            AutomaticProcessingSetting(local.autoProcessAfterRecovery, onAutoProcessChange)
             if (local.transcriptionAddressNeedsReview) {
                 Text("L’ancienne adresse de transcription était invalide. Saisis une adresse de serveur et enregistre les réglages.", color = Dictee.colors.textSecondary)
             }
