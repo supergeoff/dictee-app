@@ -46,6 +46,10 @@ Entrée : deux enregistrements d'essai identifiés et sauvegardés. Si DOWAY ne 
 
 Les exemples sont contrôlés par recalcul du CRC et par vérification des longueurs. La relecture vérifie aussi qu'aucune donnée réelle n'entre dans le dépôt. La clôture de DIC-22 et toute modification de son statut dans Kaneo attendent la fin des rejeux et un accord explicite séparé.
 
+## Approbation
+
+Geoff a approuvé cette conception le 16 novembre 2026. Le plan d'exécution doit être relu et approuvé séparément avant toute recherche sur le boîtier ou modification du protocole documenté.
+
 ## Vérification finale
 
 La vérification comprend la relecture du document, le contrôle automatisé des exemples et le compte rendu des rejeux sur le boîtier. Aucun test Gradle n'est nécessaire puisqu'aucun code ni fichier de construction n'est modifié. Le résultat indique séparément ce qui a été prouvé par la capture DOWAY, ce qui a été rejoué par l'outil local et ce qui reste inconnu.
