@@ -46,6 +46,7 @@ import top.supergeoff.dictee.ui.AssociateSheet
 import top.supergeoff.dictee.ui.Dictee
 import top.supergeoff.dictee.ui.DicteeTheme
 import top.supergeoff.dictee.ui.DriveFolderScreen
+import top.supergeoff.dictee.ui.DriveSendDialog
 import top.supergeoff.dictee.ui.JournalScreen
 import top.supergeoff.dictee.ui.PrimaryButton
 import top.supergeoff.dictee.ui.PromptScreen
@@ -159,6 +160,9 @@ class MainActivity : ComponentActivity() {
             Box(modifier = Modifier.fillMaxSize().background(Dictee.colors.background)) {
                 if (ui.initialized) Navigation(ui, model, stack, onSearch = ::startSearch)
                 else InitializationScreen(ui.initializationError, model::retryLocalState)
+                ui.driveSendRequest?.let { request ->
+                    DriveSendDialog(ui, request, model::confirmDriveSend, model::cancelDriveSend)
+                }
                 if (ui.initialized && associating) {
                     // Quelle que soit la sortie de la feuille, y compris sa disparition avec l'activité, le modèle peut rouvrir la liaison.
                     DisposableEffect(Unit) { onDispose { model.endSearch() } }

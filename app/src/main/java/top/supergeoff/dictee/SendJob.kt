@@ -1,12 +1,14 @@
 package top.supergeoff.dictee
 
+import java.io.File
+
 /** Résultat de l'envoi d'un fichier : le nom à 14 chiffres de l'enregistrement et le nom du fichier du téléphone. */
 sealed class SendResult {
     abstract val name: String
     abstract val fileName: String
 
     /** Fichier déposé dans le dossier Drive, avec la taille attendue. */
-    data class Sent(override val name: String, override val fileName: String) : SendResult()
+    data class Sent(override val name: String, override val fileName: String, val receipt: DriveReceipt? = null) : SendResult()
 
     /** Fichier déjà présent dans le dossier Drive : il n'a pas été envoyé. */
     data class AlreadyThere(override val name: String, override val fileName: String) : SendResult()
@@ -31,91 +33,118 @@ class SendJob(
     private val drive: DriveClient,
     private val store: PhoneStore,
     private val log: Log,
+    private val cacheDir: File,
 ) {
 
-    /** Fichier du téléphone à traiter. [upload] est vrai quand il manque dans le dossier Drive. */
-    private class Item(val name: String, val kind: FileKind, val file: PhoneFile, val upload: Boolean)
+    private class Item(val name: String, val kind: FileKind, val file: PhoneFile)
+    private class Prepared(val item: Item, val snapshot: DriveUploadSnapshot?, val action: DriveWriteAction?, val error: Exception?)
 
-    /**
-     * Lit une fois le contenu du dossier, puis envoie les fichiers absents de [recordings], dans l'ordre de la liste
-     * et, pour chaque enregistrement, dans l'ordre MP3, VTT, MD. Les fichiers déjà présents ne sont pas envoyés :
-     * une sélection explicite ([explicitSelection]) écrit une ligne au journal par fichier présent, sinon une seule ligne les compte.
-     * [onProgress] reçoit le nom de l'enregistrement avec l'avancement : 0 % au départ, puis le pourcentage envoyé,
-     * puis 100 % après le contrôle de la taille. Rien n'est signalé pour un fichier déjà présent.
-     * [onResult] reçoit chaque résultat, dans l'ordre.
-     * Un accès Google à renouveler arrête l'envoi. Toute autre erreur sur un fichier le marque en échec, et l'envoi continue.
-     */
-    fun run(
+    /** Prépare les copies des documents avant décision ; le résultat est livré avant le fichier suivant. */
+    suspend fun run(
         folder: DriveFolder,
         recordings: List<Recording>,
+        choice: DriveSendChoice,
+        destination: DriveDestination,
+        receipts: List<DriveReceipt>,
         onProgress: (name: String, progress: Progress) -> Unit,
-        onResult: (SendResult) -> Unit,
+        onResult: suspend (SendResult) -> Unit,
         explicitSelection: Boolean = false,
+        beforeUpdate: suspend (DriveDestination, String) -> Unit = { _, _ -> error("Invalidation du reçu indisponible") },
     ): SendOutcome {
+        require(destination.account.isNotBlank() && destination.folderId == folder.id)
         val listing = try {
-            DriveListing(drive.listFiles(folder.id))
+            drive.listEntries(folder.id)
         } catch (e: Exception) {
             return stop(if (needsRenewal(e)) DriveClient.RENEW_MESSAGE else "Dossier Drive inaccessible : ${reasonOf(e)}", emptyList())
         }
         val items = recordings.flatMap { recording ->
-            val missing = Recordings.missingInDrive(recording, listing)
-            recording.phoneFiles.entries.sortedBy { it.key }.map { (kind, file) -> Item(recording.name, kind, file, file in missing) }
+            recording.phoneFiles.entries.filter { it.key in DriveSync.requiredKinds(choice) }
+                .sortedBy { it.key }.map { (kind, file) -> Item(recording.name, kind, file) }
         }
-        val total = items.count { it.upload }
-        val present = items.size - total
-        if (!explicitSelection && present > 0) log.add(Source.DRIVE, alreadyThere(present, folder))
-        val results = mutableListOf<SendResult>()
-        var index = 0
-        for (item in items) {
-            val result = if (item.upload) {
-                index++
+        val prepared = mutableListOf<Prepared>()
+        try {
+            for (item in items) {
+                var snapshot: DriveUploadSnapshot? = null
                 try {
-                    send(folder, item, index, total, onProgress)
+                    if (item.kind != FileKind.MP3) snapshot = DriveUploadSnapshot.capture(store, item.file.fileName, cacheDir)
+                    val action = DriveSync.action(item.file.fileName, item.kind, snapshot?.sha256, destination, listing, receipts)
+                    prepared += Prepared(item, snapshot, action, null)
                 } catch (e: Exception) {
-                    if (needsRenewal(e)) return stop(DriveClient.RENEW_MESSAGE, results)
-                    failed(item, reasonOf(e), (e as? PhoneStoreException)?.journalText)
+                    snapshot?.close()
+                    prepared += Prepared(item, null, null, e)
                 }
-            } else {
-                if (explicitSelection) log.add(Source.DRIVE, "${item.file.fileName} déjà dans ${folder.name}, non envoyé")
-                SendResult.AlreadyThere(item.name, item.file.fileName)
             }
-            results += result
-            onResult(result)
+            val total = prepared.count { it.action == DriveWriteAction.CREATE || it.action == DriveWriteAction.UPDATE }
+            val present = prepared.count { it.action == DriveWriteAction.SKIP }
+            if (!explicitSelection && present > 0) log.add(Source.DRIVE, alreadyThere(present, folder))
+            val results = mutableListOf<SendResult>()
+            var index = 0
+            for (entry in prepared) {
+                val item = entry.item
+                val result = when {
+                    entry.error != null -> failed(item, reasonOf(entry.error), (entry.error as? PhoneStoreException)?.journalText)
+                    entry.action == DriveWriteAction.CONFLICT -> failed(item, "Plusieurs fichiers portent ce nom dans Drive")
+                    entry.action == DriveWriteAction.SKIP -> {
+                        if (explicitSelection) log.add(Source.DRIVE, "${item.file.fileName} déjà dans ${folder.name}, non envoyé")
+                        SendResult.AlreadyThere(item.name, item.file.fileName)
+                    }
+                    else -> {
+                        if (entry.action == DriveWriteAction.UPDATE) {
+                            try {
+                                beforeUpdate(destination, item.file.fileName)
+                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                return stop("Impossible d'invalider le reçu Drive : ${reasonOf(e)}", results)
+                            }
+                        }
+                        index++
+                        try {
+                            val existing = if (entry.action == DriveWriteAction.UPDATE) listing.single { it.name == item.file.fileName }.id else null
+                            send(folder, destination, item, entry.snapshot, existing, index, total, onProgress)
+                        } catch (e: Exception) {
+                            if (needsRenewal(e)) return stop(DriveClient.RENEW_MESSAGE, results)
+                            failed(item, reasonOf(e), (e as? PhoneStoreException)?.journalText)
+                        }
+                    }
+                }
+                try {
+                    onResult(result)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    return stop("Impossible d'enregistrer le résultat de l'envoi : ${reasonOf(e)}", results)
+                }
+                results += result
+            }
+            return SendOutcome.Done(results)
+        } finally {
+            prepared.forEach { it.snapshot?.close() }
         }
-        return SendOutcome.Done(results)
     }
 
-    /** Envoie un fichier, puis compare la taille enregistrée par Drive à celle du téléphone. */
     private fun send(
-        folder: DriveFolder,
-        item: Item,
-        index: Int,
-        total: Int,
-        onProgress: (name: String, progress: Progress) -> Unit,
+        folder: DriveFolder, destination: DriveDestination, item: Item, snapshot: DriveUploadSnapshot?, existing: String?,
+        index: Int, total: Int, onProgress: (name: String, progress: Progress) -> Unit,
     ): SendResult {
         fun progress(percent: Int) = onProgress(item.name, Progress(ProgressKind.SEND, index, total, percent))
         val fileName = item.file.fileName
-        val length = item.file.size
+        val length = snapshot?.size ?: item.file.size
         progress(0)
         var shown = 0
-        val stored = drive.upload(
-            folderId = folder.id,
-            fileName = fileName,
-            mime = item.kind.mime,
-            length = length,
-            open = { store.open(fileName) },
+        val stored = drive.storeFile(
+            folderId = folder.id, fileName = fileName, mime = item.kind.mime, length = length,
+            open = { snapshot?.open() ?: store.open(fileName) }, existingFileId = existing,
             onProgress = { sent ->
                 val percent = if (length <= 0) 0 else (sent * 100 / length).coerceAtMost(100).toInt()
-                if (percent != shown) {
-                    shown = percent
-                    progress(percent)
-                }
+                if (percent != shown) { shown = percent; progress(percent) }
             },
         )
-        if (stored != length) return failed(item, "taille Drive $stored au lieu de $length")
+        if (stored.size != length) return failed(item, "taille Drive ${stored.size} au lieu de $length")
         progress(100)
         log.add(Source.DRIVE, "$fileName déposé dans ${folder.name}")
-        return SendResult.Sent(item.name, fileName)
+        val receipt = snapshot?.let { DriveReceipt(destination, fileName, stored.id, it.sha256) }
+        return SendResult.Sent(item.name, fileName, receipt)
     }
 
     /** La ligne qui compte les fichiers déjà présents, par exemple « 2 fichiers déjà dans Dictée, non envoyés ». */
@@ -175,3 +204,20 @@ private fun LocalState.withChosenFolder(folder: DriveFolder, origin: FolderOrigi
     }
     return copy(knownFolders = folders, chosenFolderId = folder.id)
 }
+
+/** Les erreurs antérieures ne sont levées que lorsque le lot a été entièrement traité. */
+internal fun applySendOutcome(state: LocalState, outcome: SendOutcome): LocalState {
+    var updated = state
+    val failures = outcome.results.filterIsInstance<SendResult.Failed>()
+    for (failure in failures) updated = updated.withError(failure.name, Step.SEND, failure.reason)
+    if (outcome is SendOutcome.Done) {
+        val failedNames = failures.mapTo(mutableSetOf()) { it.name }
+        for (name in outcome.results.map { it.name }.toSet() - failedNames) {
+            updated = updated.withoutError(name, Step.SEND)
+        }
+    }
+    return updated
+}
+
+internal fun driveClientForCapturedAccount(http: Http, account: String, tokens: (String) -> TokenSource): DriveClient =
+    DriveClient(http, tokens(account))

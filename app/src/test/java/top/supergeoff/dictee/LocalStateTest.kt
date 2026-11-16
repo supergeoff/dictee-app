@@ -15,12 +15,125 @@ class LocalStateTest {
     @get:Rule val tmp = TemporaryFolder()
     private fun file() = File(tmp.root, "state.json")
 
+    @Test
+    fun `drive_choice_and_receipts_round_trip`() {
+        val receipt = DriveReceipt(DriveDestination("account-1", "folder-1"), "Note.vtt", "file-1", "a".repeat(64))
+        val state = LocalState(
+            driveSendChoice = DriveSendChoice.DOCUMENTS_ONLY,
+            driveReceipts = listOf(receipt),
+            autoProcessAfterRecovery = true,
+            automaticProcessingRequests = listOf(AutomaticProcessingRequest(
+                "request-1", "Note", "content://test/tree", AutomaticProcessingPhase.READY)),
+            transcriptionSettings = TranscriptionSettings("https://example.invalid/v1", "en", "model-1", "credential-1"),
+            synthesisSettings = SynthesisSettings("https://example.invalid/v1", "model-2", "credential-2", "prompt-2"),
+        )
+        val store = LocalStateStore(file())
+
+        store.save(state)
+
+        assertEquals(7, org.json.JSONObject(file().readText()).getInt("version"))
+        assertEquals(state, store.load())
+        assertEquals(DriveSendChoice.DOCUMENTS_ONLY, store.load().driveSendChoice)
+        assertEquals(listOf(receipt), store.load().driveReceipts)
+        assertTrue(store.load().autoProcessAfterRecovery)
+        assertEquals(state.automaticProcessingRequests, store.load().automaticProcessingRequests)
+        assertEquals(state.transcriptionSettings, store.load().transcriptionSettings)
+        assertEquals(state.synthesisSettings, store.load().synthesisSettings)
+    }
+
+    @Test
+    fun `version_6_starts_without_receipts`() {
+        val state = LocalState(
+            driveEnabled = true,
+            driveAccount = "account-1",
+            knownFolders = listOf(KnownFolder("folder-1", "Synthetic", FolderOrigin.PICKED)),
+            chosenFolderId = "folder-1",
+            autoProcessAfterRecovery = true,
+            transcriptionSettings = TranscriptionSettings(language = "en", model = "kept-model"),
+            synthesisSettings = SynthesisSettings(model = "kept-synthesis"),
+        )
+        val store = LocalStateStore(file())
+        store.save(state)
+        val version6 = org.json.JSONObject(file().readText()).put("version", 6)
+        version6.remove("driveSendChoice")
+        version6.remove("driveReceipts")
+        file().writeText(version6.toString())
+
+        val loaded = store.load()
+
+        assertEquals(DriveSendChoice.ALL_FILES, loaded.driveSendChoice)
+        assertTrue(loaded.driveReceipts.isEmpty())
+        assertEquals(state.driveEnabled, loaded.driveEnabled)
+        assertEquals(state.driveAccount, loaded.driveAccount)
+        assertEquals(state.knownFolders, loaded.knownFolders)
+        assertEquals(state.chosenFolderId, loaded.chosenFolderId)
+        assertEquals(state.autoProcessAfterRecovery, loaded.autoProcessAfterRecovery)
+        assertEquals(state.transcriptionSettings, loaded.transcriptionSettings)
+        assertEquals(state.synthesisSettings, loaded.synthesisSettings)
+    }
+
+    @Test
+    fun `version_7_requires_drive_choice_and_receipts_without_changing_file_on_failure`() {
+        val store = LocalStateStore(file())
+        val validState = LocalState(driveSendChoice = DriveSendChoice.DOCUMENTS_ONLY)
+        val invalidFields = listOf(
+            "driveSendChoice" to null,
+            "driveSendChoice" to org.json.JSONObject.NULL,
+            "driveSendChoice" to 42,
+            "driveSendChoice" to "UNKNOWN",
+            "driveReceipts" to null,
+            "driveReceipts" to org.json.JSONObject.NULL,
+            "driveReceipts" to "not-an-array",
+        )
+
+        for ((field, invalidValue) in invalidFields) {
+            store.save(validState)
+            val json = org.json.JSONObject(file().readText())
+            if (invalidValue == null) json.remove(field) else json.put(field, invalidValue)
+            file().writeText(json.toString())
+            val before = file().readText()
+
+            try {
+                store.load()
+                org.junit.Assert.fail("Le champ v7 $field invalide doit empêcher le chargement")
+            } catch (_: org.json.JSONException) { }
+            assertEquals("Le fichier v7 doit rester intact pour $field=$invalidValue", before, file().readText())
+        }
+    }
+
+    @Test
+    fun `versions_1_to_6_keep_drive_defaults`() {
+        val store = LocalStateStore(file())
+        for (version in 1..6) {
+            file().writeText(org.json.JSONObject().put("version", version).toString())
+            val loaded = store.load()
+            assertEquals("version $version", DriveSendChoice.ALL_FILES, loaded.driveSendChoice)
+            assertTrue("version $version", loaded.driveReceipts.isEmpty())
+        }
+    }
+
+    @Test
+    fun `receipt_replaces_only_same_destination_and_name`() {
+        val destination = DriveDestination("account-1", "folder-1")
+        val old = DriveReceipt(destination, "Note.vtt", "old-id", "a".repeat(64))
+        val unrelatedDestination = old.copy(destination = DriveDestination("account-2", "folder-1"))
+        val unrelatedName = old.copy(fileName = "Other.vtt")
+        val replacement = old.copy(driveFileId = "new-id", sha256 = "b".repeat(64))
+
+        val updated = LocalState(driveReceipts = listOf(old, unrelatedDestination, unrelatedName))
+            .withDriveReceipt(replacement)
+
+        assertEquals(listOf(unrelatedDestination, unrelatedName, replacement), updated.driveReceipts)
+        assertEquals(DriveSendChoice.ALL_FILES, updated.driveSendChoice)
+        assertEquals(old, LocalState(driveReceipts = listOf(old)).driveReceipts.single())
+    }
+
     @Test fun version6PersistsSubjectsAndAttemptMarkerAndReadsVersion5() {
         val store = LocalStateStore(file())
         val state = LocalState(recordingSubjects = mapOf("20261030160502" to "Sujet synthétique"),
             transcriptionTasks = listOf(sampleTask().copy(subjectAttempted = true)))
         store.save(state)
-        assertEquals(6, org.json.JSONObject(file().readText()).getInt("version"))
+        assertEquals(7, org.json.JSONObject(file().readText()).getInt("version"))
         assertEquals(state, store.load())
         val old = org.json.JSONObject(file().readText()).put("version", 5)
         old.remove("autoProcessAfterRecovery")
@@ -82,7 +195,7 @@ class LocalStateTest {
             synthesisProvenance = listOf(provenance))
         val store = LocalStateStore(file())
         store.save(state)
-        assertEquals(6, org.json.JSONObject(file().readText()).getInt("version"))
+        assertEquals(7, org.json.JSONObject(file().readText()).getInt("version"))
         assertEquals(state, store.load())
         assertFalse(file().readText().contains(secret))
     }
@@ -467,7 +580,7 @@ class LocalStateTest {
         assertEquals(state, LocalStateStore(file()).load())
         assertTrue(file().readText().contains("encrypted-key-ref"))
         assertFalse(file().readText().contains("cleartext-api-key"))
-        assertTrue(file().readText().contains("\"version\": 6"))
+        assertTrue(file().readText().contains("\"version\": 7"))
     }
 
     @Test

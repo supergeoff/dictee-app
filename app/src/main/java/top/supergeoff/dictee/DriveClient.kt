@@ -84,22 +84,25 @@ class DriveClient(private val http: Http, private val tokens: TokenSource) {
     }
 
     /** Taille de chaque fichier non supprimé du dossier, par nom, toutes pages comprises. Un document sans taille vaut 0. */
-    fun listFiles(folderId: String): Map<String, Long> {
-        val sizes = mutableMapOf<String, Long>()
+    fun listFiles(folderId: String): Map<String, Long> = listEntries(folderId).associate { it.name to it.size }
+
+    /** Liste toutes les entrées, y compris les homonymes, avec leur identifiant Drive. */
+    fun listEntries(folderId: String): List<DriveFile> {
+        val entries = mutableListOf<DriveFile>()
         var pageToken: String? = null
         do {
             val q = "'${escape(folderId)}' in parents and trashed = false"
-            var url = "$API/files?q=${enc(q)}&fields=${enc("nextPageToken,files(name,size)")}&pageSize=1000"
+            var url = "$API/files?q=${enc(q)}&fields=${enc("nextPageToken,files(id,name,size)")}&pageSize=1000"
             if (pageToken != null) url += "&pageToken=${enc(pageToken)}"
             val json = JSONObject(ok(send("GET", url)))
             val files = json.optJSONArray("files") ?: JSONArray()
             for (i in 0 until files.length()) {
                 val file = files.getJSONObject(i)
-                sizes[file.getString("name")] = file.optString("size").toLongOrNull() ?: 0L
+                entries += driveFile(file, 0L)
             }
             pageToken = json.optString("nextPageToken").ifEmpty { null }
         } while (pageToken != null)
-        return sizes
+        return entries
     }
 
     /**
@@ -120,13 +123,25 @@ class DriveClient(private val http: Http, private val tokens: TokenSource) {
         open: () -> InputStream,
         onProgress: (sent: Long) -> Unit = {},
     ): Long {
-        val meta = JSONObject()
-            .put("name", fileName)
-            .put("mimeType", mime)
-            .put("parents", JSONArray().put(folderId))
+        return storeFile(folderId, fileName, mime, length, open, onProgress = onProgress).size
+    }
+
+    /** Crée un fichier ou remplace son contenu par son identifiant via un téléversement reprenable. */
+    fun storeFile(
+        folderId: String,
+        fileName: String,
+        mime: String,
+        length: Long,
+        open: () -> InputStream,
+        existingFileId: String? = null,
+        onProgress: (Long) -> Unit = {},
+    ): DriveFile {
+        val meta = JSONObject().put("name", fileName).put("mimeType", mime)
+        if (existingFileId == null) meta.put("parents", JSONArray().put(folderId))
+        val path = if (existingFileId == null) "files" else "files/${enc(existingFileId).replace("+", "%20")}"
         val init = send(
-            "POST",
-            "$UPLOAD/files?uploadType=resumable&fields=${enc("id,size")}",
+            if (existingFileId == null) "POST" else "PATCH",
+            "$UPLOAD/$path?uploadType=resumable&fields=${enc("id,name,size")}",
             jsonBody(meta),
             mapOf("X-Upload-Content-Type" to mime, "X-Upload-Content-Length" to length.toString()),
         )
@@ -134,7 +149,13 @@ class DriveClient(private val http: Http, private val tokens: TokenSource) {
         val location = init.headers.entries.firstOrNull { it.key.equals("Location", ignoreCase = true) }?.value
             ?: throw DriveException(init.code, "adresse de téléversement absente")
         val done = ok(send("PUT", location, HttpBody.Stream(length, open, mime, onProgress)))
-        return JSONObject(done).optString("size").toLongOrNull() ?: -1L
+        return driveFile(JSONObject(done), -1L)
+    }
+
+    private fun driveFile(json: JSONObject, missingSize: Long): DriveFile {
+        val id = if (json.isNull("id")) "" else json.optString("id")
+        if (id.isBlank()) throw DriveException(0, "identifiant Drive absent")
+        return DriveFile(id, json.getString("name"), json.optString("size").toLongOrNull() ?: missingSize)
     }
 
     /**

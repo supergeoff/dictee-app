@@ -29,7 +29,7 @@ class ProcessingNotificationsTest {
         try {
             automation.revokeRuntimePermission(context.packageName, Manifest.permission.POST_NOTIFICATIONS)
             manager.cancel(id, 0)
-            val task = TranscriptionTask(id, "recording", "a.mp3", "a.vtt", "folder", "hash", "url", "ref", "fr", "model", TranscriptionPhase.PENDING)
+            val task = TranscriptionTask(id, "recording", "a.mp3", "a.vtt", "folder", "hash", "https://example.invalid/v1", "ref", "fr", "model", TranscriptionPhase.PENDING)
             val store = LocalStateStore(file)
             store.save(LocalState(transcriptionTasks = listOf(task)))
             val repo = LocalStateRepository(store)

@@ -33,6 +33,52 @@ class AppStateIntegrationTest {
         }
     }
 
+    @Test fun receiptPersistsOnlyForCapturedDestinationAfterSettingsChange() = runBlocking {
+        val repo = LocalStateRepository(LocalStateStore(file()))
+        val old = DriveDestination("ancien@example.invalid", "ancien")
+        val new = DriveDestination("nouveau@example.invalid", "nouveau")
+        repo.updateDurably { it.copy(driveAccount = old.account, chosenFolderId = old.folderId) }
+        val receipt = DriveReceipt(old, "Note-$name.vtt", "id", "hash")
+        repo.updateDurably { it.copy(driveAccount = new.account, chosenFolderId = new.folderId) }
+        repo.updateDurably { it.withDriveReceipt(receipt) }
+        val saved = LocalStateStore(file()).load()
+        assertEquals(new.account, saved.driveAccount)
+        assertEquals(new.folderId, saved.chosenFolderId)
+        assertEquals(listOf(receipt), saved.driveReceipts)
+        assertTrue(saved.driveReceipts.none { it.destination == new })
+    }
+
+    @Test fun failedReceiptWriteDoesNotPublishProof() = runBlocking {
+        val repo = LocalStateRepository(LocalStateStore(file(), rename = { _, _ -> false }))
+        val receipt = DriveReceipt(DriveDestination("account@example.invalid", "folder"), "Note-$name.vtt", "id", "hash")
+        try {
+            repo.updateDurably { it.withDriveReceipt(receipt) }
+            fail("l'écriture doit échouer")
+        } catch (_: Exception) { }
+        assertTrue(repo.state.value!!.driveReceipts.isEmpty())
+        assertTrue(LocalStateStore(file()).load().driveReceipts.isEmpty())
+    }
+
+    @Test fun failedDocumentReadDropsPreviousHashInsteadOfProvingCurrentContent() {
+        val fileName = "Note-$name.vtt"
+        val files = listOf(PhoneFile(fileName, 4), PhoneFile("Note-$name.mp3", 4))
+        var failures = 0
+        val hashes = readDocumentHashes(files, { throw java.io.IOException("unreadable") }, { failures++ })
+        assertEquals(1, failures)
+        assertTrue(hashes.isEmpty())
+        val destination = DriveDestination("account", "folder")
+        val remote = listOf(DriveFile("id", fileName, 4))
+        val receipt = DriveReceipt(destination, fileName, "id", "old-hash")
+        assertEquals(DriveWriteAction.UPDATE, DriveSync.action(fileName, FileKind.VTT, hashes[fileName], destination, remote, listOf(receipt)))
+    }
+
+    @Test fun phoneSnapshotDoesNotExposeHashesAfterFailureOrFolderChange() {
+        val snapshot = PhoneSnapshot(ok = true, documentHashes = mapOf("Note-20260101120000.vtt" to "hash"), folderUri = "folder")
+        assertEquals(1, snapshot.hashesFor("folder").size)
+        assertTrue(snapshot.copy(ok = false).hashesFor("folder").isEmpty())
+        assertTrue(snapshot.hashesFor("other").isEmpty())
+    }
+
     @Test
     fun `intention capturee puis validee durablement avec la protection`() = runBlocking {
         val repo = LocalStateRepository(LocalStateStore(file()))

@@ -19,7 +19,7 @@ import top.supergeoff.dictee.ui.DicteeTheme
 class AutomaticProcessingSettingsUiTest {
     @get:Rule val compose = createComposeRule()
 
-    @Test fun onlySuccessfulSettingsSaveReexaminesWaitingRequests() = kotlinx.coroutines.runBlocking {
+    @Test fun onlySuccessfulSettingsSaveReexaminesWaitingRequests(): Unit = kotlinx.coroutines.runBlocking {
         val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as android.app.Application
         val file = java.io.File(app.cacheDir, "automatic-wakeup-test.json").apply { delete() }
         val store = LocalStateStore(file)

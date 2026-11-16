@@ -59,9 +59,13 @@ class GoogleAuth(context: Context) {
      * au plus 30 secondes, puis lève une [TimeoutException].
      * Un jeton qui demande l'écran d'accord lève une [DriveException] 401 : l'utilisateur doit renouveler l'accès.
      */
-    fun tokens(): TokenSource = object : TokenSource {
+    fun tokens(account: String? = null): TokenSource = object : TokenSource {
         override fun token(): String {
-            val result = awaitBlocking(client.authorize(DriveClient.authorizationRequest()))
+            val request = if (account == null) DriveClient.authorizationRequest() else
+                com.google.android.gms.auth.api.identity.AuthorizationRequest.builder()
+                    .setRequestedScopes(listOf(Scope(DriveClient.SCOPE)))
+                    .setAccount(Account(account, "com.google")).build()
+            val result = awaitBlocking(client.authorize(request))
             if (result.hasResolution()) throw DriveException(401, DriveClient.RENEW_MESSAGE)
             return result.accessToken ?: throw DriveException(401, DriveClient.RENEW_MESSAGE)
         }
