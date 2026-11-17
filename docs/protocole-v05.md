@@ -80,6 +80,14 @@ Le rejeu bruit du 17 novembre à 06:39 reçoit deux acquittements `0x17` accept�
 
 Le rejeu USB du 17 novembre à 07:23 reçoit deux acquittements `0x13` acceptés et trois états, tous avec longueurs et CRC valides. L'état initial et celui après désactivation sont identiques ; après activation, seul l'index 14 passe de `00` à `01`. L'index 11 reste `01` sur les trois lectures. Contrairement aux autres cycles, l'état final n'est donc pas identique à l'état initial : le retour fixe sur Activé n'est pas une restauration de la valeur réellement lue au départ. Le second rejeu du 17 novembre à 07:30 vérifie ensuite le cycle complet `01` → `00` → `01` à l'index 14 : les deux commandes sont acceptées, les six réponses ont des longueurs et CRC valides, seul cet index varie, et l'état final est strictement identique à l'état initial. Le champ USB à l'index 14 est donc confirmé dans les deux sens. L'accès réel aux fichiers par câble USB n'a pas été testé.
 
+### Mesure du stockage
+
+La capture d'écran DOWAY du 17 novembre à 08:00 affiche « 23 MB sur 59.93 GB utilisés ». Les deux premiers entiers big-endian de `0x05` valent 59 934 et 59 911 : leur différence est 23 et 59 934 / 1 000 = 59,934. Cela étaye l'interprétation capacité totale et espace libre en unités affichées comme MB par DOWAY, mais ne confirme pas encore l'unité exacte en octets ni l'arrondi.
+
+Les mesures nRF à 08:06 et 08:08 lisent chacune `0x05`, préparent la liste par `0x18 00`, lisent `0x0a` jusqu'au marqueur de fin `a00a010a0102210e`, puis relisent `0x05`. Les 37 notifications ont des longueurs et CRC valides et chaque liste est complète. La liste passe de 13 à 14 entrées ; les anciennes restent identiques, et le seul ajout fait 44 666 octets (environ 11,17 secondes à 4 000 octets/s). Les sommes des tailles passent de 21 252 842 à 21 297 508 octets.
+
+Les compteurs restent 59 934 et 59 911 avant comme après, y compris après la liste. Seule la batterie candidate change de 75 à 74. Ce fichier trop petit ne permet pas d'observer le pas d'arrondi du stockage ; il ne confirme ni ne réfute l'hypothèse capacité/libre en MB. Une nouvelle mesure avec un enregistrement d'environ cinq minutes reste nécessaire, sans suppression entre les lectures. Ne pas confondre somme des fichiers audio et occupation totale du système de fichiers. Les noms réels des enregistrements ne sont pas conservés dans ce document public.
+
 ### Diagnostic de connexion nRF Connect
 
 Les trois connexions de la capture DOWAY négocient un MTU effectif de 247, activent les notifications B0B2, B0B3 et B0B4, lisent 16 octets avec `0x02`, puis rejouent ces octets suivis de `00` avec `0x03`, accepté.
