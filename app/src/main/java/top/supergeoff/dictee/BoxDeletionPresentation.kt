@@ -17,5 +17,5 @@ internal fun boxDeletionResultText(result: BoxDeletionResult): String = listOfNo
     result.error,
 ).joinToString("\n")
 
-internal fun selectionAfterBoxDeletion(selected: Set<String>, targets: Set<String>, recordings: List<Recording>): Set<String> =
-    recordings.filter { it.name in selected && (it.name !in targets || it.onBox) }.mapTo(HashSet()) { it.name }
+internal fun selectionAfterBoxDeletion(selected: Set<String>, confirmed: Set<String>, recordings: List<Recording>): Set<String> =
+    recordings.filter { it.name in selected && it.name !in confirmed }.mapTo(HashSet()) { it.name }

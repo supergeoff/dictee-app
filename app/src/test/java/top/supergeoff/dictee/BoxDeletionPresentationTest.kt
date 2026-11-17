@@ -17,13 +17,19 @@ class BoxDeletionPresentationTest {
         assertFalse(boxDeletionCanConfirm(BoxDeletionPlan("box", listOf("a"), emptySet(), 0), true))
     }
 
-    @Test fun selectionRetainsUnconfirmedAndOtherPresentRows() {
+    @Test fun selectionRemovesConfirmedEvenWhenRecordingListIsStale() {
         fun recording(name: String, onBox: Boolean) = Recording(name, RecordType.NOTE, 1, onBox,
             emptyMap(), DisplayState.Recovered)
         val remaining = selectionAfterBoxDeletion(setOf("confirmed", "refused", "other", "gone"),
-            setOf("confirmed", "refused", "gone"),
-            listOf(recording("confirmed", false), recording("refused", true), recording("other", false)))
+            setOf("confirmed", "gone"),
+            listOf(recording("confirmed", true), recording("refused", true), recording("other", false)))
         assertEquals(setOf("refused", "other"), remaining)
+    }
+
+    @Test fun largeResultKeepsAllSyntheticNames() {
+        val names = (1..200).map { "synthetic%04d".format(it) }.toSet()
+        val text = boxDeletionResultText(BoxDeletionResult(names, emptyMap(), emptySet(), emptySet(), null))
+        names.forEach { assertTrue("Missing $it", text.contains(it)) }
     }
 
     @Test fun partialResultDistinguishesUnverified() {
