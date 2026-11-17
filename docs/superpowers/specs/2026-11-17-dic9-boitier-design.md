@@ -80,4 +80,4 @@ La livraison met à jour `docs/specification.md`, `versionName` à `0.9.0` et `v
 
 Le plan choisira les découpages de fichiers et les signatures entre la session, `BoxConnection` et le modèle d’application. Il devra préserver la publication de l’état sur toutes les ouvertures de liaison et éviter les écritures concurrentes. Il choisira aussi entre boutons segmentés et listes de choix pour tenir dans l’écran, sans modifier les valeurs, la représentation de l’inconnu ni le déclenchement immédiat décidés ici.
 
-Cette conception est une proposition en attente de l’accord de Geoff. Le plan d’implémentation sera rédigé après cet accord et attendra sa propre validation. Aucun push, fusion, publication ou changement réel du boîtier ne découle de ce document.
+Cette conception a été approuvée par Geoff le 17 novembre 2026. Le plan d’implémentation est rédigé ensuite et attend sa propre validation. Aucun push, fusion, publication ou changement réel du boîtier ne découle de ce document.
