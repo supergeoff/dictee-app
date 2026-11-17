@@ -96,7 +96,9 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
         return
     }
     val mp3 = recording.phoneFiles[FileKind.MP3]
-    val playback = if (mp3 == null || ui.deleting) null else key(ui.phoneRevision) { rememberPlayback(model, mp3.fileName, mp3.size) }
+    // Fixé à la confirmation : seule une suppression qui touche le téléphone coupe l'audio.
+    var deletingPhone by remember { mutableStateOf(false) }
+    val playback = if (mp3 == null || (ui.deleting && deletingPhone)) null else key(ui.phoneRevision) { rememberPlayback(model, mp3.fileName, mp3.size) }
     val snackbarHost = remember { SnackbarHostState() }
     LaunchedEffect(ui.notice) {
         val notice = ui.notice ?: return@LaunchedEffect
@@ -105,7 +107,8 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
     }
     ui.deletionRequest?.let { plan ->
         UnifiedDeletionDialog(plan, ui.deleting, onConfirm = {
-            if (plan.targets.any { it.phone }) playback?.release()
+            deletingPhone = plan.targets.any { it.phone }
+            if (deletingPhone) playback?.release()
             model.confirmDeletion()
         }, onDismiss = model::cancelDeletion)
     }

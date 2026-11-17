@@ -135,6 +135,10 @@ internal fun deletionProtectedNames(local: LocalState, recoveryNames: Set<String
     local.transcriptionTasks.filterNot { it.phase.isTerminal() }.map { it.recordingName }.toSet() +
         local.automaticProcessingRequests.map { it.recordingName } + recoveryNames + sendNames
 
+/** Noms de la suppression qui sont déjà occupés (traitement, récupération, envoi) : un seul suffit à bloquer le lot. */
+internal fun unifiedDeletionBusyNames(names: Set<String>, protectedNames: Set<String>, admittedBusy: Set<String>): Set<String> =
+    names intersect (protectedNames + admittedBusy)
+
 internal fun launchProcessingRequest(
     scope: CoroutineScope, guard: RecoveryDeletionGuard, names: Set<String>?, block: suspend () -> Unit,
 ): kotlinx.coroutines.Job? {
@@ -679,7 +683,7 @@ class AppModel(
         recoverySafety.withTransferLock {
             recoveryDeletionGuard.withDeletionSnapshot(names) { admittedSends ->
                 val local = localRepository.awaitInitialized()
-                busyNames = names intersect (deletionProtectedNames(local) + admittedSends)
+                busyNames = unifiedDeletionBusyNames(names, deletionProtectedNames(local), admittedSends)
                 if (busyNames.isEmpty()) outcome = unifiedDeletionOrchestrator(plan).execute(plan)
             }
         }
