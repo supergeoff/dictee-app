@@ -161,7 +161,6 @@ fun RecordingsScreen(ui: UiState, model: AppModel, onOpen: (name: String) -> Uni
             }
         }
         SnackbarHost(snackbarHost)
-        if (checked != null) SelectionDeletionRow(ui, checked, model)
         ActionBar(ui, model, checked, onDone = selection::clear)
     }
 }
@@ -438,19 +437,27 @@ private fun ActionBar(ui: UiState, model: AppModel, checked: Set<String>?, onDon
         onRecover = { model.recover(recoverNames); onDone() },
         onTranscribe = { model.transcribe(checked); onDone() },
         onSend = { model.send(sendNames, onDone) },
+        deletion = { SelectionDeletionButtons(ui, checked, model) },
     )
 }
 
-/** Fond, filet et rangée des boutons du bas. */
+/** Fond, filet et rangée des boutons du bas, avec en dessous une seconde rangée facultative ([deletion]). */
 @Composable
-private fun BottomBar(buttons: @Composable RowScope.() -> Unit) {
+private fun BottomBar(deletion: (@Composable RowScope.() -> Unit)? = null, buttons: @Composable RowScope.() -> Unit) {
     Column(modifier = Modifier.fillMaxWidth().background(Dictee.colors.surface).navigationBarsPadding()) {
         HorizontalDivider(color = Dictee.colors.border)
         Row(
-            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 12.dp),
+            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = if (deletion == null) 12.dp else 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             content = buttons,
         )
+        if (deletion != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                content = deletion,
+            )
+        }
     }
 }
 
@@ -459,20 +466,15 @@ private fun BottomBar(buttons: @Composable RowScope.() -> Unit) {
  * cible ; les enregistrements occupés ne sont pas connus ici, la confirmation les signale.
  */
 @Composable
-private fun SelectionDeletionRow(ui: UiState, checked: Set<String>, model: AppModel) {
+private fun RowScope.SelectionDeletionButtons(ui: UiState, checked: Set<String>, model: AppModel) {
     fun hasTargets(mode: DeletionMode) =
         UnifiedDeletion.plan(mode, ui.recordings, checked, emptySet(), ui.drive, ui.local, null, null).targets.isNotEmpty()
     val everywhere = remember(ui.recordings, ui.drive, ui.local, checked) { hasTargets(DeletionMode.EVERYWHERE) }
     val freeSpace = remember(ui.recordings, ui.drive, ui.local, checked) { hasTargets(DeletionMode.FREE_SPACE) }
-    Row(
-        modifier = Modifier.fillMaxWidth().background(Dictee.colors.surface).padding(start = 16.dp, top = 8.dp, end = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        SecondaryButton("Supprimer partout", enabled = everywhere && !ui.deleting, modifier = Modifier.weight(1f),
-            onClick = { model.requestDeletion(DeletionMode.EVERYWHERE, checked) })
-        SecondaryButton("Libérer l'espace", enabled = freeSpace && !ui.deleting, modifier = Modifier.weight(1f),
-            onClick = { model.requestDeletion(DeletionMode.FREE_SPACE, checked) })
-    }
+    SecondaryButton("Supprimer partout", enabled = everywhere && !ui.deleting, modifier = Modifier.weight(1f),
+        onClick = { model.requestDeletion(DeletionMode.EVERYWHERE, checked) })
+    SecondaryButton("Libérer l'espace", enabled = freeSpace && !ui.deleting, modifier = Modifier.weight(1f),
+        onClick = { model.requestDeletion(DeletionMode.FREE_SPACE, checked) })
 }
 
 @Composable
@@ -480,23 +482,13 @@ internal fun ActionBarButtons(
     recoverText: String, recoverEnabled: Boolean, transcribeCount: Int,
     sendText: String, sendEnabled: Boolean, driveEnabled: Boolean,
     onRecover: () -> Unit, onTranscribe: () -> Unit, onSend: () -> Unit,
+    deletion: (@Composable RowScope.() -> Unit)? = null,
 ) {
-    Column(modifier = Modifier.fillMaxWidth().background(Dictee.colors.surface).navigationBarsPadding()) {
-        HorizontalDivider(color = Dictee.colors.border)
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            ActionBarButton(recoverText, primary = true, enabled = recoverEnabled, modifier = Modifier.weight(1f), onClick = onRecover)
-            ActionBarButton("VTT + MD ($transcribeCount)", primary = false, enabled = transcribeCount > 0, modifier = Modifier.weight(1f), onClick = onTranscribe)
-            if (driveEnabled) {
-                ActionBarButton(sendText, primary = false, enabled = sendEnabled, modifier = Modifier.weight(1f), onClick = onSend)
-            }
+    BottomBar(deletion) {
+        ActionBarButton(recoverText, primary = true, enabled = recoverEnabled, modifier = Modifier.weight(1f), onClick = onRecover)
+        ActionBarButton("VTT + MD ($transcribeCount)", primary = false, enabled = transcribeCount > 0, modifier = Modifier.weight(1f), onClick = onTranscribe)
+        if (driveEnabled) {
+            ActionBarButton(sendText, primary = false, enabled = sendEnabled, modifier = Modifier.weight(1f), onClick = onSend)
         }
     }
-}
-
-@Composable
-internal fun SelectionDeletionButton(onDelete: () -> Unit) {
-    SecondaryButton("Supprimer du téléphone", modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), onClick = onDelete)
 }

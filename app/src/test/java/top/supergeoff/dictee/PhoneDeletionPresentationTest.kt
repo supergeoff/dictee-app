@@ -14,12 +14,4 @@ class PhoneDeletionPresentationTest {
         assertEquals(first, recordingForDetail(listOf(first, second), "first"))
         assertNull(recordingForDetail(listOf(second), "first"))
     }
-
-    @Test fun `selection conserve echecs partiels et autres lignes presentes`() {
-        val remaining = selectionAfterPhoneDeletion(
-            setOf("deleted", "partial", "other", "gone"), setOf("deleted", "partial", "gone"),
-            listOf(recording("deleted", false), recording("partial", true), recording("other", false)))
-        assertEquals(setOf("partial", "other"), remaining)
-        assertEquals(emptySet<String>(), selectionAfterPhoneDeletion(setOf("deleted"), setOf("deleted"), listOf(recording("deleted", false))))
-    }
 }

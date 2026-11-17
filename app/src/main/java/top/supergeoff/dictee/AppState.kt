@@ -47,11 +47,6 @@ data class UiState(
     val recovery: Progress? = null,
     val send: Progress? = null,
     val driveSendRequest: DriveSendRequest? = null,
-    val phoneDeletionRequest: PhoneDeletionPlan? = null,
-    val deletingPhone: Boolean = false,
-    val boxDeletionRequest: BoxDeletionPlan? = null,
-    val deletingBox: Boolean = false,
-    val boxDeletionResult: BoxDeletionResult? = null,
     val deletionRequest: UnifiedDeletionPlan? = null,
     val deleting: Boolean = false,
     val notice: String? = null,
@@ -129,11 +124,6 @@ private data class Live(
     val sendName: String? = null,
     val sendNames: Set<String> = emptySet(),
     val driveSendRequest: DriveSendRequest? = null,
-    val phoneDeletionRequest: PhoneDeletionPlan? = null,
-    val deletingPhone: Boolean = false,
-    val boxDeletionRequest: BoxDeletionPlan? = null,
-    val deletingBox: Boolean = false,
-    val boxDeletionResult: BoxDeletionResult? = null,
     val deletionRequest: UnifiedDeletionPlan? = null,
     val deleting: Boolean = false,
     val notice: String? = null,
@@ -154,40 +144,6 @@ internal fun launchProcessingRequest(
     } catch (e: Throwable) {
         admission.close()
         throw e
-    }
-}
-
-internal fun launchBoxDeletionRequest(
-    scope: CoroutineScope, requests: BoxDeletionRequests, lock: Any,
-    onAccepted: (BoxDeletionPlan) -> Unit,
-    execute: suspend (BoxDeletionPlan) -> Unit,
-    onFinished: () -> Unit,
-): kotlinx.coroutines.Job? {
-    val plan = requests.confirm() ?: return null
-    onAccepted(plan)
-    return scope.launch { execute(plan) }.also { job ->
-        job.invokeOnCompletion { synchronized(lock) { requests.finish(); onFinished() } }
-    }
-}
-
-internal suspend fun runGuardedBoxDeletion(
-    plan: BoxDeletionPlan,
-    withTransferLock: suspend (suspend () -> BoxDeletionResult) -> BoxDeletionResult,
-    guard: RecoveryDeletionGuard,
-    snapshot: suspend () -> Pair<String?, Set<String>>,
-    execute: suspend (String, List<String>) -> BoxDeletionResult,
-    unbackedNames: suspend () -> Set<String> = { plan.unbackedAudioNames },
-): BoxDeletionResult = withTransferLock {
-    guard.withDeletionSnapshot(plan.names.toSet()) { admittedSends ->
-        val (address, protected) = snapshot()
-        val blocked = plan.names.toSet() intersect (protected + plan.blockedNames + admittedSends)
-        when {
-            address != plan.address -> BoxDeletionResult(emptySet(), emptyMap(), emptySet(), plan.names.toSet(), "Le boîtier a changé, suppression annulée.")
-            blocked.isNotEmpty() -> BoxDeletionResult(emptySet(), emptyMap(), emptySet(), plan.names.toSet(), "Enregistrements occupés : ${blocked.sorted().joinToString()}")
-            (unbackedNames() - plan.unbackedAudioNames).isNotEmpty() -> BoxDeletionResult(emptySet(), emptyMap(), emptySet(), plan.names.toSet(), "Les copies audio ont changé. Redemandez la suppression pour vérifier le nouvel avertissement.")
-            plan.names.isEmpty() -> BoxDeletionResult(emptySet(), emptyMap(), emptySet(), emptySet(), null)
-            else -> execute(plan.address, plan.names)
-        }
     }
 }
 
@@ -321,8 +277,6 @@ class AppModel(
     private val requestFlow = MutableSharedFlow<UiRequest>(extraBufferCapacity = 8)
     private val phoneMutex = Mutex()
     private val deletionRequestLock = Any()
-    private val phoneDeletionRequests = PhoneDeletionRequests()
-    private val boxDeletionRequests = BoxDeletionRequests()
     private val driveMutex = Mutex()
     private val loggedFlags = ConcurrentHashMap.newKeySet<String>()
     private val notificationAsked = AtomicBoolean(false)
@@ -591,102 +545,6 @@ class AppModel(
         return deletionProtectedNames(local, live.recoveryNames, live.sendNames)
     }
 
-    private fun boxDeletionPlan(local: LocalState, address: String, names: Set<String>): BoxDeletionPlan {
-        val phone = phoneFlow.value
-        val knownPhone = if (phone.ok && local.phoneTreeUri != null && phone.folderUri == local.phoneTreeUri) phone else phone.copy(files = emptyList())
-        val current = buildUi(local, knownPhone, driveFlow.value, box.status.value, liveFlow.value)
-        return BoxDeletion.plan(address, current.recordings, names, deletionProtectedNames(local), current.drive, local)
-    }
-
-    fun requestBoxDeletion(names: Set<String>) {
-        requestBoxDeletionWithPermission(hasBluetooth(), { askBluetooth { requestBoxDeletion(names) } }) {
-            val local = localRepository.state.value ?: return@requestBoxDeletionWithPermission
-            val address = local.deviceAddress ?: return@requestBoxDeletionWithPermission
-            val plan = boxDeletionPlan(local, address, names)
-            synchronized(deletionRequestLock) {
-                boxDeletionRequests.open(plan)
-                liveFlow.update { it.copy(boxDeletionRequest = boxDeletionRequests.current) }
-            }
-        }
-    }
-
-    fun dismissBoxDeletionResult() {
-        liveFlow.update { it.copy(boxDeletionResult = null) }
-    }
-
-    fun cancelBoxDeletion() = synchronized(deletionRequestLock) {
-        boxDeletionRequests.cancel()
-        liveFlow.update { it.copy(boxDeletionRequest = null) }
-    }
-
-    fun confirmBoxDeletion() = synchronized(deletionRequestLock) {
-        launchBoxDeletionRequest(scope, boxDeletionRequests, deletionRequestLock,
-            onAccepted = {
-                liveFlow.update { it.copy(boxDeletionRequest = null, deletingBox = true, boxDeletionResult = null) }
-                jobs.begin()
-            },
-            execute = { plan ->
-                var latest = BoxDeletionResult(emptySet(), emptyMap(), emptySet(), plan.names.toSet(), null)
-                try {
-                    startWork()
-                    latest = runGuardedBoxDeletion(plan, { block -> recoverySafety.withTransferLock(block) }, recoveryDeletionGuard,
-                        snapshot = {
-                            val local = localRepository.awaitInitialized()
-                            local.deviceAddress to deletionProtectedNames(local)
-                        },
-                        execute = { address, names ->
-                            withContext(Dispatchers.IO) {
-                                val result = box.withSession(address) { session ->
-                                    BoxDeletionJob(session::deleteRecord, session::listRecords, { entries ->
-                                        localRepository.updateDurably { state ->
-                                            if (state.deviceAddress == address) state.copy(boxList = entries) else state
-                                        }
-                                    }, { result ->
-                                        latest = result
-                                        liveFlow.update { it.copy(boxDeletionResult = result) }
-                                    }).run(names)
-                                }
-                                if (result.error != null || !foregroundBoxGate.isForeground) box.close()
-                                result
-                            }
-                        },
-                        unbackedNames = {
-                            val local = localRepository.awaitInitialized()
-                            val current = boxDeletionPlan(local, plan.address, plan.names.toSet())
-                            current.unbackedAudioNames + (plan.names.toSet() - current.names.toSet())
-                        })
-                    liveFlow.update { it.copy(boxDeletionResult = latest) }
-                } catch (e: CancellationException) {
-                    liveFlow.update { it.copy(boxDeletionResult = latest.copy(error = latest.error ?: "Suppression interrompue ; état non vérifié.")) }
-                    throw e
-                } catch (e: Exception) {
-                    liveFlow.update { it.copy(boxDeletionResult = latest.copy(error = reasonOf(e))) }
-                    journal.error(Source.BLE, reasonOf(e))
-                }
-            },
-            onFinished = {
-                synchronized(deletionRequestLock) { liveFlow.update { it.copy(deletingBox = false) } }
-                jobs.end()
-            })
-    }
-
-    fun requestPhoneDeletion(names: Set<String>) {
-        val local = localRepository.state.value ?: return
-        val folder = local.phoneTreeUri ?: return
-        val current = buildUi(local, phoneFlow.value, driveFlow.value, box.status.value, liveFlow.value)
-        val plan = PhoneDeletion.plan(folder, current.recordings, names.toSet(), deletionProtectedNames(local),
-            current.drive, local, current.documentHashes)
-        synchronized(deletionRequestLock) {
-            phoneDeletionRequests.open(plan)
-            liveFlow.update { it.copy(phoneDeletionRequest = phoneDeletionRequests.current) }
-        }
-    }
-
-    fun cancelPhoneDeletion() = synchronized(deletionRequestLock) {
-        phoneDeletionRequests.cancel()
-        liveFlow.update { it.copy(phoneDeletionRequest = null) }
-    }
-
     /** Suppression du dossier du téléphone, sous le verrou fourni : un appelant qui tient déjà le verrou de transfert passe un verrou transparent. */
     private fun phoneDeletionOrchestrator(
         folderUri: String, recordings: List<Recording>,
@@ -728,44 +586,6 @@ class AppModel(
             }
         },
     )
-
-    fun confirmPhoneDeletion() {
-        val request = synchronized(deletionRequestLock) {
-            val plan = phoneDeletionRequests.confirm() ?: return
-            liveFlow.update { it.copy(phoneDeletionRequest = null, deletingPhone = true) }
-            plan
-        }
-        jobs.begin()
-        scope.launch {
-            try {
-                val runner = phoneDeletionOrchestrator(request.folderUri, request.recordings) { block ->
-                    recoverySafety.withTransferLock {
-                        recoveryDeletionGuard.withDeletion(request.recordings.map { it.name }.toSet(), block)
-                    }
-                }
-                when (val result = runner.execute(request.folderUri, request.recordings.map { it.name }.toSet())) {
-                    DeletionOutcome.FolderChanged -> say("Le dossier du téléphone a changé, suppression annulée.")
-                    is DeletionOutcome.Blocked -> say("Enregistrements occupés : ${result.names.sorted().joinToString()}")
-                    is DeletionOutcome.Completed -> {
-                        val failed = result.result.failures
-                        val messages = listOfNotNull(
-                            if (failed.isNotEmpty()) "Fichiers non supprimés : ${failed.keys.joinToString()}" else null,
-                            result.readError,
-                        )
-                        say(if (messages.isEmpty()) "Suppression du téléphone terminée." else messages.joinToString(" "))
-                    }
-                }
-            } catch (e: CancellationException) { throw e }
-              catch (e: Exception) { say(reasonOf(e)); journal.error(Source.FS, reasonOf(e)) }
-            finally {
-                synchronized(deletionRequestLock) {
-                    phoneDeletionRequests.finish()
-                    liveFlow.update { it.copy(deletingPhone = false) }
-                }
-                jobs.end()
-            }
-        }
-    }
 
     // --- Suppression unifiée
 
@@ -1602,11 +1422,6 @@ class AppModel(
             recovery = live.recovery,
             send = live.send,
             driveSendRequest = live.driveSendRequest,
-            phoneDeletionRequest = live.phoneDeletionRequest,
-            deletingPhone = live.deletingPhone,
-            boxDeletionRequest = live.boxDeletionRequest,
-            deletingBox = live.deletingBox,
-            boxDeletionResult = live.boxDeletionResult,
             deletionRequest = live.deletionRequest,
             deleting = live.deleting,
             notice = live.notice,

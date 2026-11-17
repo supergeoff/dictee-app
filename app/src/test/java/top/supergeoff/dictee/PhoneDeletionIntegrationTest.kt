@@ -85,22 +85,6 @@ class PhoneDeletionIntegrationTest {
         assertTrue(started)
     }
 
-    @Test fun cancellationAndDoubleConfirmationConsumeRequestOnce() {
-        val requests = PhoneDeletionRequests()
-        val plan = PhoneDeletionPlan("folder", emptyList(), emptySet(), false, false)
-        requests.open(plan)
-        requests.cancel()
-        assertNull(requests.confirm())
-        requests.open(plan)
-        assertEquals(plan, requests.confirm())
-        assertNull(requests.confirm())
-        requests.open(plan)
-        assertNull(requests.confirm())
-        requests.finish()
-        requests.open(plan)
-        assertEquals(plan, requests.confirm())
-    }
-
     @Test fun readFailureDoesNotHidePartialFailure() = runBlocking {
         val runner = PhoneDeletionOrchestrator({ it() }, { it() },
             { DeletionSnapshot("folder", emptyList(), emptySet(), null, LocalState(), emptyMap()) },
