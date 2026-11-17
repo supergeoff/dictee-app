@@ -33,6 +33,49 @@ class BoxDeletionIntegrationTest {
         assertNotNull(deletion.await().error); assertEquals(0, sessions); assertNotNull(guard.capture(setOf(a)))
     }
 
+    @Test fun sendAdmissionBeforeReservationBlocksBatchAndAfterSnapshotIsRefused() = runBlocking {
+        val repo = repository(); val safety = RecoverySafety(repo); val guard = RecoveryDeletionGuard()
+        val send = guard.admitSend(setOf(a))!!
+        var emissions = 0
+        val blocked = runGuardedBoxDeletion(plan(a, b), { block -> safety.withTransferLock(block) }, guard,
+            { "box" to emptySet() }, { _, _ -> emissions++; error("unexpected emission") })
+        assertNotNull(blocked.error); assertEquals(0, emissions)
+        send.close()
+        val snapshot = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+        val deletion = async { runGuardedBoxDeletion(plan(a), { block -> safety.withTransferLock(block) }, guard,
+            { "box" to emptySet() }, { _, _ ->
+                snapshot.complete(Unit); release.await(); emissions++
+                BoxDeletionResult(setOf(a), emptyMap(), emptySet(), emptySet(), null)
+            }) }
+        snapshot.await()
+        assertNull(guard.admitSend(setOf(a)))
+        assertEquals(0, emissions)
+        release.complete(Unit); deletion.await()
+        guard.admitSend(setOf(a))!!.close()
+        assertEquals(1, emissions)
+    }
+
+    @Test fun cancelledAndRepeatedConfirmationCannotEmitAgain() = runBlocking {
+        val repo = repository(); val safety = RecoverySafety(repo); val guard = RecoveryDeletionGuard()
+        val requests = BoxDeletionRequests()
+        var emissions = 0
+        suspend fun confirm() {
+            val selected = requests.confirm() ?: return
+            try {
+                runGuardedBoxDeletion(selected, { block -> safety.withTransferLock(block) }, guard,
+                    { "box" to emptySet() }, { _, names ->
+                        emissions++
+                        BoxDeletionResult(names.toSet(), emptyMap(), emptySet(), emptySet(), null)
+                    })
+            } finally { requests.finish() }
+        }
+        requests.open(plan(a)); requests.cancel(); confirm()
+        assertEquals(0, emissions)
+        requests.open(plan(a)); confirm(); confirm()
+        assertEquals(1, emissions)
+        assertNotNull(guard.capture(setOf(a)))
+    }
+
     @Test fun oneProtectedNameBlocksEntireBatch() = runBlocking {
         val repo = repository(); val safety = RecoverySafety(repo); val guard = RecoveryDeletionGuard()
         repo.updateDurably { it.copy(deviceAddress = "box") }

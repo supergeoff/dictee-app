@@ -146,9 +146,9 @@ internal suspend fun runGuardedBoxDeletion(
     snapshot: suspend () -> Pair<String?, Set<String>>,
     execute: suspend (String, List<String>) -> BoxDeletionResult,
 ): BoxDeletionResult = withTransferLock {
-    guard.withDeletion(plan.names.toSet()) {
+    guard.withDeletionSnapshot(plan.names.toSet()) { admittedSends ->
         val (address, protected) = snapshot()
-        val blocked = plan.names.toSet() intersect (protected + plan.blockedNames)
+        val blocked = plan.names.toSet() intersect (protected + plan.blockedNames + admittedSends)
         when {
             address != plan.address -> BoxDeletionResult(emptySet(), emptyMap(), emptySet(), plan.names.toSet(), "Le boîtier a changé, suppression annulée.")
             blocked.isNotEmpty() -> BoxDeletionResult(emptySet(), emptyMap(), emptySet(), plan.names.toSet(), "Enregistrements occupés : ${blocked.sorted().joinToString()}")
@@ -504,26 +504,27 @@ class AppModel(
      */
     private suspend fun runRecovery(address: String, uri: Uri, entries: List<ListItem.Entry>, recoveryToken: Map<String, Long>) {
         var connected = false
-        val outcome = attempt {
-            withContext(Dispatchers.IO) {
-                recoverySafety.withTransferLock {
-                    if (localFlow.deviceAddress != address) throw RecoveryGuardException(IllegalStateException("Le boîtier a changé."))
-                    box.withSession(address) { session ->
-                        connected = true
-                        RecoveryJob(session, PhoneFolder(app, uri), File(app.cacheDir, "recovery"), journal)
-                            .run(entries, ::publishRecovery, { readPhone() },
-                                beforeRecovery = { entry ->
-                                    if (!recoveryDeletionGuard.isCurrent(recoveryToken, entry.name) ||
-                                        localFlow.phoneTreeUri != uri.toString() || recoveryEntries(names = listOf(entry.name)).none { it == entry })
-                                        throw RecoveryGuardException(IllegalStateException("La sélection ou le dossier a changé."))
-                                    recoverySafety.begin(entry.name, uri.toString())
-                                },
-                                validateResult = { result -> recoverySafety.finish(result, uri.toString()) })
+        val outcome = withRecoveryFinalization({ connected }, { reconcileAutomaticProcessing() }) {
+            attempt {
+                withContext(Dispatchers.IO) {
+                    recoverySafety.withTransferLock {
+                        if (localFlow.deviceAddress != address) throw RecoveryGuardException(IllegalStateException("Le boîtier a changé."))
+                        box.withSession(address) { session ->
+                            connected = true
+                            RecoveryJob(session, PhoneFolder(app, uri), File(app.cacheDir, "recovery"), journal)
+                                .run(entries, ::publishRecovery, { readPhone() },
+                                    beforeRecovery = { entry ->
+                                        if (!recoveryDeletionGuard.isCurrent(recoveryToken, entry.name) ||
+                                            localFlow.phoneTreeUri != uri.toString() || recoveryEntries(names = listOf(entry.name)).none { it == entry })
+                                            throw RecoveryGuardException(IllegalStateException("La sélection ou le dossier a changé."))
+                                        recoverySafety.begin(entry.name, uri.toString())
+                                    },
+                                    validateResult = { result -> recoverySafety.finish(result, uri.toString()) })
+                        }
                     }
                 }
             }
         }
-        if (connected) reconcileAutomaticProcessing()
         outcome.onSuccess { results -> if ((results.lastOrNull() as? RecoveryResult.Failed)?.stopsQueue == true) box.close() }
         outcome.onFailure { e ->
             if (e is RecoveryGuardException) {
@@ -732,10 +733,18 @@ class AppModel(
 
     fun confirmDriveSend(choice: DriveSendChoice, displayedNames: Set<String>) {
         synchronized(driveSendRequests) {
-            val request = driveSendRequests.confirm(choice) ?: return
+            if (driveSendRequests.current == null) return
+            val admission = recoveryDeletionGuard.admitSend(displayedNames) ?: run {
+                say("Suppression en cours, envoi annulé.")
+                return
+            }
+            val request = try { driveSendRequests.confirm(choice) } catch (e: Throwable) {
+                admission.close()
+                throw e
+            } ?: run { admission.close(); return }
             liveFlow.update { it.copy(driveSendRequest = null, sending = true, sendNames = displayedNames.toSet()) }
             val folder = localFlow.phoneTreeUri
-            scope.launch { sendNow(request, folder, displayedNames) }
+            scope.launch { sendNow(request, folder, displayedNames) }.invokeOnCompletion { admission.close() }
         }
     }
 

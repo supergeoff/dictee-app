@@ -66,4 +66,26 @@ class RecoveryDeletionGuardTest {
         assertTrue(guard.isCurrent(token, "b"))
         assertNotNull(guard.capture(setOf("a")))
     }
+    @Test fun sendAndDeletionAdmissionsAreAtomicInBothOrders() = runBlocking {
+        val guard = RecoveryDeletionGuard()
+        val send = guard.admitSend(setOf("a"))!!
+        guard.withDeletionSnapshot(setOf("a", "b")) { busy ->
+            assertEquals(setOf("a"), busy)
+        }
+        send.close()
+        val reserved = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val deletion = async { guard.withDeletionSnapshot(setOf("a")) { busy ->
+            assertTrue(busy.isEmpty())
+            reserved.complete(Unit)
+            release.await()
+        } }
+        reserved.await()
+        assertNull(guard.admitSend(setOf("a")))
+        val other = guard.admitSend(setOf("b"))!!
+        other.close()
+        release.complete(Unit)
+        deletion.await()
+        guard.admitSend(setOf("a"))!!.close()
+    }
 }
