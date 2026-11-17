@@ -81,6 +81,12 @@ Le rejeu bruit du 17 novembre à 06:39 reçoit deux acquittements `0x17` accept�
 
 Le rejeu USB du 17 novembre à 07:23 reçoit deux acquittements `0x13` acceptés et trois états, tous avec longueurs et CRC valides. L'état initial et celui après désactivation sont identiques ; après activation, seul l'index 14 passe de `00` à `01`. L'index 11 reste `01` sur les trois lectures. Contrairement aux autres cycles, l'état final n'est donc pas identique à l'état initial : le retour fixe sur Activé n'est pas une restauration de la valeur réellement lue au départ. Le second rejeu du 17 novembre à 07:30 vérifie ensuite le cycle complet `01` → `00` → `01` à l'index 14 : les deux commandes sont acceptées, les six réponses ont des longueurs et CRC valides, seul cet index varie, et l'état final est strictement identique à l'état initial. Le champ USB à l'index 14 est donc confirmé dans les deux sens. L'accès réel aux fichiers par câble USB n'a pas été testé.
 
+### Suppression définitive observée dans DOWAY
+
+La capture HCI du 17 novembre couvrant 11:02:37 à 11:06:29 contient 4 000 enregistrements sans troncature et 28 trames V05 complètes aux longueurs et CRC valides. La liste initiale est complète (10 fichiers, marqueur `0x0a 02`). Deux actions de suppression définitive sont suivies de requêtes `0x0d` à 11:03:52 et 11:03:55, chacune acquittée avec une charge utile `00`.
+
+La requête `0x0d` contient exactement les 14 octets ASCII du nom d'enregistrement, sans extension ni terminateur NUL dans ces deux observations (longueur `0e`). Les deux noms correspondent à des entrées de la liste initiale. La réponse est `a00a010d0100110e` (CRC RX little-endian). Cette observation identifie la commande envoyée par DOWAY pour la suppression définitive et son acquittement ; aucune relecture de liste après ces commandes n'est présente, donc la disparition effective des fichiers et la libération d'espace ne sont pas établies par cette capture. Aucun rejeu nRF de suppression n'a été réalisé. Ne pas rejouer une telle commande sans accord explicite sur un fichier d'essai sauvegardé. Les noms réels et la capture brute ne sont pas conservés dans le dépôt public.
+
 ### Mesure du stockage
 
 La capture d'écran DOWAY du 17 novembre à 08:00 affiche « 23 MB sur 59.93 GB utilisés ». Les deux premiers entiers big-endian de `0x05` valent 59 934 et 59 911 : leur différence est 23 et 59 934 / 1 000 = 59,934. Cela étaye l'interprétation capacité totale et espace libre en unités affichées comme MB par DOWAY, mais ne confirme pas encore l'unité exacte en octets ni l'arrondi.
