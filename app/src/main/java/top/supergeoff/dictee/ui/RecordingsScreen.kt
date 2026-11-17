@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -26,6 +27,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
@@ -45,6 +48,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import top.supergeoff.dictee.AppModel
+import top.supergeoff.dictee.DeletionMode
+import top.supergeoff.dictee.DriveListing
+import top.supergeoff.dictee.LocationFilter
+import top.supergeoff.dictee.UnifiedDeletion
+import top.supergeoff.dictee.cloudSendCount
 import top.supergeoff.dictee.LinkStatus
 import top.supergeoff.dictee.FileKind
 import top.supergeoff.dictee.ProvenanceStatus
@@ -62,23 +70,6 @@ import top.supergeoff.dictee.PipelineStatus
 import java.time.LocalDate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-
-/**
- * Filtres de la liste, chacun avec son compteur. « Sur le boîtier » garde ce qui n'est pas encore récupéré.
- * « À relire » n'a pas encore d'état au lot 1 : il reste vide, jusqu'aux lots qui produisent la synthèse.
- */
-private enum class Filter(val label: String) {
-    ALL("Tous"),
-    REVIEW("À relire"),
-    ON_BOX("Sur le boîtier"),
-    ;
-
-    fun matches(recording: Recording): Boolean = when (this) {
-        ALL -> true
-        REVIEW -> false
-        ON_BOX -> recording.onBox && recording.phoneFiles.isEmpty()
-    }
-}
 
 /** Lignes cochées, `null` hors sélection. Décocher la dernière ligne quitte la sélection. */
 @Stable
@@ -119,45 +110,21 @@ private class Selection {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RecordingsScreen(ui: UiState, model: AppModel, onOpen: (name: String) -> Unit, onSettings: () -> Unit) {
-    var filter by rememberSaveable { mutableStateOf(Filter.ALL) }
+    var filter by rememberSaveable { mutableStateOf(LocationFilter.ALL) }
     val selection = remember { Selection() }
-    var boxDeletionTargets by remember { mutableStateOf<Set<String>?>(null) }
-    LaunchedEffect(ui.deletingBox, ui.boxDeletionResult) {
-        val targets = boxDeletionTargets
-        val result = ui.boxDeletionResult
-        if (targets != null && !ui.deletingBox && result != null) {
-            selection.retain(top.supergeoff.dictee.selectionAfterBoxDeletion(selection.names.orEmpty(), targets intersect result.confirmed, ui.recordings))
-            boxDeletionTargets = null
-        }
+    val snackbarHost = remember { SnackbarHostState() }
+    LaunchedEffect(ui.notice) {
+        val notice = ui.notice ?: return@LaunchedEffect
+        snackbarHost.showSnackbar(notice)
+        model.dismissNotice()
     }
-    ui.boxDeletionRequest?.let { plan ->
-        BoxDeletionDialog(plan, ui.deletingBox, onConfirm = {
-            boxDeletionTargets = plan.names.toSet()
-            model.confirmBoxDeletion()
-        }, onDismiss = model::cancelBoxDeletion)
+    ui.deletionRequest?.let { plan ->
+        UnifiedDeletionDialog(plan, ui.deleting, onConfirm = {
+            model.confirmDeletion()
+            selection.clear()
+        }, onDismiss = model::cancelDeletion)
     }
-    var deletionTargets by remember { mutableStateOf<Set<String>?>(null) }
-    var deletionRevision by remember { mutableStateOf(0L) }
-    var deletionStarted by remember { mutableStateOf(false) }
-    LaunchedEffect(ui.phoneRevision, ui.deletingPhone) {
-        val targets = deletionTargets
-        if (targets != null && ui.deletingPhone) deletionStarted = true
-        if (targets != null && !ui.deletingPhone && (deletionStarted || ui.phoneRevision != deletionRevision)) {
-            if (ui.phoneRevision != deletionRevision) {
-                selection.retain(top.supergeoff.dictee.selectionAfterPhoneDeletion(selection.names.orEmpty(), targets, ui.recordings))
-            }
-            deletionTargets = null
-        }
-    }
-    ui.phoneDeletionRequest?.let { plan ->
-        PhoneDeletionDialog(plan, ui.deletingPhone, onConfirm = {
-            deletionTargets = plan.recordings.mapTo(HashSet()) { it.name }
-            deletionRevision = ui.phoneRevision
-            deletionStarted = false
-            model.confirmPhoneDeletion()
-        }, onDismiss = model::cancelPhoneDeletion)
-    }
-    val shown = remember(ui.recordings, filter) { ui.recordings.filter { filter.matches(it) } }
+    val shown = remember(ui.recordings, ui.drive, filter) { ui.recordings.filter { filter.matches(it, ui.drive) } }
     val present = remember(ui.recordings) { ui.recordings.mapTo(HashSet()) { it.name } }
     // Une ligne cochée qui disparaît de la liste est oubliée, pour ne pas être recochée si elle revient.
     LaunchedEffect(present) { selection.retain(present) }
@@ -172,7 +139,7 @@ fun RecordingsScreen(ui: UiState, model: AppModel, onOpen: (name: String) -> Uni
         }
         ProgressBars(ui.recovery, ui.send, ui.transcription,
             ui.transcription?.let { transcriptionNotificationLabel(it, ui.local.transcriptionTasks) })
-        Filters(ui.recordings, filter) { filter = it }
+        Filters(ui.recordings, ui.drive, filter) { filter = it }
         PullToRefreshBox(isRefreshing = ui.refreshing, onRefresh = model::refresh, modifier = Modifier.weight(1f)) {
             when {
                 ui.recordings.isEmpty() -> EmptyList(emptyListText(ui.link, ui.refreshing))
@@ -187,11 +154,8 @@ fun RecordingsScreen(ui: UiState, model: AppModel, onOpen: (name: String) -> Uni
                 )
             }
         }
-        if (checked != null) {
-            val boxNames = ui.recordings.filter { it.onBox && it.name in checked }.mapTo(HashSet()) { it.name }
-            if (boxNames.isNotEmpty()) SecondaryButton("Supprimer du boîtier", modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), onClick = { model.requestBoxDeletion(boxNames) })
-            SelectionDeletionButton { model.requestPhoneDeletion(checked) }
-        }
+        SnackbarHost(snackbarHost)
+        if (checked != null) SelectionDeletionRow(ui, checked, model)
         ActionBar(ui, model, checked, onDone = selection::clear)
     }
 }
@@ -241,7 +205,7 @@ private fun SelectionBar(count: Int, onClose: () -> Unit, onAll: () -> Unit) {
 }
 
 @Composable
-private fun Filters(recordings: List<Recording>, selected: Filter, onSelect: (Filter) -> Unit) {
+private fun Filters(recordings: List<Recording>, drive: DriveListing?, selected: LocationFilter, onSelect: (LocationFilter) -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -249,8 +213,8 @@ private fun Filters(recordings: List<Recording>, selected: Filter, onSelect: (Fi
             .padding(start = 16.dp, end = 16.dp, bottom = 14.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Filter.entries.forEach { filter ->
-            FilterPill(filter.label, filter == selected, count = recordings.count { filter.matches(it) }) { onSelect(filter) }
+        LocationFilter.entries.forEach { filter ->
+            FilterPill(filter.label, filter == selected, count = recordings.count { filter.matches(it, drive) }) { onSelect(filter) }
         }
     }
 }
@@ -388,29 +352,74 @@ private fun SelectionMark(checked: Boolean) {
 }
 
 /**
- * Boutons du bas. Hors sélection (`checked` nul), « Récupérer » prend tout ce qui manque sur le boîtier et « Envoyer » tout ce
- * qui manque dans Drive. En sélection, ils portent sur les lignes cochées : celles du boîtier pour récupérer, celles à envoyer
- * pour envoyer. Une action quitte ensuite la sélection. Le bouton « Envoyer » n'existe que si Drive est activé.
+ * Boutons du bas. Hors sélection (`checked` nul), la barre n'existe que s'il reste des enregistrements à envoyer dans le cloud :
+ * elle porte alors le seul bouton « Envoyer dans le cloud (n) ». En sélection, « Récupérer », « VTT + MD » et « Envoyer » portent
+ * sur les lignes cochées : celles du boîtier pour récupérer, celles à envoyer pour envoyer. Une action quitte ensuite la sélection.
+ * Le bouton « Envoyer » n'existe que si Drive est activé.
  */
 @Composable
 private fun ActionBar(ui: UiState, model: AppModel, checked: Set<String>?, onDone: () -> Unit) {
-    val recoverNames = checked?.let { names -> ui.local.boxList.map { it.name }.filter { it in names } }
-    val sendNames = checked?.let { names -> Recordings.sendable(ui.recordings, ui.local.errors).map { it.name }.filter { it in names } }
+    if (checked == null) {
+        val cloudCount = cloudSendCount(ui.recordings, ui.drive, ui.local.driveEnabled)
+        if (cloudCount > 0) {
+            BottomBar {
+                ActionBarButton(if (ui.sending) "Envoi…" else "Envoyer dans le cloud ($cloudCount)", primary = true,
+                    enabled = !ui.sending, modifier = Modifier.weight(1f), onClick = { model.send(null) })
+            }
+        }
+        return
+    }
+    val recoverNames = ui.local.boxList.map { it.name }.filter { it in checked }
+    val sendNames = Recordings.sendable(ui.recordings, ui.local.errors).map { it.name }.filter { it in checked }
     val active = ui.local.transcriptionTasks.filter { !it.phase.isTerminal() }.mapTo(mutableSetOf()) { it.recordingName }
     val transcribe = Recordings.toTranscribe(ui.recordings, checked, ui.local.errors, active).candidates.map { it.name }
-    val recoverCount = recoverNames?.size ?: ui.toRecover.size
-    val sendCount = if (checked == null) ui.toSend.size else ui.toSend.count { it.name in checked }
+    val recoverCount = recoverNames.size
+    val sendCount = ui.toSend.count { it.name in checked }
     ActionBarButtons(
         recoverText = if (ui.recovering) "Récupération…" else "Récupérer ($recoverCount)",
         recoverEnabled = ui.link == LinkStatus.CONNECTED && !ui.recovering && recoverCount > 0,
         transcribeCount = transcribe.size,
         sendText = if (ui.sending) "Envoi…" else "Envoyer ($sendCount)",
-        sendEnabled = !ui.sending && if (checked != null) sendNames.orEmpty().isNotEmpty() else sendCount > 0,
+        sendEnabled = !ui.sending && sendNames.isNotEmpty(),
         driveEnabled = ui.local.driveEnabled,
         onRecover = { model.recover(recoverNames); onDone() },
         onTranscribe = { model.transcribe(checked); onDone() },
-        onSend = { model.send(sendNames, if (checked != null) onDone else null) },
+        onSend = { model.send(sendNames, onDone) },
     )
+}
+
+/** Fond, filet et rangée des boutons du bas. */
+@Composable
+private fun BottomBar(buttons: @Composable RowScope.() -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth().background(Dictee.colors.surface).navigationBarsPadding()) {
+        HorizontalDivider(color = Dictee.colors.border)
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            content = buttons,
+        )
+    }
+}
+
+/**
+ * « Supprimer partout » et « Libérer l'espace » sur la sélection. Chaque bouton est inactif quand le plan de son mode n'a aucune
+ * cible ; les enregistrements occupés ne sont pas connus ici, la confirmation les signale.
+ */
+@Composable
+private fun SelectionDeletionRow(ui: UiState, checked: Set<String>, model: AppModel) {
+    fun hasTargets(mode: DeletionMode) =
+        UnifiedDeletion.plan(mode, ui.recordings, checked, emptySet(), ui.drive, ui.local, null, null).targets.isNotEmpty()
+    val everywhere = remember(ui.recordings, ui.drive, ui.local, checked) { hasTargets(DeletionMode.EVERYWHERE) }
+    val freeSpace = remember(ui.recordings, ui.drive, ui.local, checked) { hasTargets(DeletionMode.FREE_SPACE) }
+    Row(
+        modifier = Modifier.fillMaxWidth().background(Dictee.colors.surface).padding(start = 16.dp, top = 8.dp, end = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        SecondaryButton("Supprimer partout", enabled = everywhere && !ui.deleting, modifier = Modifier.weight(1f),
+            onClick = { model.requestDeletion(DeletionMode.EVERYWHERE, checked) })
+        SecondaryButton("Libérer l'espace", enabled = freeSpace && !ui.deleting, modifier = Modifier.weight(1f),
+            onClick = { model.requestDeletion(DeletionMode.FREE_SPACE, checked) })
+    }
 }
 
 @Composable
