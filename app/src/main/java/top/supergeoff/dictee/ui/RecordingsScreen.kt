@@ -121,6 +121,21 @@ private class Selection {
 fun RecordingsScreen(ui: UiState, model: AppModel, onOpen: (name: String) -> Unit, onSettings: () -> Unit) {
     var filter by rememberSaveable { mutableStateOf(Filter.ALL) }
     val selection = remember { Selection() }
+    var boxDeletionTargets by remember { mutableStateOf<Set<String>?>(null) }
+    LaunchedEffect(ui.deletingBox, ui.boxDeletionResult) {
+        val targets = boxDeletionTargets
+        val result = ui.boxDeletionResult
+        if (targets != null && !ui.deletingBox && result != null) {
+            selection.retain(top.supergeoff.dictee.selectionAfterBoxDeletion(selection.names.orEmpty(), targets intersect result.confirmed, ui.recordings))
+            boxDeletionTargets = null
+        }
+    }
+    ui.boxDeletionRequest?.let { plan ->
+        BoxDeletionDialog(plan, ui.deletingBox, onConfirm = {
+            boxDeletionTargets = plan.names.toSet()
+            model.confirmBoxDeletion()
+        }, onDismiss = model::cancelBoxDeletion)
+    }
     var deletionTargets by remember { mutableStateOf<Set<String>?>(null) }
     var deletionRevision by remember { mutableStateOf(0L) }
     var deletionStarted by remember { mutableStateOf(false) }
@@ -172,7 +187,11 @@ fun RecordingsScreen(ui: UiState, model: AppModel, onOpen: (name: String) -> Uni
                 )
             }
         }
-        if (checked != null) SelectionDeletionButton { model.requestPhoneDeletion(checked) }
+        if (checked != null) {
+            val boxNames = ui.recordings.filter { it.onBox && it.name in checked }.mapTo(HashSet()) { it.name }
+            if (boxNames.isNotEmpty()) SecondaryButton("Supprimer du boîtier", modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), onClick = { model.requestBoxDeletion(boxNames) })
+            SelectionDeletionButton { model.requestPhoneDeletion(checked) }
+        }
         ActionBar(ui, model, checked, onDone = selection::clear)
     }
 }

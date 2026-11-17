@@ -593,6 +593,10 @@ class AppModel(
         }
     }
 
+    fun dismissBoxDeletionResult() {
+        liveFlow.update { it.copy(boxDeletionResult = null) }
+    }
+
     fun cancelBoxDeletion() = synchronized(deletionRequestLock) {
         boxDeletionRequests.cancel()
         liveFlow.update { it.copy(boxDeletionRequest = null) }
