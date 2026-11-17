@@ -152,6 +152,14 @@ class DriveClient(private val http: Http, private val tokens: TokenSource) {
         return driveFile(JSONObject(done), -1L)
     }
 
+    /** Met le fichier à la corbeille. Un fichier déjà supprimé à la main (404) compte comme réussi ; les autres erreurs lèvent. */
+    fun trash(fileId: String) {
+        val url = "$API/files/${enc(fileId).replace("+", "%20")}?supportsAllDrives=true"
+        val response = send("PATCH", url, jsonBody(JSONObject().put("trashed", true)))
+        if (response.code == 404) return
+        ok(response)
+    }
+
     private fun driveFile(json: JSONObject, missingSize: Long): DriveFile {
         val id = if (json.isNull("id")) "" else json.optString("id")
         if (id.isBlank()) throw DriveException(0, "identifiant Drive absent")

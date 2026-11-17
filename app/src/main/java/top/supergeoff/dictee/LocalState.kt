@@ -62,6 +62,11 @@ data class LocalState(
         driveReceipts = driveReceipts.filterNot { it.destination == destination && it.fileName == fileName },
     )
 
+    /** Retire les preuves d'envoi de ces fichiers Drive, quelle que soit leur destination. */
+    fun withoutDriveReceipts(fileIds: Set<String>): LocalState = copy(
+        driveReceipts = driveReceipts.filterNot { it.driveFileId in fileIds },
+    )
+
     fun withDriveReceipt(receipt: DriveReceipt): LocalState = copy(
         driveReceipts = driveReceipts.filterNot {
             it.destination == receipt.destination && it.fileName == receipt.fileName
