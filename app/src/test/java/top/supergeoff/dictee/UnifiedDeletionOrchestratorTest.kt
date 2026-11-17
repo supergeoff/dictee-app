@@ -37,7 +37,6 @@ class UnifiedDeletionOrchestratorTest {
         ).execute(everywhere)
         assertEquals(listOf("drive:id-vtt", "drive:id-md", "receipts:[id-md, id-vtt]", "phone:[$a]", "box:[$a, $b]"), calls)
         assertTrue(outcome.failures.isEmpty())
-        assertEquals(setOf(vtt.name, md.name, "Note-$a.mp3", a, b), outcome.deleted)
     }
 
     @Test fun blockedPlanDeletesNothing() = runBlocking {
@@ -46,7 +45,6 @@ class UnifiedDeletionOrchestratorTest {
             { calls += "drive" }, { calls += "phone"; null }, { calls += "box"; boxResult(emptySet()) }, { calls += "receipts" },
         ).execute(everywhere.copy(blockedNames = setOf(a)))
         assertTrue(calls.isEmpty())
-        assertTrue(outcome.deleted.isEmpty())
         assertTrue(outcome.failures.isEmpty())
     }
 
@@ -60,7 +58,6 @@ class UnifiedDeletionOrchestratorTest {
         ).execute(everywhere)
         assertEquals(listOf("drive:id-vtt", "drive:id-md", "receipts", "phone"), calls)
         assertEquals(listOf("Boîtier : hors de portée"), outcome.failures)
-        assertEquals(setOf(vtt.name, md.name, "Note-$a.mp3"), outcome.deleted)
     }
 
     @Test fun driveFailureContinues() = runBlocking {

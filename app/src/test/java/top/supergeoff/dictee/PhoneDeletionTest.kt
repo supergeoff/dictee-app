@@ -6,14 +6,12 @@ import org.junit.Test
 class PhoneDeletionTest {
     private val a = "20261117120000"
     private val b = "20261117120100"
-    private val dest = DriveDestination("account", "folder")
     private fun recording(name: String, kinds: Set<FileKind>, onBox: Boolean = false) = Recording(
         name, RecordType.NOTE, 1, onBox,
         kinds.associateWith { PhoneFile(RecordName.fileName(RecordType.NOTE, name, it), 1) }, DisplayState.Recovered,
     )
-    private fun plan(rs: List<Recording>, selected: Set<String> = rs.map { it.name }.toSet(), protected: Set<String> = emptySet(),
-        drive: DriveListing? = null, local: LocalState = LocalState(), hashes: Map<String, String> = emptyMap()) =
-        PhoneDeletion.plan("folder-uri", rs, selected, protected, drive, local, hashes)
+    private fun plan(rs: List<Recording>, selected: Set<String> = rs.map { it.name }.toSet(), protected: Set<String> = emptySet()) =
+        PhoneDeletion.plan("folder-uri", rs, selected, protected)
 
     @Test fun selectionDeduplicatesAndOmitsRecordingsWithoutFiles() {
         val one = recording(a, setOf(FileKind.MP3)); val two = recording(b, setOf(FileKind.MD))
@@ -28,24 +26,6 @@ class PhoneDeletionTest {
         val store = object : PhoneStore by MemoryStore() { override fun delete(fileName: String) { calls += fileName } }
         assertTrue(PhoneDeletion.execute(p, store).deleted.isEmpty())
         assertTrue(calls.isEmpty())
-    }
-    @Test fun unknownDriveAndLocalOnlyMp3Warn() {
-        val p = plan(listOf(recording(a, setOf(FileKind.MP3, FileKind.VTT))))
-        assertTrue(p.documentsUnverified); assertTrue(p.audioAtRisk)
-    }
-    @Test fun boxCopyPreventsAudioWarning() {
-        assertFalse(plan(listOf(recording(a, setOf(FileKind.MP3), true))).audioAtRisk)
-    }
-    @Test fun receiptsMustMatchHashAndDestination() {
-        val r = recording(a, setOf(FileKind.VTT, FileKind.MD))
-        val remote = r.phoneFiles.values.map { DriveFile(it.fileName, it.fileName, 1) }
-        val listing = DriveListing(remote.associate { it.name to it.size }, remote)
-        val hashes = remote.associate { it.name to "current" }
-        val receipts = remote.map { DriveReceipt(dest, it.name, it.id, "current") }
-        val local = LocalState(driveAccount = dest.account, chosenFolderId = dest.folderId, driveReceipts = receipts)
-        assertFalse(plan(listOf(r), drive = listing, local = local, hashes = hashes).documentsUnverified)
-        assertTrue(plan(listOf(r), drive = listing, local = local, hashes = hashes.mapValues { "new" }).documentsUnverified)
-        assertTrue(plan(listOf(r), drive = listing, local = local.copy(chosenFolderId = "other"), hashes = hashes).documentsUnverified)
     }
     @Test fun executeContinuesAfterRefusalAndOnlyDeletesPlannedFiles() {
         val r = recording(a, setOf(FileKind.MP3, FileKind.VTT))
@@ -99,12 +79,5 @@ class PhoneDeletionTest {
             assertTrue(result.failures.isEmpty())
             assertEquals(untouched, memory.files.keys)
         }
-    }
-    @Test fun driveMp3PreventsAudioWarning() {
-        val r = recording(a, setOf(FileKind.MP3))
-        val name = r.phoneFiles.getValue(FileKind.MP3).fileName
-        val drive = DriveListing(mapOf(name to 1L), listOf(DriveFile("id", name, 1)))
-        val local = LocalState(driveAccount = dest.account, chosenFolderId = dest.folderId)
-        assertFalse(plan(listOf(r), drive = drive, local = local).audioAtRisk)
     }
 }

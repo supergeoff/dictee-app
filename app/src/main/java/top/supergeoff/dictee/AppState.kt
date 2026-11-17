@@ -565,7 +565,7 @@ class AppModel(
                 if (!fresh.ok) throw PhoneStoreException(PHONE_FOLDER_LOST)
             }
             val current = buildUi(local, phoneFlow.value, driveFlow.value, box.status.value, liveFlow.value)
-            DeletionSnapshot(folder, current.recordings, deletionProtectedNames(local), current.drive, local, current.documentHashes)
+            DeletionSnapshot(folder, current.recordings, deletionProtectedNames(local))
         },
         delete = { plan -> withContext(Dispatchers.IO) { PhoneDeletion.execute(plan, PhoneFolder(app, plan.folderUri.toUri())) } },
         reread = { result ->
@@ -599,7 +599,10 @@ class AppModel(
      */
     fun requestDeletion(mode: DeletionMode, names: Set<String>) {
         val local = localRepository.state.value ?: return
-        if (liveFlow.value.deleting) return
+        if (liveFlow.value.deleting) {
+            liveFlow.update { it.copy(notice = "Suppression en cours.") }
+            return
+        }
         val phone = phoneFlow.value
         val knownPhone = if (phone.ok && local.phoneTreeUri != null && phone.folderUri == local.phoneTreeUri) phone else phone.copy(files = emptyList())
         val current = buildUi(local, knownPhone, driveFlow.value, box.status.value, liveFlow.value)
@@ -661,6 +664,7 @@ class AppModel(
                 startWork()
                 runUnifiedDeletion(plan)
             } catch (e: CancellationException) {
+                journal.error(Source.APP, "Suppression interrompue ; état non vérifié.")
                 throw e
             } catch (e: Exception) {
                 journal.error(Source.APP, "suppression : ${reasonOf(e)}")
@@ -749,13 +753,13 @@ class AppModel(
 
     /**
      * [names] nul : tout ce qui manque dans Drive si sa liste est connue, sinon tout ce qui a un fichier sur le téléphone.
-     * Sans envoi vers Drive activé, rien ne part.
+     * Sans envoi vers Drive activé, rien ne part. [choice] nul garde le dernier choix confirmé.
      */
-    fun send(names: List<String>?, onConfirmed: (() -> Unit)? = null) {
+    fun send(names: List<String>?, onConfirmed: (() -> Unit)? = null, choice: DriveSendChoice? = null) {
         val local = localRepository.state.value ?: return
         synchronized(driveSendRequests) {
             if (!local.driveEnabled || liveFlow.value.sending) return
-            driveSendRequests.open(names, local.driveSendChoice, onConfirmed)
+            driveSendRequests.open(names, choice ?: local.driveSendChoice, onConfirmed)
             liveFlow.update { it.copy(driveSendRequest = driveSendRequests.current) }
         }
     }

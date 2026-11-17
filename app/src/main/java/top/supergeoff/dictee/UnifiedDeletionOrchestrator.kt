@@ -2,8 +2,7 @@ package top.supergeoff.dictee
 
 import kotlin.coroutines.cancellation.CancellationException
 
-/** [deleted] : fichiers Drive mis à la corbeille, fichiers du téléphone effacés et enregistrements retirés du boîtier. */
-data class UnifiedDeletionOutcome(val deleted: Set<String>, val failures: List<String>)
+data class UnifiedDeletionOutcome(val failures: List<String>)
 
 /**
  * Exécute un plan confirmé : Drive, puis téléphone, puis boîtier. L'échec d'un niveau n'arrête pas les suivants.
@@ -17,16 +16,14 @@ class UnifiedDeletionOrchestrator(
     private val onDriveTrashed: suspend (Set<String>) -> Unit,
 ) {
     suspend fun execute(plan: UnifiedDeletionPlan): UnifiedDeletionOutcome {
-        val deleted = linkedSetOf<String>()
         val failures = mutableListOf<String>()
-        if (plan.blockedNames.isNotEmpty()) return UnifiedDeletionOutcome(deleted, failures)
+        if (plan.blockedNames.isNotEmpty()) return UnifiedDeletionOutcome(failures)
 
         val trashedIds = linkedSetOf<String>()
         for (file in plan.targets.flatMap { it.driveFiles }.distinctBy { it.id }) {
             try {
                 trashDrive(file)
                 trashedIds += file.id
-                deleted += file.name
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -47,10 +44,8 @@ class UnifiedDeletionOrchestrator(
         if (phoneNames.isNotEmpty()) {
             try {
                 val result = deletePhone(phoneNames)
-                if (result == null) failures += "Téléphone : suppression annulée" else {
-                    deleted += result.deleted
-                    result.failures.forEach { (file, reason) -> failures += "Téléphone : $file : $reason" }
-                }
+                if (result == null) failures += "Téléphone : suppression annulée"
+                else result.failures.forEach { (file, reason) -> failures += "Téléphone : $file : $reason" }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -62,7 +57,6 @@ class UnifiedDeletionOrchestrator(
         if (boxNames.isNotEmpty()) {
             try {
                 val result = deleteBox(boxNames)
-                deleted += result.confirmed
                 result.refused.forEach { (name, status) -> failures += "Boîtier : $name : refusé (code $status)" }
                 result.error?.let { failures += "Boîtier : $it" }
             } catch (e: CancellationException) {
@@ -71,7 +65,7 @@ class UnifiedDeletionOrchestrator(
                 failures += "Boîtier : ${reasonText(e)}"
             }
         }
-        return UnifiedDeletionOutcome(deleted, failures)
+        return UnifiedDeletionOutcome(failures)
     }
 
     private fun reasonText(e: Exception): String = e.message ?: e.javaClass.simpleName

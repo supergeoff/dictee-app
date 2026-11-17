@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import top.supergeoff.dictee.AppModel
 import top.supergeoff.dictee.DeletionMode
 import top.supergeoff.dictee.DriveListing
+import top.supergeoff.dictee.DriveSendChoice
 import top.supergeoff.dictee.LocationFilter
 import top.supergeoff.dictee.UnifiedDeletion
 import top.supergeoff.dictee.cloudSendCount
@@ -416,7 +417,7 @@ private fun ActionBar(ui: UiState, model: AppModel, checked: Set<String>?, onDon
         if (cloudCount > 0) {
             BottomBar {
                 ActionBarButton(if (ui.sending) "Envoi…" else "Envoyer dans le cloud ($cloudCount)", primary = true,
-                    enabled = !ui.sending, modifier = Modifier.weight(1f), onClick = { model.send(null) })
+                    enabled = !ui.sending, modifier = Modifier.weight(1f), onClick = { model.send(null, choice = DriveSendChoice.DOCUMENTS_ONLY) })
             }
         }
         return

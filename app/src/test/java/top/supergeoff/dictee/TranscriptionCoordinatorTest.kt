@@ -63,7 +63,7 @@ class TranscriptionCoordinatorTest {
         val runner = PhoneDeletionOrchestrator(
             { block -> safety.withTransferLock { block() } },
             { block -> phoneLock.lock(); try { block() } finally { phoneLock.unlock() } },
-            { DeletionSnapshot("folder", emptyList(), emptySet(), null, LocalState(), emptyMap()) },
+            { DeletionSnapshot("folder", emptyList(), emptySet()) },
             { entered.complete(Unit); release.await(); audioExists = false; PhoneDeletionResult(emptySet(), emptyMap()) },
             { },
         )

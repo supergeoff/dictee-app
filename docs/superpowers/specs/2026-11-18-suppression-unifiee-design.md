@@ -8,7 +8,7 @@ Geoff trouve la suppression actuelle confuse : deux boutons distincts (boîtier,
 
 - Deux actions de suppression remplacent « Supprimer du boîtier » et « Supprimer du téléphone », dans la sélection multiple et dans le menu ⋮ de la fiche :
   - **Supprimer partout** efface l'enregistrement du boîtier, du téléphone et de Drive, partout où une copie existe et peut être effacée.
-  - **Libérer l'espace** efface les niveaux inférieurs au plus haut niveau présent : boîtier effacé si le téléphone a une copie ; boîtier et téléphone effacés si Drive a une copie ; rien si l'enregistrement n'est que sur le boîtier. Une copie Drive des seuls VTT et MD suffit : la perte du MP3 dans ce cas est voulue par Geoff.
+  - **Libérer l'espace** efface les niveaux inférieurs au plus haut niveau présent : boîtier effacé si le téléphone a le MP3 ; boîtier et téléphone effacés si Drive a une copie ; rien si l'enregistrement n'est que sur le boîtier. Une copie Drive des seuls VTT et MD suffit : la perte du MP3 dans ce cas est voulue par Geoff.
 - Une seule confirmation par action. Après « Supprimer », la fenêtre se ferme et rien d'autre ne s'ouvre. Un message court (snackbar) n'apparaît qu'en cas d'échec, avec le détail dans le journal.
 - Filtres : **Tout, Boîtier, Téléphone, Drive**, dans cet ordre. Un enregistrement apparaît dans chaque filtre où il a une copie ; le compteur compte ces présences. « À relire » disparaît.
 - Barre du bas :
@@ -54,7 +54,7 @@ Geoff trouve la suppression actuelle confuse : deux boutons distincts (boîtier,
 ## Précisions après relecture (choix de Claude)
 
 - **Copie Drive pour les filtres** : un enregistrement est « Drive » quand la liste Drive du dernier rafraîchissement contient au moins un de ses fichiers (même règle que `Recordings.build`). Drive désactivé ou liste absente : le filtre Drive compte zéro.
-- **Copie Drive pour « Libérer l'espace »** : le téléphone n'est effacé que si le VTT et le MD ont une copie confirmée sur Drive (`DriveSync.hasConfirmedCopy` : fichier courant de la liste et reçu correspondant). Sinon seul le boîtier est libéré si le téléphone a une copie. Une action destructive ne s'appuie jamais sur une présence non confirmée.
+- **Copie Drive pour « Libérer l'espace »** : le téléphone n'est effacé que si le VTT et le MD ont une copie confirmée sur Drive (`DriveSync.hasConfirmedCopy` : fichier courant de la liste et reçu correspondant). Sinon seul le boîtier est libéré si le téléphone a le MP3. Une action destructive ne s'appuie jamais sur une présence non confirmée.
 - **Après mise à la corbeille** : les reçus des fichiers concernés sont retirés de l'état local et la liste Drive est relue. Un fichier déjà absent (404) ou déjà dans la corbeille compte comme un succès.
 - **Drive désactivé, hors ligne ou non autorisé** : avec Drive désactivé, le niveau Drive est ignoré et la confirmation le dit. Hors ligne ou sans autorisation, le niveau Drive est signalé en échec, comme le boîtier hors de portée.
 - **Enregistrement occupé** : comme aujourd'hui, un enregistrement occupé dans la sélection bloque toute la confirmation, qui l'explique. Le geste ouvre la même confirmation, bloquée de la même façon. La garde existante (`RecoveryDeletionGuard` et les plans DIC-23 et DIC-24) est étendue aux envois Drive et à la mise à la corbeille.

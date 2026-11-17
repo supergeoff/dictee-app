@@ -13,7 +13,7 @@ class PhoneDeletionIntegrationTest {
         var calls = 0
         val runner = PhoneDeletionOrchestrator(
             withTransferLock = { it() }, withPhoneLock = { it() },
-            snapshot = { DeletionSnapshot(folder, emptyList(), protected, null, LocalState(), emptyMap()) },
+            snapshot = { DeletionSnapshot(folder, emptyList(), protected) },
             delete = { calls++; PhoneDeletionResult(emptySet(), emptyMap()) },
             reread = { },
         )
@@ -34,7 +34,7 @@ class PhoneDeletionIntegrationTest {
         var deleted = false
         val runner = PhoneDeletionOrchestrator(
             { block -> lock.withLock { block() } }, { it() },
-            { DeletionSnapshot("folder", emptyList(), protected, null, LocalState(), emptyMap()) },
+            { DeletionSnapshot("folder", emptyList(), protected) },
             { deleted = true; PhoneDeletionResult(emptySet(), emptyMap()) }, { },
         )
         val pending = async { runner.execute("folder", setOf("a", "b")) }
@@ -60,7 +60,7 @@ class PhoneDeletionIntegrationTest {
             mapOf(FileKind.MP3 to PhoneFile(mp3, 1), FileKind.VTT to PhoneFile(vtt, 1)), DisplayState.Recovered)
         var reread = emptySet<String>()
         val runner = PhoneDeletionOrchestrator({ it() }, { it() },
-            { DeletionSnapshot("folder", listOf(recording), emptySet(), null, LocalState(), emptyMap()) },
+            { DeletionSnapshot("folder", listOf(recording), emptySet()) },
             { PhoneDeletion.execute(it, store) }, { reread = memory.files.keys.toSet() })
         val outcome = runner.execute("folder", setOf(name)) as DeletionOutcome.Completed
         assertEquals(setOf(mp3), outcome.result.deleted)
@@ -74,7 +74,7 @@ class PhoneDeletionIntegrationTest {
         val release = CompletableDeferred<Unit>()
         var started = false
         val runner = PhoneDeletionOrchestrator({ block -> lock.withLock { block() } }, { it() },
-            { DeletionSnapshot("folder", emptyList(), emptySet(), null, LocalState(), emptyMap()) },
+            { DeletionSnapshot("folder", emptyList(), emptySet()) },
             { entered.complete(Unit); release.await(); PhoneDeletionResult(emptySet(), emptyMap()) }, { })
         val deletion = async { runner.execute("folder", setOf("a")) }
         entered.await()
@@ -87,7 +87,7 @@ class PhoneDeletionIntegrationTest {
 
     @Test fun readFailureDoesNotHidePartialFailure() = runBlocking {
         val runner = PhoneDeletionOrchestrator({ it() }, { it() },
-            { DeletionSnapshot("folder", emptyList(), emptySet(), null, LocalState(), emptyMap()) },
+            { DeletionSnapshot("folder", emptyList(), emptySet()) },
             { PhoneDeletionResult(setOf("a"), mapOf("b" to "refus")) },
             { throw PhoneStoreException("lecture impossible") })
         val result = runner.execute("folder", emptySet()) as DeletionOutcome.Completed

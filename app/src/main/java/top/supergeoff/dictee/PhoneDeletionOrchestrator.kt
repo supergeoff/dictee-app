@@ -2,7 +2,6 @@ package top.supergeoff.dictee
 
 data class DeletionSnapshot(
     val folder: String?, val recordings: List<Recording>, val protectedNames: Set<String>,
-    val drive: DriveListing?, val local: LocalState, val hashes: Map<String, String>,
 )
 
 sealed interface DeletionOutcome {
@@ -24,8 +23,7 @@ class PhoneDeletionOrchestrator(
             if (current.folder != folder) return@withPhoneLock DeletionOutcome.FolderChanged
             val blocked = names intersect current.protectedNames
             if (blocked.isNotEmpty()) return@withPhoneLock DeletionOutcome.Blocked(blocked)
-            val plan = PhoneDeletion.plan(folder, current.recordings, names, current.protectedNames,
-                current.drive, current.local, current.hashes)
+            val plan = PhoneDeletion.plan(folder, current.recordings, names, current.protectedNames)
             val result = delete(plan)
             val readError = try { reread(result); null }
             catch (e: kotlinx.coroutines.CancellationException) { throw e }

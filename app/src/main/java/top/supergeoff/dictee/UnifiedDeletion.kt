@@ -41,8 +41,7 @@ object UnifiedDeletion {
                     }
                     when {
                         driveOk -> DeletionTarget(recording.name, recording.onBox, hasPhone, emptyList())
-                        hasPhone -> DeletionTarget(recording.name, recording.onBox, false, emptyList())
-                        else -> null
+                        else -> DeletionTarget(recording.name, recording.onBox && FileKind.MP3 in recording.phoneFiles, false, emptyList())
                     }
                 }
             }

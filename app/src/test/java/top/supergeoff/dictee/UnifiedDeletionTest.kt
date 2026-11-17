@@ -43,6 +43,11 @@ class UnifiedDeletionTest {
         assertEquals(listOf(DeletionTarget(a, true, false, emptyList())), p.targets)
     }
 
+    @Test fun freeSpaceKeepsBoxWhenPhoneHasNoMp3() {
+        val documentsOnly = setOf(FileKind.VTT, FileKind.MD)
+        assertTrue(plan(DeletionMode.FREE_SPACE, listOf(recording(a, true, documentsOnly))).targets.isEmpty())
+    }
+
     @Test fun freeSpaceWithConfirmedDriveFreesBoxAndPhone() {
         val files = listOf(driveFile(a, FileKind.VTT), driveFile(a, FileKind.MD))
         val local = configured.copy(driveReceipts = receipts(*files.toTypedArray()))
