@@ -158,6 +158,50 @@ class V05SessionTest {
     }
 
     @Test
+    fun `deleteRecord renvoie le statut brut et journalise un seul echange`() = runTest {
+        for (status in listOf(0, 1, 255)) {
+            val journal = mutableListOf<String>()
+            val link = FakeLink { cmd, _ -> reply(cmd, byteArrayOf(status.toByte())) }
+            assertEquals(status, session(link, journal).deleteRecord(name))
+            assertEquals(listOf(0x0d), link.written.map { it[3].toInt() and 0xff })
+            assertArrayEquals(name.toByteArray(Charsets.US_ASCII), link.sentPayloads(0x0d).single())
+            assertTrue(journal.any { it == "TX ${link.written.single().toHex()}" })
+            assertTrue(journal.any { it.startsWith("RX a00a010d") })
+        }
+    }
+
+    @Test
+    fun `deleteRecord refuse une reponse vide sans relance`() = runTest {
+        val link = FakeLink { cmd, _ -> reply(cmd, ByteArray(0)) }
+        try {
+            session(link).deleteRecord(name)
+            fail("exception attendue")
+        } catch (_: SessionException) { }
+        assertEquals(listOf(0x0d), link.written.map { it[3].toInt() and 0xff })
+    }
+
+    @Test
+    fun `deleteRecord expire apres cinq secondes sans relance`() = runTest {
+        val link = FakeLink { _, _ -> }
+        try {
+            session(link).deleteRecord(name)
+            fail("exception attendue")
+        } catch (_: SessionException) { }
+        assertEquals(5_000L, currentTime)
+        assertEquals(listOf(0x0d), link.written.map { it[3].toInt() and 0xff })
+    }
+
+    @Test
+    fun `deleteRecord echoue sur coupure sans relance`() = runTest {
+        val link = FakeLink { _, _ -> disconnect() }
+        try {
+            session(link).deleteRecord(name)
+            fail("exception attendue")
+        } catch (_: SessionException) { }
+        assertEquals(listOf(0x0d), link.written.map { it[3].toInt() and 0xff })
+    }
+
+    @Test
     fun `le transfert rejoue les trames 0x0b observees`() = runTest {
         val fileName = "20260101153000"
         // 76 644 octets, construits en répétant le flux MP3 de stream.bin.

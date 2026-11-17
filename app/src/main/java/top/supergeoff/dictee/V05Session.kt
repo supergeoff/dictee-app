@@ -78,6 +78,13 @@ class V05Session(
         return entries
     }
 
+    /** Demande la suppression de `name` et renvoie le statut brut du boîtier. */
+    suspend fun deleteRecord(name: String): Int {
+        val payload = command(Cmd.DELETE, Payloads.deleteRequest(name)).payload
+        if (payload.isEmpty()) throw SessionException("réponse à 0x0d sans statut")
+        return Payloads.status(payload)
+    }
+
     /**
      * Demande `name` avec `0x0b`, écrit l'audio de la caractéristique des fichiers dans `<nom>.mp3.part`,
      * contrôle la taille annoncée et l'en-tête MP3, puis renomme le fichier en `<nom>.mp3`.

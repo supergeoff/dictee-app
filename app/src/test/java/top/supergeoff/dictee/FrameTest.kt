@@ -132,6 +132,18 @@ class FrameTest {
     }
 
     @Test
+    fun deletePayloadIsExactAsciiName() {
+        assertArrayEquals("20260101010101".toByteArray(Charsets.US_ASCII), Payloads.deleteRequest("20260101010101"))
+        for (name in listOf("20260101010101.mp3", "2026010101010", "2026010101010\u0000", "2026010101010é")) {
+            try {
+                Payloads.deleteRequest(name)
+                org.junit.Assert.fail("nom invalide accepté : $name")
+            } catch (_: IllegalArgumentException) {
+            }
+        }
+    }
+
+    @Test
     fun `la requete 0x0b porte le nom puis la position sur quatre octets`() {
         val payload = Payloads.fileRequest("20260101103000", 0L)
         assertEquals(18, payload.size)
