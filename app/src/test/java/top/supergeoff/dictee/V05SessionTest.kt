@@ -181,6 +181,32 @@ class V05SessionTest {
     }
 
     @Test
+    fun `deleteRecord refuse un statut suivi d'octets excedentaires sans relance`() = runTest {
+        val link = FakeLink { cmd, _ -> reply(cmd, byteArrayOf(0, 1)) }
+        try {
+            session(link).deleteRecord(name)
+            fail("exception attendue")
+        } catch (_: SessionException) { }
+        assertEquals(listOf(0x0d), link.written.map { it[3].toInt() and 0xff })
+    }
+
+    @Test
+    fun `deleteRecord refuse un CRC invalide meme suivi d'une reponse valide sans relance`() = runTest {
+        val link = FakeLink { cmd, _ ->
+            val invalid = Frame.build(cmd, byteArrayOf(0))
+            invalid[invalid.lastIndex] = (invalid.last().toInt() xor 0xff).toByte()
+            assertEquals(null, Frame.parse(invalid))
+            reply(invalid.toHex())
+            reply(cmd, byteArrayOf(0))
+        }
+        try {
+            session(link).deleteRecord(name)
+            fail("exception attendue")
+        } catch (_: SessionException) { }
+        assertEquals(listOf(0x0d), link.written.map { it[3].toInt() and 0xff })
+    }
+
+    @Test
     fun `deleteRecord expire apres cinq secondes sans relance`() = runTest {
         val link = FakeLink { _, _ -> }
         try {
