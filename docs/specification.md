@@ -54,7 +54,7 @@ L'app garde une seule activité. Le passage d'un écran à l'autre suit une pile
 ### Fiche d'un enregistrement
 
 - Le titre donne le type, la date et l'heure, par exemple « Call · 30 oct. 16:05 ». Le sous-titre donne la durée et l'état.
-- Le menu propose « Récupérer à nouveau » et « Supprimer du téléphone ». La récupération n'est active que si l'enregistrement est sur le boîtier, que la liaison est ouverte et qu'aucune récupération ne tourne. Le lecteur est libéré avant confirmation de la suppression.
+- Le menu propose « Récupérer à nouveau » et « Supprimer du téléphone », ainsi que « Supprimer du boîtier » si l'enregistrement y est encore présent. La récupération n'est active que si l'enregistrement est sur le boîtier, que la liaison est ouverte et qu'aucune récupération ne tourne. Le lecteur est libéré avant confirmation de la suppression.
 - Le lecteur lit le MP3 du téléphone avec `MediaPlayer` : lecture, pause, barre de position et temps en minutes et secondes. Sans MP3 sur le téléphone, la fiche affiche « Le MP3 n'est pas encore sur le téléphone. ». La lecture se met en pause quand l'app passe en arrière-plan.
 - La fiche affiche le nom du fichier et son dossier. Elle se ferme d'elle-même si l'enregistrement disparaît de la liste.
 - La carte du parcours affiche les quatre étapes, la première raison utile et une seule action principale. Les onglets ne portent aucune action. En attente de configuration, « Ouvrir les réglages » mène à Transcription, ou à Stockage sur le téléphone si le dossier a changé ; pour une synthèse non configurée, il mène à Synthèse.
@@ -140,7 +140,7 @@ L'app reprend l'état de la version 0.1.5 au premier lancement : elle garde l'ad
 
 ## Récupération par Bluetooth
 
-- La liaison s'ouvre au passage au premier plan, au toucher sur la pastille, au geste de rafraîchissement et après une association. Elle se ferme quand l'app passe en arrière-plan, sauf pendant une récupération, et à la fin d'une récupération faite en arrière-plan.
+- La liaison s'ouvre au passage au premier plan, au toucher sur la pastille, au geste de rafraîchissement et après une association. Elle se ferme quand l'app passe en arrière-plan, sauf pendant une récupération ou une suppression du boîtier, et à la fin de l'opération faite en arrière-plan.
 - La séquence de connexion et de lecture de la liste est celle de [`protocole-v05.md`](protocole-v05.md) : appairage rejoué, numéro de série, informations, mise à l'heure, `0x18` avec `00`, puis `0x0a`.
 - Le transfert utilise `0x0b`. Le flux est écrit dans `<nom>.mp3.part`, dans le cache de l'app, puis contrôlé (taille annoncée et en-tête MP3). Le fichier valide est copié dans le dossier du téléphone sous `<Type>-<nom>.mp3`, en remplaçant un fichier du même nom en cas de nouvelle récupération, puis le fichier du cache est supprimé.
 - Les récupérations passent l'une après l'autre, de la plus ancienne à la plus récente. Pour une récupération dont l'option capturée est active, une intention est persistée avant transfert puis rendue programmable seulement après validation durable du MP3. Sa consommation est idempotente ; au redémarrage, les intentions validées sont réconciliées sans parcourir les anciens MP3. Une récupération interrompue ne lance ni transcription ni reprise Bluetooth automatique. Une erreur de programmation ne transforme pas une récupération réussie en échec et ne bloque pas les suivantes.

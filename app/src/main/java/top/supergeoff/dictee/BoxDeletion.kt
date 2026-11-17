@@ -1,5 +1,9 @@
 package top.supergeoff.dictee
 
+internal fun requestBoxDeletionWithPermission(hasBluetooth: Boolean, askPermission: () -> Unit, request: () -> Unit) {
+    if (hasBluetooth) request() else askPermission()
+}
+
 data class BoxDeletionPlan(
     val address: String,
     val names: List<String>,

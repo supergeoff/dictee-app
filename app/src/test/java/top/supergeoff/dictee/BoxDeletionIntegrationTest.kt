@@ -20,6 +20,17 @@ class BoxDeletionIntegrationTest {
     private fun repository() = LocalStateRepository(LocalStateStore(File(tmp.root, "state.json")))
     private fun plan(vararg names: String) = BoxDeletionPlan("box", names.toList(), emptySet(), 0)
 
+    @Test fun missingBluetoothPermissionDefersDeletionRequestUntilGranted() {
+        var requests = 0
+        var permissionRequests = 0
+        requestBoxDeletionWithPermission(false, { permissionRequests++ }, { requests++ })
+        assertEquals(0, requests)
+        assertEquals(1, permissionRequests)
+        requestBoxDeletionWithPermission(true, { permissionRequests++ }, { requests++ })
+        assertEquals(1, requests)
+        assertEquals(1, permissionRequests)
+    }
+
     @Test fun changedAddressAfterWaitingForTransferStopsBeforeSession() = runBlocking {
         val repo = repository(); val safety = RecoverySafety(repo); val guard = RecoveryDeletionGuard()
         repo.updateDurably { it.copy(deviceAddress = "box") }

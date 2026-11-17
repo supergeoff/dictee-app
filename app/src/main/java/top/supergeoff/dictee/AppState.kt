@@ -592,12 +592,14 @@ class AppModel(
     }
 
     fun requestBoxDeletion(names: Set<String>) {
-        val local = localRepository.state.value ?: return
-        val address = local.deviceAddress ?: return
-        val plan = boxDeletionPlan(local, address, names)
-        synchronized(deletionRequestLock) {
-            boxDeletionRequests.open(plan)
-            liveFlow.update { it.copy(boxDeletionRequest = boxDeletionRequests.current) }
+        requestBoxDeletionWithPermission(hasBluetooth(), { askBluetooth { requestBoxDeletion(names) } }) {
+            val local = localRepository.state.value ?: return@requestBoxDeletionWithPermission
+            val address = local.deviceAddress ?: return@requestBoxDeletionWithPermission
+            val plan = boxDeletionPlan(local, address, names)
+            synchronized(deletionRequestLock) {
+                boxDeletionRequests.open(plan)
+                liveFlow.update { it.copy(boxDeletionRequest = boxDeletionRequests.current) }
+            }
         }
     }
 
