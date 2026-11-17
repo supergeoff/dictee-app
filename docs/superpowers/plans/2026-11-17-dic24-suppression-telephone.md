@@ -64,6 +64,8 @@ Créer `PhoneDeletion.kt` pour la politique et l'exécution indépendantes d'And
 
 **Interfaces:** ajouter à AppModel `requestPhoneDeletion(names: Set<String>)`, `cancelPhoneDeletion()` et `confirmPhoneDeletion()` ; exposer la demande nullable dans UiState, sans conserver de callback périmé. La demande capture le dossier et les noms exacts ; la confirmation est consommée une seule fois.
 
+Avancement partiel : composant de dialogue partagé et tests Android compilés, non raccordés aux écrans ni au modèle. Aucun test sur appareil ; toutes les étapes ci-dessous restent à terminer et valider.
+
 - [ ] Écrire les tests en échec : annulation sans appel store ; double confirmation avec une seule exécution ; dossier changé sans suppression ; cible devenue active sans suppression pour toute la sélection ; une erreur partielle entraîne une relecture et un message qui nomme le fichier refusé.
 - [ ] Lancer les tests ciblés et constater les échecs avant implémentation.
 - [ ] Implémenter la demande et sa consommation. Revalider sous les protections existantes (RecoverySafety.withTransferLock et phoneMutex, sans inversion d'ordre) le dossier, les tâches non terminales, les demandes automatiques et les transferts. Réserver les cibles pendant la suppression ; toutes les entrées de récupération, programmation, synthèse et envoi doivent respecter cette réservation. Tester une tentative concurrente de démarrage : elle ne doit pas recréer les fichiers ni partir pendant la suppression.
