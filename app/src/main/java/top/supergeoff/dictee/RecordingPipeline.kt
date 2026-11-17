@@ -55,11 +55,18 @@ object RecordingPipeline {
         val hasMp3 = FileKind.MP3 in r.phoneFiles
         val hasVtt = FileKind.VTT in r.phoneFiles
         val hasMd = FileKind.MD in r.phoneFiles
+        fun onDrive(kind: FileKind): Boolean = input.drive?.let { listing ->
+            if (kind == FileKind.MP3) Recordings.mp3InDrive(r.name, listing)
+            else listing.files.keys.any { fileName ->
+                RecordName.parse(fileName)?.let { it.name == r.name && it.kind == kind } == true
+            }
+        } == true
         val waitingReason = rank?.let { "${ordinal(it)} dans la file. Aucun appel n'est parti." }
         val phone = when {
             hasMp3 -> step(PipelineStage.PHONE, PipelineStatus.DONE, "Fait")
             input.busy.recovering == r.name -> step(PipelineStage.PHONE, PipelineStatus.RUNNING, "${input.busy.recoveringPercent} %")
             errors[Step.RECOVER] != null -> step(PipelineStage.PHONE, PipelineStatus.ERROR, "Erreur", errors[Step.RECOVER])
+            onDrive(FileKind.MP3) -> step(PipelineStage.PHONE, PipelineStatus.DONE, "Sur Drive")
             r.onBox -> step(PipelineStage.PHONE, PipelineStatus.TODO, "Sur le boîtier")
             else -> step(PipelineStage.PHONE, PipelineStatus.TODO, "Absent")
         }
@@ -80,6 +87,8 @@ object RecordingPipeline {
             errors[Step.TRANSCRIBE] != null && !hasVtt -> step(PipelineStage.VTT, PipelineStatus.ERROR, "Erreur", errors[Step.TRANSCRIBE])
             automaticWaiting != null -> step(PipelineStage.VTT, PipelineStatus.WAITING, "À configurer", automaticWaiting.reason)
             hasVtt -> step(PipelineStage.VTT, PipelineStatus.DONE, "Fait")
+            onDrive(FileKind.VTT) -> step(PipelineStage.VTT, PipelineStatus.DONE, "Sur Drive")
+            !hasMp3 -> step(PipelineStage.VTT, PipelineStatus.TODO, "Absent")
             else -> step(PipelineStage.VTT, PipelineStatus.TODO, "À faire")
         }
         val mdSuspended = synthesis?.phase == SynthesisPhase.SUSPENDED && input.synthesisConfigured
@@ -96,6 +105,8 @@ object RecordingPipeline {
             mdSuspended -> step(PipelineStage.MD, PipelineStatus.ERROR, "Suspendue", if (!mdRetryAvailable) "Relance indisponible : contexte de synthèse incomplet." else synthesis?.suspensionReason ?: task?.suspensionReason ?: "Synthèse suspendue.")
             hasMd && input.provenance == ProvenanceStatus.STALE -> step(PipelineStage.MD, PipelineStatus.TODO, "Ancien VTT", "Cette synthèse utilise l'ancien VTT.")
             hasMd -> step(PipelineStage.MD, PipelineStatus.DONE, "Fait")
+            onDrive(FileKind.MD) -> step(PipelineStage.MD, PipelineStatus.DONE, "Sur Drive")
+            !hasMp3 -> step(PipelineStage.MD, PipelineStatus.TODO, "Absent")
             !input.synthesisConfigured -> step(PipelineStage.MD, PipelineStatus.TODO, "À configurer", "Configure la synthèse dans les réglages.")
             else -> step(PipelineStage.MD, PipelineStatus.TODO, "À faire")
         }
@@ -146,7 +157,8 @@ object RecordingPipeline {
             md.status == PipelineStatus.DONE -> "MD"
             vtt.status == PipelineStatus.DONE -> "VTT"
             phone.status == PipelineStatus.DONE -> "MP3"
-            else -> "Sur le boîtier"
+            r.onBox -> "Sur le boîtier"
+            else -> "Absent"
         }
         return PipelinePresentation(steps, reason, button, badge, rank)
     }

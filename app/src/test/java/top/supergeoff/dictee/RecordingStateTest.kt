@@ -11,6 +11,15 @@ class RecordingStateTest {
                     errors: Map<String, Map<Step, String>> = emptyMap(), busy: Busy = Busy()) =
         Recordings.merge(box, phone.map { PhoneFile(it, 4000) }, drive?.let { d -> DriveListing(d.associateWith { 4000L }) }, errors, busy).single()
 
+    @Test fun `documents distants seuls restent groupes par horodatage`() {
+        val drive = DriveListing(mapOf("Call-$n.vtt" to 4L, "Note-$n.md" to 5L))
+        val r = Recordings.merge(emptyList(), emptyList(), drive, emptyMap(), Busy()).single()
+        assertEquals(n, r.name)
+        assertEquals(RecordType.CALL, r.type)
+        assertEquals(0L, r.size)
+        assertEquals(emptyList<Recording>(), Recordings.merge(emptyList(), emptyList(), DriveListing(emptyMap()), emptyMap(), Busy()))
+    }
+
     @Test fun `ligne 1, erreur`() =
         assertEquals(DisplayState.Error("coupure"), one(phone = listOf("Call-$n.mp3"), errors = mapOf(n to mapOf(Step.RECOVER to "coupure"))).state)
     @Test fun `ligne 2, recuperation en cours`() =
@@ -39,9 +48,9 @@ class RecordingStateTest {
             listOf(PhoneFile("Note-20261030084701.mp3", 20_482), PhoneFile("Call-20261029081500.mp3", 2_900_000),
                 PhoneFile("Call-20261029081500 (1).mp3", 1)),
             DriveListing(mapOf("20261028190702.mp3" to 174_274L, "Call-20261027080000.vtt" to 10L)), emptyMap(), Busy())
-        assertEquals(listOf("20261031101200", "20261030084701", "20261029081500", "20261028190702"), list.map { it.name })
-        assertEquals(listOf(RecordType.CALL, RecordType.NOTE, RecordType.CALL, RecordType.NOTE), list.map { it.type })
-        assertEquals(listOf(true, true, false, false), list.map { it.onBox })
+        assertEquals(listOf("20261031101200", "20261030084701", "20261029081500", "20261028190702", "20261027080000"), list.map { it.name })
+        assertEquals(listOf(RecordType.CALL, RecordType.NOTE, RecordType.CALL, RecordType.NOTE, RecordType.CALL), list.map { it.type })
+        assertEquals(listOf(true, true, false, false, false), list.map { it.onBox })
         assertEquals(174_274L, list[3].size)
     }
 

@@ -52,11 +52,11 @@ Créer `PhoneDeletion.kt` pour la politique et l'exécution indépendantes d'And
 
 **Interfaces:** conserver `Recordings.merge(...)` et `RecordingPipeline.calculate(input: PipelineInput): PipelinePresentation`. Étendre la fusion aux noms reconnus de VTT et MD distants, avec les règles de type déjà utilisées pour les noms préfixés. Aucun téléchargement distant n'est ajouté.
 
-- [ ] Écrire les tests en échec : Drive avec VTT et MD sans MP3 conserve une Recording ; téléphone et boîtier vides avec Drive vide donnent une liste vide ; fichier local prioritaire sur distant ; fichier local absent et copie confirmée donnent label « Sur Drive » ; absence de copie donne « Absent » après suppression ; audio boîtier seul conserve l'action RECOVER.
-- [ ] Lancer `./gradlew testDebugUnitTest --tests '*RecordingStateTest' --tests '*RecordingPipelineTest' --tests '*RecordingListPresentationTest'` et observer les échecs.
-- [ ] Adapter la fusion et la présentation. Garder les actions de production quand l'audio local existe ; ne pas produire de documents ni lancer de récupération à cause d'une suppression. Adapter `DriveSync.isComplete` pour conserver le calcul Drive selon le choix DIC-21 après disparition des fichiers locaux : sans empreinte locale, la preuve reste conservatrice et liée aux reçus et à la destination courante.
-- [ ] Ajouter dans `DriveSyncTest.kt` les cas sans empreinte locale avec reçu et destination courante, reçu absent ou destination différente ; ajouter les cas DOCUMENTS_ONLY, ALL_FILES incomplet et destination différente ; vérifier que la ligne distante existe sans déclarer à tort la dernière version sauvegardée.
-- [ ] Relancer les tests ciblés puis toute la suite unitaire et créer un commit local.
+- [x] Écrire les tests en échec : Drive avec VTT et MD sans MP3 conserve une Recording ; téléphone et boîtier vides avec Drive vide donnent une liste vide ; fichier local prioritaire sur distant ; fichier local absent et copie confirmée donnent label « Sur Drive » ; absence de copie donne « Absent » après suppression ; audio boîtier seul conserve l'action RECOVER.
+- [x] Lancer `./gradlew testDebugUnitTest --tests '*RecordingStateTest' --tests '*RecordingPipelineTest' --tests '*RecordingListPresentationTest'` et observer les échecs.
+- [x] Adapter la fusion et la présentation. Garder les actions de production quand l'audio local existe ; ne pas produire de documents ni lancer de récupération à cause d'une suppression. Adapter `DriveSync.isComplete` pour conserver le calcul Drive selon le choix DIC-21 après disparition des fichiers locaux : sans empreinte locale, la preuve reste conservatrice et liée aux reçus et à la destination courante.
+- [x] Ajouter dans `DriveSyncTest.kt` les cas sans empreinte locale avec reçu et destination courante, reçu absent ou destination différente ; ajouter les cas DOCUMENTS_ONLY, ALL_FILES incomplet et destination différente ; vérifier que la ligne distante existe sans déclarer à tort la dernière version sauvegardée.
+- [x] Relancer les tests ciblés puis toute la suite unitaire et créer un commit local.
 
 ### Task 3: Intégrer la confirmation et protéger les travaux
 

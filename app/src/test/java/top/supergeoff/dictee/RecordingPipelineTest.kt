@@ -29,6 +29,25 @@ class RecordingPipelineTest {
     private fun result(i: PipelineInput) = RecordingPipeline.calculate(i)
     private fun status(i: PipelineInput, stage: PipelineStage) = result(i).steps.single { it.stage == stage }.status
 
+    @Test fun remotePresenceIsDisplayedWithoutClaimingCurrentVersion() {
+        val r = recording(onBox = false)
+        val entries = FileKind.entries.map { DriveFile(it.ext, "Call-$name.${it.ext}", 10) }
+        val listing = DriveListing(entries.associate { it.name to it.size }, entries)
+        val local = LocalState(driveEnabled = true, driveAccount = "account", chosenFolderId = "folder")
+        val base = PipelineInput(r, local, Busy(), listing, true, true)
+        val result = result(base)
+        assertEquals(listOf("Sur Drive", "Sur Drive", "Sur Drive", "À faire"), result.steps.map { it.label })
+        assertNull(result.button)
+        val absent = result(base.copy(drive = DriveListing(emptyMap())))
+        assertEquals(listOf("Absent", "Absent", "Absent"), absent.steps.take(3).map { it.label })
+        val localMp3 = result(base.copy(recording = recording(FileKind.MP3, onBox = false)))
+        assertEquals(listOf("Fait", "Sur Drive", "Sur Drive"), localMp3.steps.take(3).map { it.label })
+        val localVtt = result(base.copy(recording = recording(FileKind.MP3, FileKind.VTT, onBox = false)))
+        assertEquals("Fait", localVtt.steps.single { it.stage == PipelineStage.VTT }.label)
+        assertEquals(PipelineAction.CREATE_VTT_AND_MD, localMp3.button?.action)
+        assertEquals(PipelineAction.RECOVER, result(base.copy(recording = recording())).button?.action)
+    }
+
     @Test fun driveCompletionUsesCurrentProofAndStaleMdNeverFinishesBadge() {
         val r = recording(FileKind.MP3, FileKind.VTT, FileKind.MD)
         val entries = r.phoneFiles.values.map { DriveFile(it.fileName, it.fileName, it.size) }
