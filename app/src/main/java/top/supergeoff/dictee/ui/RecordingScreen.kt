@@ -78,6 +78,7 @@ import top.supergeoff.dictee.RecordingPipeline
 import top.supergeoff.dictee.isValidSynthesisBaseUrl
 import top.supergeoff.dictee.SettingsDestination
 import top.supergeoff.dictee.settingsDestination
+import top.supergeoff.dictee.recordingForDetail
 
 /**
  * Fiche d'un enregistrement : parcours et action principale, lecteur du MP3, puis documents en lecture seule.
@@ -86,7 +87,7 @@ import top.supergeoff.dictee.settingsDestination
  */
 @Composable
 fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Unit, onSettings: (SettingsDestination) -> Unit) {
-    val recording = ui.recordings.firstOrNull { it.name == name }
+    val recording = recordingForDetail(ui.recordings, name)
     if (recording == null) {
         LaunchedEffect(Unit) { onBack() }
         return

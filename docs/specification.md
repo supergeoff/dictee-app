@@ -1,6 +1,6 @@
 # Dictée : spécification du produit
 
-Statut : ce document décrit le comportement livré visé pour la version 0.6.0. La recette sur appareil, la vérification Drive réelle et celle de l'APK signé restent à faire.
+Statut : ce document décrit le comportement visé pour la version 0.7.0. La recette sur appareil, la vérification Drive réelle et celle de l'APK signé restent à faire.
 
 Le protocole Bluetooth du MECHEN V05 est décrit dans [`protocole-v05.md`](protocole-v05.md).
 
@@ -40,20 +40,21 @@ L'app garde une seule activité. Le passage d'un écran à l'autre suit une pile
 
 ### Liste des enregistrements
 
-- La liste réunit trois sources : la dernière liste lue sur le boîtier, le dossier du téléphone et les MP3 du dossier Drive, quand Drive est activé. Elle est groupée par jour (« Aujourd'hui », « Hier », puis par exemple « Jeudi 29 octobre »), du plus récent au plus ancien. Un enregistrement absent du boîtier reste listé tant qu'un de ses fichiers existe sur le téléphone ou dans Drive.
+- La liste réunit trois sources : la dernière liste lue sur le boîtier, le dossier du téléphone et les MP3, VTT et MD reconnus du dossier Drive, quand Drive est activé. Elle est groupée par jour (« Aujourd'hui », « Hier », puis par exemple « Jeudi 29 octobre »), du plus récent au plus ancien. Un enregistrement absent du boîtier reste listé tant qu'un de ses fichiers existe sur le téléphone ou dans Drive.
 - La pastille du boîtier montre un point plein quand la liaison est ouverte et un point vide sinon. Un toucher relance la connexion, et un échec affiche « Boîtier hors de portée. ». Tirer la liste vers le bas relit le dossier du téléphone, le dossier Drive et le boîtier.
 - Les filtres sont « Tous », « À relire » et « Sur le boîtier », chacun avec son compteur. « Sur le boîtier » retient les enregistrements du boîtier qui n'ont aucun fichier sur le téléphone. « À relire » ne retient aucun enregistrement et affiche toujours 0.
 - « Récupérer (N) » compte les enregistrements du boîtier qui ne sont ni sur le téléphone ni dans Drive. Il n'est actif que si la liaison est ouverte, qu'aucune récupération ne tourne et que N n'est pas nul. Il affiche « Récupération… » pendant le travail.
 - « Envoyer (N) » n'apparaît que si Drive est activé. Il compte les enregistrements sans erreur de récupération dont au moins un fichier local requis par le dernier choix confirmé est à envoyer ou en conflit : fichier absent, document sans preuve correspondant à son empreinte actuelle, ou homonymes visibles. Sans catalogue ou destination connue, tout fichier local requis rend l'enregistrement candidat ; en documents seuls, un MP3 seul ne suffit pas. Il affiche « Envoi… » pendant le travail.
 - Les boutons suivent l'ordre « Récupérer », « VTT + MD », « Envoyer ». Un compteur nul désactive son bouton, sauf « Envoyer » en sélection explicite lorsqu'un fichier local est disponible pour rouvrir le choix. « VTT + MD » compte les MP3 exploitables auxquels il manque un VTT ou un MD, hors travaux actifs ; en sélection, il se limite aux lignes cochées. Il crée les fichiers manquants sans remplacer ceux qui existent et n'envoie rien vers Drive. Les exclusions de la sélection sont signalées ; une action collective ne reprend aucune tâche suspendue exclue du compteur.
 - Un appui long passe en sélection. La barre affiche le nombre de lignes cochées, une croix pour sortir et « Tout », qui coche les lignes du filtre en cours. Les actions portent alors sur les lignes cochées : récupérer une ligne cochée la transfère de nouveau depuis le boîtier, quel que soit son état ; « VTT + MD » ne remplace aucun fichier. La sélection se vide après l'action.
+- « Supprimer du téléphone » est proposé en sélection ; après une suppression partielle, les cibles qui ont encore des fichiers locaux restent cochées. Les lignes sélectionnées hors cibles restent cochées si elles sont encore présentes.
 - Chaque ligne affiche un badge et quatre points pour les étapes Téléphone, VTT, MD et Drive. Le badge indique l'erreur, le travail en cours, l'attente ou la dernière étape faite. Une tâche en attente affiche son rang dans la file.
 - La barre d'avancement affiche le type de travail, « Transcription » ou « Synthèse » pour la file de production. Les barres de récupération et d'envoi peuvent s'afficher simultanément.
 
 ### Fiche d'un enregistrement
 
 - Le titre donne le type, la date et l'heure, par exemple « Call · 30 oct. 16:05 ». Le sous-titre donne la durée et l'état.
-- Le menu propose « Récupérer à nouveau ». L'action n'est active que si l'enregistrement est sur le boîtier, que la liaison est ouverte et qu'aucune récupération ne tourne.
+- Le menu propose « Récupérer à nouveau » et « Supprimer du téléphone ». La récupération n'est active que si l'enregistrement est sur le boîtier, que la liaison est ouverte et qu'aucune récupération ne tourne. Le lecteur est libéré avant confirmation de la suppression.
 - Le lecteur lit le MP3 du téléphone avec `MediaPlayer` : lecture, pause, barre de position et temps en minutes et secondes. Sans MP3 sur le téléphone, la fiche affiche « Le MP3 n'est pas encore sur le téléphone. ». La lecture se met en pause quand l'app passe en arrière-plan.
 - La fiche affiche le nom du fichier et son dossier. Elle se ferme d'elle-même si l'enregistrement disparaît de la liste.
 - La carte du parcours affiche les quatre étapes, la première raison utile et une seule action principale. Les onglets ne portent aucune action. En attente de configuration, « Ouvrir les réglages » mène à Transcription, ou à Stockage sur le téléphone si le dossier a changé ; pour une synthèse non configurée, il mène à Synthèse.
@@ -153,12 +154,19 @@ L'app reprend l'état de la version 0.1.5 au premier lancement : elle garde l'ad
 - Une écriture passe par un fichier `.part`. L'ancien fichier du même nom est mis de côté en `.old`, le nouveau prend le nom définitif, puis les restes sont nettoyés. Le dossier doit accepter le renommage.
 - Si la permission est perdue ou si le dossier a disparu, l'app affiche « Dossier du téléphone inaccessible. Choisis-le de nouveau dans Réglages. ».
 
+## Suppression du téléphone
+
+- Depuis le menu de la fiche ou la sélection, un dialogue confirme le nombre d'enregistrements ayant des fichiers locaux. Seuls leurs MP3, VTT et MD reconnus dans le dossier choisi sont supprimés ; ni Drive ni le boîtier ne sont modifiés. Annuler ne fait rien et une confirmation ne sert qu'une fois.
+- Le dialogue avertit si la sauvegarde des documents sur Drive ne peut pas être vérifiée, ou si aucune autre copie de l'audio n'est connue sur Drive ou le boîtier. Ces avertissements ne bloquent pas. Un nom distant seul ne prouve pas la version courante d'un document : les reçus et la destination comptent, et `drive.file` ne révèle pas tous les fichiers Drive.
+- Une cible occupée ou en attente bloque toute la sélection. Le dossier et les travaux sont revalidés avant suppression. Une erreur sur un fichier n'annule pas les succès précédents : les autres fichiers sont tentés, les refus sont nommés et le dossier est relu ; une relecture impossible est signalée.
+- Après suppression, un fichier local reste « Fait », sinon une copie distante confirmée affiche « Sur Drive » et une copie inconnue « Absent ». L'étape Drive dépend du choix d'envoi et des reçus de la destination courante. La ligne demeure si le boîtier ou Drive contient encore un fichier reconnu, même uniquement VTT ou MD ; sinon elle disparaît et la fiche revient à la liste. Un audio encore sur le boîtier reste récupérable. Rien n'est automatiquement récupéré ni produit ; les documents uniquement distants ne sont pas téléchargeables dans la fiche.
+
 ## Envoi vers Google Drive
 
 - Le droit est `drive.file`. L'app demande un jeton avant chaque requête Drive. Sur une erreur 401, elle efface le jeton en cache (`clearToken`), en redemande un et refait l'appel une seule fois. Les délais sont de 30 secondes pour la connexion et de 120 secondes pour la lecture.
 - Dossier par défaut : quand Drive est activé sans dossier choisi, l'app cherche « Dictée » parmi les dossiers connus, puis dans Drive (requête sur le nom, limitée par Google aux dossiers accessibles à l'app). Sans résultat, elle crée « Dictée » à la racine. Ce choix se fait au premier envoi.
 - Liste et fiche ouvrent le même dialogue : « MP3 + VTT + MD » ou « VTT + MD », avec le compte, le dossier, le nombre d'enregistrements et les documents manquants. Le dernier choix confirmé est conservé dans `state.json` ; annuler ne change pas ce choix et ne lance aucun envoi. Les anciens états migrent avec le choix « MP3 + VTT + MD » et sans preuve d'envoi. La sélection explicite et l'action secondaire d'une fiche terminée permettent de changer de choix. Les reprises repassent par le dialogue.
-- Les entrées Drive accessibles à l'application sont lues page par page avec leur identifiant. Le droit `drive.file` ne donne pas une vue générale du Drive : un fichier existant mais non visible à l'application peut ne pas être détecté. Un MP3 existant n'est jamais remplacé ; son ancien nom sans préfixe (`<nom>.mp3`) compte aussi. Un MP3 présent seulement dans Drive crée une ligne dans la liste.
+- Les entrées Drive accessibles à l'application sont lues page par page avec leur identifiant. Le droit `drive.file` ne donne pas une vue générale du Drive : un fichier existant mais non visible à l'application peut ne pas être détecté. Un MP3 existant n'est jamais remplacé ; son ancien nom sans préfixe (`<nom>.mp3`) compte aussi. Un MP3, VTT ou MD reconnu présent seulement dans Drive crée une ligne dans la liste.
 - Les VTT et MD sont comparés par empreinte SHA-256 et preuve d'envoi, propre au compte, au dossier et à l'identifiant Drive. Un document sans preuve ou modifié est créé ou remplacé par téléversement reprenable, y compris un VTT DOWAY visible du même nom : il n'y a pas de règle « ne jamais remplacer » pour les VTT/MD envoyés. Les homonymes visibles sont signalés comme conflit plutôt que de choisir arbitrairement. La preuve est enregistrée après contrôle de taille et une erreur d'écriture arrête le lot ; une erreur d'envoi ne crée pas de preuve et les succès précédents restent acquis.
 - Les fichiers locaux restent en place. Les documents absents ne sont pas créés par l'envoi. Le parcours Drive exige les VTT et MD courants prouvés et, selon le choix, le MP3 distant ; une synthèse issue d'un ancien VTT ne termine pas le parcours.
 
@@ -247,6 +255,7 @@ Les empreintes du VTT et du MD et le modèle sont conservés en privé pour un M
 | `RecordName.kt` | Lecture et écriture des noms, type, durée, types MIME |
 | `RecordingState.kt` | Liste réunie, compteurs et état affiché à partir des sources, des travaux et des erreurs |
 | `RecoveryJob.kt`, `SendJob.kt` | File de récupération et file d'envoi |
+| `PhoneDeletion.kt`, `PhoneDeletionOrchestrator.kt`, `PhoneDeletionPresentation.kt` | Préparation, coordination et présentation de la suppression locale |
 | `DriveClient.kt` | Dossiers, listes, téléversement, renouvellement du jeton |
 | `Journal.kt` | Journal sur sept jours et ses filtres |
 | `LocalState.kt` | Lecture, écriture et reprise de `state.json` |
@@ -308,5 +317,7 @@ La police d'interface est Figtree (graisses 400, 500, 600 et 700, en police vari
 ### Sur un téléphone
 
 L'association se fait une fois, et l'app s'ouvre ensuite sur la liste. La liste montre les mêmes enregistrements que DOWAY, avec le bon type. « Récupérer » écrit les MP3 préfixés dans le dossier choisi. « Envoyer » les dépose dans « Dictée » sans créer de doublon avec les fichiers de la version 0.1.5 ni avec les exports de DOWAY. Une récupération continue écran éteint, et un boîtier éteint pendant un transfert ne laisse aucun fichier partiel.
+
+Pour la 0.7.0, la recette physique reste à faire avec des fichiers d'essai sauvegardés : suppression simple et multiple, avertissements sans sauvegarde, refus d'une cible occupée, maintien des documents distants et disparition des fichiers locaux. Les tests Android doivent aussi être exécutés sur appareil ; la compilation ne les exécute pas.
 
 Pour la 0.4.0, restent à vérifier sur appareil le retrait des récents pendant l'appel et l'écriture, la reprise après redémarrage, les interruptions répétées jusqu'à suspension, la relance manuelle, l'annulation, le maintien des anciens fichiers et les thèmes clair et sombre. Un essai explicitement autorisé d'un VTT synthétique représentatif de deux heures doit vérifier la réception et une réponse non tronquée, et relever les limites et tokens lorsqu'ils sont exposés. Un essai distinct autorisé sur une réunion réelle doit confirmer VTT puis MD en un appui. Sans ces essais et la vérification d'une construction signée, DIC-19 reste ouverte et la 0.4.0 n'est pas annoncée comme livrée.

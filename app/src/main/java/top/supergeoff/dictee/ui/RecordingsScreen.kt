@@ -129,8 +129,7 @@ fun RecordingsScreen(ui: UiState, model: AppModel, onOpen: (name: String) -> Uni
         if (targets != null && ui.deletingPhone) deletionStarted = true
         if (targets != null && !ui.deletingPhone && (deletionStarted || ui.phoneRevision != deletionRevision)) {
             if (ui.phoneRevision != deletionRevision) {
-                val remaining = ui.recordings.filter { it.name !in targets || it.phoneFiles.isNotEmpty() }.mapTo(HashSet()) { it.name }
-                selection.retain(remaining)
+                selection.retain(top.supergeoff.dictee.selectionAfterPhoneDeletion(selection.names.orEmpty(), targets, ui.recordings))
             }
             deletionTargets = null
         }

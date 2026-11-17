@@ -64,7 +64,7 @@ Créer `PhoneDeletion.kt` pour la politique et l'exécution indépendantes d'And
 
 **Interfaces:** ajouter à AppModel `requestPhoneDeletion(names: Set<String>)`, `cancelPhoneDeletion()` et `confirmPhoneDeletion()` ; exposer la demande nullable dans UiState, sans conserver de callback périmé. La demande capture le dossier et les noms exacts ; la confirmation est consommée une seule fois.
 
-Avancement : cœur et écrans raccordés, tests JVM exécutés et tests Android compilés. Aucun test sur appareil ; les tests Android couvrent les composants du menu, de la sélection et du dialogue, pas encore les parcours complets des écrans ni la sélection après échec partiel.
+Avancement : cœur et écrans raccordés, tests JVM exécutés et tests Android compilés. Le calcul de sélection après suppression partielle est couvert en JVM ; un test Android de retour de fiche est compilé. Aucun test sur appareil ; les composants du menu, de la sélection et du dialogue sont couverts séparément, pas les parcours complets des écrans avec AppModel.
 
 - [x] Écrire les tests en échec : annulation sans appel store ; double confirmation avec une seule exécution ; dossier changé sans suppression ; cible devenue active sans suppression pour toute la sélection ; une erreur partielle entraîne une relecture et un message qui nomme le fichier refusé.
 - [x] Lancer les tests ciblés et constater les échecs avant implémentation.
@@ -80,8 +80,8 @@ Avancement : cœur et écrans raccordés, tests JVM exécutés et tests Android 
 
 **Interfaces:** versionName devient `0.7.0` et versionCode augmente par rapport à la valeur de la branche d'exécution.
 
-- [ ] Mettre à jour la spécification produit avec les actions, avertissements et étapes distantes ; vérifier que le périmètre exclut toujours les suppressions Drive et boîtier.
-- [ ] Lancer `./gradlew testDebugUnitTest assembleDebug lint assembleDebugAndroidTest` et lire les résultats. Toute erreur est traitée avant de conclure.
+- [x] Mettre à jour la spécification produit avec les actions, avertissements et étapes distantes ; vérifier que le périmètre exclut toujours les suppressions Drive et boîtier.
+- [x] Lancer `./gradlew testDebugUnitTest assembleDebug lint assembleDebugAndroidTest` et lire les résultats. Toute erreur est traitée avant de conclure. Relance réussie après un échec intermittent de `TranscriptionClientTest.interruptedUploadDoesNotRetry`.
 - [ ] Faire relire le diff complet contre la spec et corriger les défauts avec tests de régression. Si une revue par sous-agent est choisie, le lancer au premier plan et attendre son résultat.
 - [ ] Demander la recette sur téléphone : suppression unique puis multiple sur fichiers d'essai sauvegardés, avertissement sans sauvegarde, refus d'une cible occupée, maintien de VTT/MD distants et disparition effective des fichiers locaux. Toute suppression déclenchée par l'agent exige un accord précis séparé.
 - [ ] Créer le commit local de documentation et de version. Après exécution complète, déplacer ce plan dans `docs/archive/`. Consigner les étapes franchies et ce qui reste non vérifié sur la carte Kaneo, sans la clôturer prématurément.
