@@ -77,6 +77,29 @@ class PhoneDeletionTest {
         PhoneDeletion.execute(plan(listOf(r)), store)
         assertTrue(calls.isEmpty())
     }
+    @Test fun executeDeletesExactMergedPhoneFilesAcrossTypeCollisions() {
+        for ((type, flag, otherType) in listOf(
+            Triple(RecordType.NOTE, 1, RecordType.CALL),
+            Triple(RecordType.CALL, 0, RecordType.NOTE),
+        )) {
+            val selected = setOf("${type.label}-$a.mp3", "${otherType.label}-$a.md")
+            val untouched = setOf("${otherType.label}-$a.mp3", "Note-$b.mp3", "Note-$a.md.part", "foreign.txt")
+            val memory = MemoryStore()
+            (selected + untouched).forEach { memory.files[it] = byteArrayOf(1) }
+            val merged = Recordings.merge(
+                listOf(ListItem.Entry(a, 1, flag)),
+                (selected + untouched).map { PhoneFile(it, 1) }, null, emptyMap(), Busy(),
+            )
+            val recording = merged.single { it.name == a }
+            assertEquals(type, recording.type)
+            assertEquals(selected, recording.phoneFiles.values.map { it.fileName }.toSet())
+
+            val result = PhoneDeletion.execute(plan(merged, selected = setOf(a)), memory)
+            assertEquals(selected, result.deleted)
+            assertTrue(result.failures.isEmpty())
+            assertEquals(untouched, memory.files.keys)
+        }
+    }
     @Test fun driveMp3PreventsAudioWarning() {
         val r = recording(a, setOf(FileKind.MP3))
         val name = r.phoneFiles.getValue(FileKind.MP3).fileName
