@@ -483,24 +483,24 @@ class AppModel(
 
     // --- Récupération
 
-    /** [names] nul : tout ce qui manque. */
-    fun recover(names: List<String>?) {
+    /** [names] nul : tout ce qui manque. [processAfter] enchaîne VTT puis MD après la récupération, même réglage coupé. */
+    fun recover(names: List<String>?, processAfter: Boolean = false) {
         scope.launch {
             localRepository.awaitInitialized()
-            recoverReady(names)
+            recoverReady(names, processAfter)
         }
     }
 
-    private fun recoverReady(names: List<String>?) {
+    private fun recoverReady(names: List<String>?, processAfter: Boolean) {
         if (liveFlow.value.recovering) return
         when {
-            !hasBluetooth() -> askBluetooth { recover(names) }
-            localFlow.phoneTreeUri == null -> askPhoneFolder { recover(names) }
-            else -> scope.launch { recoverNow(names) }
+            !hasBluetooth() -> askBluetooth { recover(names, processAfter) }
+            localFlow.phoneTreeUri == null -> askPhoneFolder { recover(names, processAfter) }
+            else -> scope.launch { recoverNow(names, processAfter) }
         }
     }
 
-    private suspend fun recoverNow(names: List<String>?) {
+    private suspend fun recoverNow(names: List<String>?, processAfter: Boolean) {
         val uri = localFlow.phoneTreeUri?.toUri() ?: return
         val address = localFlow.deviceAddress ?: return
         val entries = recoveryEntries(names)
@@ -517,7 +517,7 @@ class AppModel(
         jobs.begin()
         try {
             startWork()
-            runRecovery(address, uri, entries, recoveryToken)
+            runRecovery(address, uri, entries, recoveryToken, processAfter)
         } finally {
             jobs.end()
             liveFlow.update { it.copy(recovering = false, recovery = null, recoveryName = null, recoveryNames = emptySet()) }
@@ -536,7 +536,7 @@ class AppModel(
      * Une connexion qui échoue donne « Boîtier hors de portée. » ; une exception plus tard marque l'enregistrement en cours.
      * La liaison se ferme après un échec qui arrête la file, puis à la fin si l'app est en arrière-plan.
      */
-    private suspend fun runRecovery(address: String, uri: Uri, entries: List<ListItem.Entry>, recoveryToken: Map<String, Long>) {
+    private suspend fun runRecovery(address: String, uri: Uri, entries: List<ListItem.Entry>, recoveryToken: Map<String, Long>, processAfter: Boolean) {
         var connected = false
         val outcome = withRecoveryFinalization({ connected }, { reconcileAutomaticProcessing() }) {
             attempt {
@@ -551,7 +551,7 @@ class AppModel(
                                         if (!recoveryDeletionGuard.isCurrent(recoveryToken, entry.name) ||
                                             localFlow.phoneTreeUri != uri.toString() || recoveryEntries(names = listOf(entry.name)).none { it == entry })
                                             throw RecoveryGuardException(IllegalStateException("La sélection ou le dossier a changé."))
-                                        recoverySafety.begin(entry.name, uri.toString())
+                                        recoverySafety.begin(entry.name, uri.toString(), processAfter)
                                     },
                                     validateResult = { result -> recoverySafety.finish(result, uri.toString()) })
                         }
@@ -791,6 +791,27 @@ class AppModel(
             synchronized(deletionRequestLock) {
                 if (!liveFlow.value.deleting) liveFlow.update { it.copy(deletionRequest = plan) }
             }
+        }
+    }
+
+    /**
+     * Glissement vers la gauche sur une tuile : récupère puis traite, transcrit ce qui manque, ou dit pourquoi rien ne part.
+     */
+    fun processOne(name: String) {
+        val local = localRepository.state.value ?: return
+        val current = buildUi(local, phoneFlow.value, driveFlow.value, box.status.value, liveFlow.value)
+        val recording = current.recordings.firstOrNull { it.name == name } ?: return
+        val action = swipeProcessing(
+            recording,
+            busy = name in deletionProtectedNames(local),
+            hasVtt = FileKind.VTT in recording.phoneFiles,
+            hasMd = FileKind.MD in recording.phoneFiles,
+        )
+        when (action) {
+            SwipeProcessing.RECOVER -> recover(listOf(name), processAfter = true)
+            SwipeProcessing.TRANSCRIBE -> transcribe(setOf(name))
+            SwipeProcessing.DONE -> liveFlow.update { it.copy(notice = "Déjà traité") }
+            SwipeProcessing.BUSY -> liveFlow.update { it.copy(notice = "Traitement en cours") }
         }
     }
 

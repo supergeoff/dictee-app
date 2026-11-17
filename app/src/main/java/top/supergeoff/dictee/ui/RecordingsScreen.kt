@@ -28,6 +28,9 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -263,16 +266,59 @@ private fun DayGroup(
                     value = ProvenanceStatus.UNKNOWN
                     if (md != null) value = withContext(Dispatchers.IO) { model.readSynthesis(md.fileName, vtt?.fileName).getOrNull()?.status } ?: ProvenanceStatus.UNKNOWN
                 }
-                RecordingRow(
-                    recording = recording,
-                    presentation = recordingListPresentation(recording, ui, provenance),
-                    subject = ui.local.recordingSubjects[recording.name],
-                    checked = checked?.let { recording.name in it },
-                    onClick = { onClick(recording.name) },
-                    onLongClick = { onLongClick(recording.name) },
-                )
+                SwipeableRecording(
+                    enabled = checked == null,
+                    onDelete = { model.requestDeletion(DeletionMode.EVERYWHERE, setOf(recording.name)) },
+                    onProcess = { model.processOne(recording.name) },
+                ) {
+                    RecordingRow(
+                        recording = recording,
+                        presentation = recordingListPresentation(recording, ui, provenance),
+                        subject = ui.local.recordingSubjects[recording.name],
+                        checked = checked?.let { recording.name in it },
+                        onClick = { onClick(recording.name) },
+                        onLongClick = { onLongClick(recording.name) },
+                    )
+                }
             }
         }
+    }
+}
+
+/**
+ * Glissement d'une tuile : vers la droite demande « Supprimer partout » (avec confirmation), vers la gauche traite
+ * l'enregistrement. La tuile revient toujours en place ; le geste n'existe pas en sélection.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SwipeableRecording(enabled: Boolean, onDelete: () -> Unit, onProcess: () -> Unit, content: @Composable () -> Unit) {
+    val colors = Dictee.colors
+    val state = rememberSwipeToDismissBoxState(confirmValueChange = { target ->
+        when (target) {
+            SwipeToDismissBoxValue.StartToEnd -> onDelete()
+            SwipeToDismissBoxValue.EndToStart -> onProcess()
+            SwipeToDismissBoxValue.Settled -> Unit
+        }
+        false
+    })
+    SwipeToDismissBox(
+        state = state,
+        enableDismissFromStartToEnd = enabled,
+        enableDismissFromEndToStart = enabled,
+        backgroundContent = {
+            when (state.dismissDirection) {
+                SwipeToDismissBoxValue.StartToEnd -> SwipeBackground("Supprimer", colors.destructive, Alignment.CenterStart)
+                SwipeToDismissBoxValue.EndToStart -> SwipeBackground("Traiter", colors.primary, Alignment.CenterEnd)
+                SwipeToDismissBoxValue.Settled -> Unit
+            }
+        },
+    ) { content() }
+}
+
+@Composable
+private fun SwipeBackground(label: String, background: androidx.compose.ui.graphics.Color, alignment: Alignment) {
+    Box(Modifier.fillMaxSize().background(background).padding(horizontal = 20.dp), contentAlignment = alignment) {
+        Text(label, style = Dictee.type.captionStrong, color = Dictee.colors.onPrimary)
     }
 }
 

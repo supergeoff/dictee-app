@@ -140,6 +140,15 @@ class LocalStateTest {
         assertEquals(listOf(kept, other), updated.driveReceipts)
     }
 
+    @Test fun forcedRecoveryCreatesIntentWhenAutoOff() {
+        val folder = "content://synthetic/tree-a"
+        val began = LocalState(autoProcessAfterRecovery = false).beginAutomaticRecovery("recording", folder, "request", force = true)
+        assertEquals(listOf(AutomaticProcessingRequest("request", "recording", folder, AutomaticProcessingPhase.RECOVERING)),
+            began.automaticProcessingRequests)
+        assertTrue(LocalState(autoProcessAfterRecovery = false).beginAutomaticRecovery("recording", folder, "request")
+            .automaticProcessingRequests.isEmpty())
+    }
+
     @Test fun version6PersistsSubjectsAndAttemptMarkerAndReadsVersion5() {
         val store = LocalStateStore(file())
         val state = LocalState(recordingSubjects = mapOf("20261030160502" to "Sujet synthétique"),

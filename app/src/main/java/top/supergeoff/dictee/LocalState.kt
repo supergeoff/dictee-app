@@ -73,10 +73,13 @@ data class LocalState(
         } + receipt,
     )
 
-    /** Capture le réglage au début d'un transfert, sans activer rétroactivement les anciens MP3. */
-    fun beginAutomaticRecovery(name: String, folderUri: String, id: String): LocalState {
+    /**
+     * Capture le réglage au début d'un transfert, sans activer rétroactivement les anciens MP3.
+     * [force] crée l'intention même si le réglage est coupé : c'est le cas du glissement « Traiter ».
+     */
+    fun beginAutomaticRecovery(name: String, folderUri: String, id: String, force: Boolean = false): LocalState {
         val sameFile = automaticProcessingRequests.filter { it.recordingName == name && it.folderUri == folderUri }
-        return if (autoProcessAfterRecovery) {
+        return if (autoProcessAfterRecovery || force) {
             copy(automaticProcessingRequests = automaticProcessingRequests.filterNot { it in sameFile } +
                 AutomaticProcessingRequest(id, name, folderUri, AutomaticProcessingPhase.RECOVERING))
         } else {
@@ -599,14 +602,14 @@ class RecoverySafety(private val repository: LocalStateRepository) {
         }
     }
 
-    suspend fun begin(name: String, folderUri: String) {
+    suspend fun begin(name: String, folderUri: String, processAfter: Boolean = false) {
         try {
             repository.updateDurably { state ->
                 check(state.transcriptionTasks.none { !it.phase.isTerminal() && it.recordingName == name }) {
                     "Enregistrement utilisé par une transcription active"
                 }
                 state.withError(name, Step.RECOVER, "Récupération interrompue ou en cours")
-                    .beginAutomaticRecovery(name, folderUri, java.util.UUID.randomUUID().toString())
+                    .beginAutomaticRecovery(name, folderUri, java.util.UUID.randomUUID().toString(), force = processAfter)
             }
         } catch (e: kotlinx.coroutines.CancellationException) { throw e }
         catch (e: Exception) { throw RecoveryGuardException(e) }
