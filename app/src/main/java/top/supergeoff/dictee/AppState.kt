@@ -139,6 +139,31 @@ internal fun deletionProtectedNames(local: LocalState, recoveryNames: Set<String
     local.transcriptionTasks.filterNot { it.phase.isTerminal() }.map { it.recordingName }.toSet() +
         local.automaticProcessingRequests.map { it.recordingName } + recoveryNames + sendNames
 
+internal fun launchProcessingRequest(
+    scope: CoroutineScope, guard: RecoveryDeletionGuard, names: Set<String>?, block: suspend () -> Unit,
+): kotlinx.coroutines.Job? {
+    val admission = guard.admitProcessing(names) ?: return null
+    return try {
+        scope.launch { block() }.also { it.invokeOnCompletion { admission.close() } }
+    } catch (e: Throwable) {
+        admission.close()
+        throw e
+    }
+}
+
+internal fun launchBoxDeletionRequest(
+    scope: CoroutineScope, requests: BoxDeletionRequests, lock: Any,
+    onAccepted: (BoxDeletionPlan) -> Unit,
+    execute: suspend (BoxDeletionPlan) -> Unit,
+    onFinished: () -> Unit,
+): kotlinx.coroutines.Job? {
+    val plan = requests.confirm() ?: return null
+    onAccepted(plan)
+    return scope.launch { execute(plan) }.also { job ->
+        job.invokeOnCompletion { synchronized(lock) { requests.finish(); onFinished() } }
+    }
+}
+
 internal suspend fun runGuardedBoxDeletion(
     plan: BoxDeletionPlan,
     withTransferLock: suspend (suspend () -> BoxDeletionResult) -> BoxDeletionResult,
@@ -573,53 +598,50 @@ class AppModel(
         liveFlow.update { it.copy(boxDeletionRequest = null) }
     }
 
-    fun confirmBoxDeletion() {
-        val plan = synchronized(deletionRequestLock) {
-            val request = boxDeletionRequests.confirm() ?: return
-            liveFlow.update { it.copy(boxDeletionRequest = null, deletingBox = true, boxDeletionResult = null) }
-            request
-        }
-        jobs.begin()
-        scope.launch {
-            var latest = BoxDeletionResult(emptySet(), emptyMap(), emptySet(), plan.names.toSet(), null)
-            try {
-                startWork()
-                latest = runGuardedBoxDeletion(plan, { block -> recoverySafety.withTransferLock(block) }, recoveryDeletionGuard,
-                    snapshot = {
-                        val local = localRepository.awaitInitialized()
-                        local.deviceAddress to deletionProtectedNames(local)
-                    },
-                    execute = { address, names ->
-                        withContext(Dispatchers.IO) {
-                            val result = box.withSession(address) { session ->
-                                BoxDeletionJob(session::deleteRecord, session::listRecords, { entries ->
-                                    localRepository.updateDurably { state ->
-                                        if (state.deviceAddress == address) state.copy(boxList = entries) else state
-                                    }
-                                }, { result ->
-                                    latest = result
-                                    liveFlow.update { it.copy(boxDeletionResult = result) }
-                                }).run(names)
+    fun confirmBoxDeletion() = synchronized(deletionRequestLock) {
+        launchBoxDeletionRequest(scope, boxDeletionRequests, deletionRequestLock,
+            onAccepted = {
+                liveFlow.update { it.copy(boxDeletionRequest = null, deletingBox = true, boxDeletionResult = null) }
+                jobs.begin()
+            },
+            execute = { plan ->
+                var latest = BoxDeletionResult(emptySet(), emptyMap(), emptySet(), plan.names.toSet(), null)
+                try {
+                    startWork()
+                    latest = runGuardedBoxDeletion(plan, { block -> recoverySafety.withTransferLock(block) }, recoveryDeletionGuard,
+                        snapshot = {
+                            val local = localRepository.awaitInitialized()
+                            local.deviceAddress to deletionProtectedNames(local)
+                        },
+                        execute = { address, names ->
+                            withContext(Dispatchers.IO) {
+                                val result = box.withSession(address) { session ->
+                                    BoxDeletionJob(session::deleteRecord, session::listRecords, { entries ->
+                                        localRepository.updateDurably { state ->
+                                            if (state.deviceAddress == address) state.copy(boxList = entries) else state
+                                        }
+                                    }, { result ->
+                                        latest = result
+                                        liveFlow.update { it.copy(boxDeletionResult = result) }
+                                    }).run(names)
+                                }
+                                if (result.error != null || !foregroundBoxGate.isForeground) box.close()
+                                result
                             }
-                            if (result.error != null || !foregroundBoxGate.isForeground) box.close()
-                            result
-                        }
-                    })
-                liveFlow.update { it.copy(boxDeletionResult = latest) }
-            } catch (e: CancellationException) {
-                liveFlow.update { it.copy(boxDeletionResult = latest.copy(error = latest.error ?: "Suppression interrompue ; état non vérifié.")) }
-                throw e
-            } catch (e: Exception) {
-                liveFlow.update { it.copy(boxDeletionResult = latest.copy(error = reasonOf(e))) }
-                journal.error(Source.BLE, reasonOf(e))
-            } finally {
-                synchronized(deletionRequestLock) {
-                    boxDeletionRequests.finish()
-                    liveFlow.update { it.copy(deletingBox = false) }
+                        })
+                    liveFlow.update { it.copy(boxDeletionResult = latest) }
+                } catch (e: CancellationException) {
+                    liveFlow.update { it.copy(boxDeletionResult = latest.copy(error = latest.error ?: "Suppression interrompue ; état non vérifié.")) }
+                    throw e
+                } catch (e: Exception) {
+                    liveFlow.update { it.copy(boxDeletionResult = latest.copy(error = reasonOf(e))) }
+                    journal.error(Source.BLE, reasonOf(e))
                 }
+            },
+            onFinished = {
+                synchronized(deletionRequestLock) { liveFlow.update { it.copy(deletingBox = false) } }
                 jobs.end()
-            }
-        }
+            })
     }
 
     fun requestPhoneDeletion(names: Set<String>) {
@@ -753,7 +775,7 @@ class AppModel(
      * la tâche durable et le service ; la boucle interactive suit ensuite les tâches jusqu'à leur fin ou leur suspension.
      */
     fun transcribe(names: Set<String>?, request: RequestedWork = RequestedWork.MISSING, resumeRecording: Boolean = false) {
-        scope.launch {
+        val job = launchProcessingRequest(scope, recoveryDeletionGuard, names) {
             jobs.track {
                 try {
                     if (request == RequestedWork.MISSING) announceExclusions(names)
@@ -771,6 +793,7 @@ class AppModel(
                 }
             }
         }
+        if (job == null) say("Suppression en cours, traitement annulé.")
     }
 
     /** Chaque enregistrement concerné laisse une ligne « demande reçue » ou « demande écartée », en source STT ou LLM. */

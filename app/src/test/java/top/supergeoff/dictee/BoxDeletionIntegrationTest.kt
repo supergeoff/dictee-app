@@ -59,21 +59,56 @@ class BoxDeletionIntegrationTest {
         val repo = repository(); val safety = RecoverySafety(repo); val guard = RecoveryDeletionGuard()
         val requests = BoxDeletionRequests()
         var emissions = 0
-        suspend fun confirm() {
-            val selected = requests.confirm() ?: return
-            try {
-                runGuardedBoxDeletion(selected, { block -> safety.withTransferLock(block) }, guard,
-                    { "box" to emptySet() }, { _, names ->
-                        emissions++
-                        BoxDeletionResult(names.toSet(), emptyMap(), emptySet(), emptySet(), null)
-                    })
-            } finally { requests.finish() }
-        }
-        requests.open(plan(a)); requests.cancel(); confirm()
+        val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+        fun confirm() = launchBoxDeletionRequest(this, requests, requests, {}, { selected ->
+            runGuardedBoxDeletion(selected, { block -> safety.withTransferLock(block) }, guard,
+                { "box" to emptySet() }, { _, names ->
+                    entered.complete(Unit); release.await(); emissions++
+                    BoxDeletionResult(names.toSet(), emptyMap(), emptySet(), emptySet(), null)
+                })
+        }, {})
+        requests.open(plan(a)); requests.cancel(); assertNull(confirm())
         assertEquals(0, emissions)
-        requests.open(plan(a)); confirm(); confirm()
-        assertEquals(1, emissions)
+        requests.open(plan(a)); val first = confirm()!!; entered.await()
+        assertNull(confirm()); release.complete(Unit); first.join()
+        assertNull(confirm()); assertEquals(1, emissions)
         assertNotNull(guard.capture(setOf(a)))
+    }
+
+    @Test fun processingAdmissionBeforeDeletionBlocksAndCancellationReleases() = runBlocking {
+        for (names in listOf(setOf(a), null)) {
+            val repo = repository(); val safety = RecoverySafety(repo); val guard = RecoveryDeletionGuard()
+            val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+            val holder = launch { safety.withTransferLock { entered.complete(Unit); release.await() } }
+            entered.await()
+            var emissions = 0
+            val deletion = async { runGuardedBoxDeletion(plan(a, b), { block -> safety.withTransferLock(block) }, guard,
+                { "box" to emptySet() }, { _, _ -> emissions++; error("unexpected") }) }
+            kotlinx.coroutines.yield()
+            val job = launchProcessingRequest(this, guard, names) {
+                safety.withTransferLock { error("processing must remain queued") }
+            }!!
+            kotlinx.coroutines.yield()
+            release.complete(Unit); holder.join()
+            assertNotNull(deletion.await().error)
+            job.cancelAndJoin()
+            assertEquals(0, emissions)
+            guard.withDeletionSnapshot(setOf(a)) { assertTrue(it.isEmpty()) }
+        }
+    }
+
+    @Test fun processingAfterReservationIsRefusedBeforeLaunch() = runBlocking {
+        val repo = repository(); val safety = RecoverySafety(repo); val guard = RecoveryDeletionGuard()
+        val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+        val deletion = async { runGuardedBoxDeletion(plan(a), { block -> safety.withTransferLock(block) }, guard,
+            { "box" to emptySet() }, { _, _ -> entered.complete(Unit); release.await(); BoxDeletionResult(setOf(a), emptyMap(), emptySet(), emptySet(), null) }) }
+        entered.await()
+        var starts = 0
+        assertNull(launchProcessingRequest(this, guard, setOf(a)) { starts++ })
+        assertNull(launchProcessingRequest(this, guard, null) { starts++ })
+        release.complete(Unit); deletion.await()
+        launchProcessingRequest(this, guard, setOf(a)) { starts++ }!!.join()
+        assertEquals(1, starts)
     }
 
     @Test fun oneProtectedNameBlocksEntireBatch() = runBlocking {
