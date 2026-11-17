@@ -30,7 +30,7 @@
 
 ## Carte des fichiers
 
-Créer `PhoneDeletion.kt` pour la politique et l'exécution indépendantes d'Android, et `ui/PhoneDeletionDialog.kt` pour la confirmation partagée. Étendre `PhoneStore.kt` et `PhoneFolder.kt` pour la suppression SAF. Modifier `RecordingState.kt` et `RecordingPipeline.kt` pour les copies restantes. Intégrer dans `AppState.kt`, `ui/RecordingScreen.kt` et `ui/RecordingsScreen.kt`. Ajouter les tests correspondants aux répertoires de tests existants, puis mettre à jour `app/build.gradle.kts` et `docs/specification.md`.
+Créer `PhoneDeletion.kt` pour la politique et l'exécution indépendantes d'Android, et `ui/PhoneDeletionDialog.kt` pour la confirmation partagée. Étendre `PhoneStore.kt` et `PhoneFolder.kt` pour la suppression SAF. Modifier `RecordingState.kt`, `RecordingPipeline.kt` et `DriveSync.kt` pour les copies restantes ; étendre aussi `DriveSyncTest.kt`. Intégrer dans `AppState.kt`, `ui/RecordingScreen.kt` et `ui/RecordingsScreen.kt`. Ajouter les tests correspondants aux répertoires de tests existants, puis mettre à jour `app/build.gradle.kts` et `docs/specification.md`.
 
 ### Task 1: Préparer et exécuter une suppression locale
 
@@ -38,24 +38,24 @@ Créer `PhoneDeletion.kt` pour la politique et l'exécution indépendantes d'And
 
 **Interfaces:** `PhoneStore.delete(fileName: String): Unit` est idempotente si le fichier manque et lève PhoneStoreException en cas d'accès refusé. Définir `PhoneDeletionPlan(folderUri: String, recordings: List<Recording>, blockedNames: Set<String>, documentsUnverified: Boolean, audioAtRisk: Boolean)` et `PhoneDeletionResult(deleted: Set<String>, failures: Map<String, String>)`. `PhoneDeletion.plan(folderUri: String, recordings: List<Recording>, selected: Set<String>, protectedNames: Set<String>, drive: DriveListing?, local: LocalState, hashes: Map<String, String>): PhoneDeletionPlan` prépare les fichiers présents. `PhoneDeletion.execute(plan: PhoneDeletionPlan, store: PhoneStore): PhoneDeletionResult` ne traite jamais un plan bloqué.
 
-- [ ] Écrire les tests en échec : sélection de deux enregistrements sans doublon, omission des éléments sans fichiers locaux, blocage total si une cible est protégée, Drive inconnu avec documentsUnverified=true, MP3 uniquement local avec audioAtRisk=true, MP3 sur boîtier avec audioAtRisk=false. Ajouter les cas reçu périmé et mauvaise destination : documentsUnverified=true.
-- [ ] Lancer `./gradlew testDebugUnitTest --tests '*PhoneDeletionTest'` et constater les échecs attendus.
-- [ ] Implémenter les interfaces ; réutiliser les règles de reçus de DriveSync plutôt que les noms seuls. L'exécuteur continue après une erreur par fichier, enregistre chaque résultat et laisse remonter une annulation de coroutine.
-- [ ] Tester le faux store : un succès suivi d'un refus donne exactement un nom dans deleted et un nom dans failures ; un fichier absent est sans erreur ; aucun nom hors du plan n'est passé à delete.
-- [ ] Ajouter les tests Android du fournisseur : suppression réelle du document ciblé, absent sans erreur, refus et perte de permission sans faux succès. Implémenter `PhoneFolder.delete` avec DocumentsContract.deleteDocument et les protections d'erreur existantes. Adapter chaque implémentation de PhoneStore, y compris les doubles.
-- [ ] Relancer les tests unitaires et `./gradlew assembleDebug assembleDebugAndroidTest`. Exécuter PhoneFolderGuardTest sur appareil disponible ; sinon consigner le non-vérifié dans le compte rendu, pas dans un fichier d'état.
-- [ ] Créer un commit local limité aux fichiers de cette tâche.
+- [x] Écrire les tests en échec : sélection de deux enregistrements sans doublon, omission des éléments sans fichiers locaux, blocage total si une cible est protégée, Drive inconnu avec documentsUnverified=true, MP3 uniquement local avec audioAtRisk=true, MP3 sur boîtier avec audioAtRisk=false. Ajouter les cas reçu périmé et mauvaise destination : documentsUnverified=true.
+- [x] Lancer `./gradlew testDebugUnitTest --tests '*PhoneDeletionTest'` et constater les échecs attendus.
+- [x] Implémenter les interfaces ; réutiliser les règles de reçus de DriveSync plutôt que les noms seuls. L'exécuteur continue après une erreur par fichier, enregistre chaque résultat et laisse remonter une annulation de coroutine.
+- [x] Tester le faux store : un succès suivi d'un refus donne exactement un nom dans deleted et un nom dans failures ; un fichier absent est sans erreur ; aucun nom hors du plan n'est passé à delete.
+- [x] Ajouter les tests Android du fournisseur : suppression réelle du document ciblé, absent sans erreur, refus et perte de permission sans faux succès. Implémenter `PhoneFolder.delete` avec DocumentsContract.deleteDocument et les protections d'erreur existantes. Adapter chaque implémentation de PhoneStore, y compris les doubles.
+- [x] Relancer les tests unitaires et `./gradlew assembleDebug assembleDebugAndroidTest`. Exécuter PhoneFolderGuardTest sur appareil disponible ; sinon consigner le non-vérifié dans le compte rendu, pas dans un fichier d'état.
+- [x] Créer un commit local limité aux fichiers de cette tâche.
 
 ### Task 2: Conserver et présenter les copies restantes
 
-**Files:** modifier `RecordingState.kt`, `RecordingPipeline.kt`, `RecordingStateTest.kt`, `RecordingPipelineTest.kt`, `RecordingListPresentationTest.kt` dans les chemins main/test du paquet existant.
+**Files:** modifier `RecordingState.kt`, `RecordingPipeline.kt`, `RecordingStateTest.kt`, `RecordingPipelineTest.kt`, `RecordingListPresentationTest.kt`, `DriveSync.kt` et `DriveSyncTest.kt` dans les chemins main/test du paquet existant.
 
 **Interfaces:** conserver `Recordings.merge(...)` et `RecordingPipeline.calculate(input: PipelineInput): PipelinePresentation`. Étendre la fusion aux noms reconnus de VTT et MD distants, avec les règles de type déjà utilisées pour les noms préfixés. Aucun téléchargement distant n'est ajouté.
 
 - [ ] Écrire les tests en échec : Drive avec VTT et MD sans MP3 conserve une Recording ; téléphone et boîtier vides avec Drive vide donnent une liste vide ; fichier local prioritaire sur distant ; fichier local absent et copie confirmée donnent label « Sur Drive » ; absence de copie donne « Absent » après suppression ; audio boîtier seul conserve l'action RECOVER.
 - [ ] Lancer `./gradlew testDebugUnitTest --tests '*RecordingStateTest' --tests '*RecordingPipelineTest' --tests '*RecordingListPresentationTest'` et observer les échecs.
-- [ ] Adapter la fusion et la présentation. Garder les actions de production quand l'audio local existe ; ne pas produire de documents ni lancer de récupération à cause d'une suppression. Conserver le calcul Drive selon le choix DIC-21 et ses reçus, même lorsque les fichiers locaux ont disparu.
-- [ ] Ajouter les cas DOCUMENTS_ONLY, ALL_FILES incomplet et destination différente ; vérifier que la ligne distante existe sans déclarer à tort la dernière version sauvegardée.
+- [ ] Adapter la fusion et la présentation. Garder les actions de production quand l'audio local existe ; ne pas produire de documents ni lancer de récupération à cause d'une suppression. Adapter `DriveSync.isComplete` pour conserver le calcul Drive selon le choix DIC-21 après disparition des fichiers locaux : sans empreinte locale, la preuve reste conservatrice et liée aux reçus et à la destination courante.
+- [ ] Ajouter dans `DriveSyncTest.kt` les cas sans empreinte locale avec reçu et destination courante, reçu absent ou destination différente ; ajouter les cas DOCUMENTS_ONLY, ALL_FILES incomplet et destination différente ; vérifier que la ligne distante existe sans déclarer à tort la dernière version sauvegardée.
 - [ ] Relancer les tests ciblés puis toute la suite unitaire et créer un commit local.
 
 ### Task 3: Intégrer la confirmation et protéger les travaux

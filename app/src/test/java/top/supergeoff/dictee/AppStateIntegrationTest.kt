@@ -144,6 +144,7 @@ class AppStateIntegrationTest {
         val safety = RecoverySafety(repo)
         val phone = object : PhoneStore {
             val files = linkedMapOf<String, ByteArray>()
+            override fun delete(fileName: String) { throw PhoneStoreException("Non utilisé") }
             override fun list() = files.map { PhoneFile(it.key, it.value.size.toLong()) }
             override fun write(fileName: String, source: File) {
                 files[fileName] = source.readBytes().copyOf(12)

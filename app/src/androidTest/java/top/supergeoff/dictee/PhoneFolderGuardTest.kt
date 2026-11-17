@@ -88,4 +88,21 @@ class PhoneFolderGuardTest {
         assertEquals(1, calls)
         assertEquals("new synthetic content", provider.contents("note.md"))
     }
+    @Test fun deleteRemovesOnlyTargetAndMissingIsIdempotent() {
+        provider.put("note.md", "content"); provider.put("other.md", "other")
+        folder.delete("note.md"); folder.delete("note.md")
+        assertNull(provider.contents("note.md")); assertEquals("other", provider.contents("other.md"))
+    }
+
+    @Test fun deleteRefusalIsReportedWithoutRemovingFile() {
+        provider.put("note.md", "content"); provider.refuseDelete = true
+        assertThrows(PhoneStoreException::class.java) { folder.delete("note.md") }
+        assertEquals("content", provider.contents("note.md"))
+    }
+
+    @Test fun deleteLostPermissionIsNotReportedAsSuccess() {
+        provider.put("note.md", "content"); provider.denyChildren = true
+        assertThrows(PhoneStoreException::class.java) { folder.delete("note.md") }
+        assertEquals("content", provider.contents("note.md"))
+    }
 }
