@@ -1,6 +1,6 @@
 # Dictée : spécification du produit
 
-Statut : ce document décrit le comportement visé pour la version 0.7.0. La recette sur appareil, la vérification Drive réelle et celle de l'APK signé restent à faire.
+Statut : ce document décrit le comportement visé pour la version 0.9.0. La recette sur appareil, la vérification Drive réelle et celle de l'APK signé restent à faire.
 
 Le protocole Bluetooth du MECHEN V05 est décrit dans [`protocole-v05.md`](protocole-v05.md).
 
@@ -24,8 +24,8 @@ Dictée récupère les enregistrements du MECHEN V05 par Bluetooth et les range 
 
 1. Au premier lancement, aucun boîtier n'est associé. L'utilisateur touche « Rechercher le boîtier », accorde la permission Bluetooth, puis associe le boîtier trouvé. L'app lit aussitôt la liste du boîtier.
 2. À chaque passage au premier plan, l'app se connecte au boîtier associé et relit sa liste. La liste affiche les enregistrements du boîtier, du téléphone et de Drive, groupés par jour.
-3. « Récupérer (N) » transfère les enregistrements absents du téléphone et de Drive. Au premier besoin, l'app demande le dossier du téléphone.
-4. Si l'option de création après récupération est active, chaque MP3 récupéré et validé déclenche la création des fichiers VTT et MD manquants. Si l'envoi vers Drive est activé, « Envoyer (N) » ouvre le choix des fichiers à envoyer manuellement.
+3. En sélection, « Récupérer (N) » transfère les enregistrements cochés qui sont sur le boîtier. Au premier besoin, l'app demande le dossier du téléphone.
+4. Si l'option de création après récupération est active, chaque MP3 récupéré et validé déclenche la création des fichiers VTT et MD manquants. Si l'envoi vers Drive est activé, « Envoyer dans le cloud (N) » ouvre le choix des fichiers à envoyer manuellement.
 
 ## Écrans
 
@@ -42,20 +42,20 @@ L'app garde une seule activité. Le passage d'un écran à l'autre suit une pile
 
 - La liste réunit trois sources : la dernière liste lue sur le boîtier, le dossier du téléphone et les MP3, VTT et MD reconnus du dossier Drive, quand Drive est activé. Elle est groupée par jour (« Aujourd'hui », « Hier », puis par exemple « Jeudi 29 octobre »), du plus récent au plus ancien. Un enregistrement absent du boîtier reste listé tant qu'un de ses fichiers existe sur le téléphone ou dans Drive.
 - La pastille du boîtier montre un point plein quand la liaison est ouverte et un point vide sinon. Un toucher relance la connexion, et un échec affiche « Boîtier hors de portée. ». Tirer la liste vers le bas relit le dossier du téléphone, le dossier Drive et le boîtier.
-- Les filtres sont « Tous », « À relire » et « Sur le boîtier », chacun avec son compteur. « Sur le boîtier » retient les enregistrements du boîtier qui n'ont aucun fichier sur le téléphone. « À relire » ne retient aucun enregistrement et affiche toujours 0.
-- « Récupérer (N) » compte les enregistrements du boîtier qui ne sont ni sur le téléphone ni dans Drive. Il n'est actif que si la liaison est ouverte, qu'aucune récupération ne tourne et que N n'est pas nul. Il affiche « Récupération… » pendant le travail.
-- « Envoyer (N) » n'apparaît que si Drive est activé. Il compte les enregistrements sans erreur de récupération dont au moins un fichier local requis par le dernier choix confirmé est à envoyer ou en conflit : fichier absent, document sans preuve correspondant à son empreinte actuelle, ou homonymes visibles. Sans catalogue ou destination connue, tout fichier local requis rend l'enregistrement candidat ; en documents seuls, un MP3 seul ne suffit pas. Il affiche « Envoi… » pendant le travail.
-- Les boutons suivent l'ordre « Récupérer », « VTT + MD », « Envoyer ». Un compteur nul désactive son bouton, sauf « Envoyer » en sélection explicite lorsqu'un fichier local est disponible pour rouvrir le choix. « VTT + MD » compte les MP3 exploitables auxquels il manque un VTT ou un MD, hors travaux actifs ; en sélection, il se limite aux lignes cochées. Il crée les fichiers manquants sans remplacer ceux qui existent et n'envoie rien vers Drive. Les exclusions de la sélection sont signalées ; une action collective ne reprend aucune tâche suspendue exclue du compteur.
+- Les filtres sont « Tout », « Boîtier », « Téléphone » et « Drive », dans cet ordre, chacun avec son compteur. Un enregistrement apparaît dans chaque filtre où il a une copie : « Boîtier » retient ceux qui sont sur le boîtier, « Téléphone » ceux qui ont au moins un fichier sur le téléphone, et « Drive » ceux dont la liste Drive du dernier rafraîchissement contient au moins un de leurs fichiers. Sans Drive activé ou sans liste Drive, le filtre Drive compte zéro. Le compteur compte ces présences.
+- Hors sélection, la barre du bas n'affiche que « Envoyer dans le cloud (n) ». Ce bouton n'apparaît que si n est supérieur à zéro et que Drive est activé. Son compteur porte sur toute la liste, et n compte les enregistrements dont le VTT ou le MD présent sur le téléphone n'est pas sur Drive ; l'audio est ignoré. Il ouvre la fenêtre d'envoi habituelle, qui garde le dernier choix confirmé.
+- En sélection, « Récupérer (N) » compte les lignes cochées présentes sur le boîtier, quel que soit leur état. Il n'est actif que si la liaison est ouverte, qu'aucune récupération ne tourne et que N n'est pas nul. Il affiche « Récupération… » pendant le travail.
+- En sélection, « Envoyer (N) » n'apparaît que si Drive est activé. Il compte les enregistrements sans erreur de récupération dont au moins un fichier local requis par le dernier choix confirmé est à envoyer ou en conflit : fichier absent, document sans preuve correspondant à son empreinte actuelle, ou homonymes visibles. Sans catalogue ou destination connue, tout fichier local requis rend l'enregistrement candidat ; en documents seuls, un MP3 seul ne suffit pas. Il affiche « Envoi… » pendant le travail.
+- En sélection, les boutons suivent l'ordre « Récupérer », « VTT + MD », « Envoyer », puis « Supprimer partout » et « Libérer l'espace ». Ces deux derniers restent visibles et sont désactivés quand ils n'ont aucune cible. Un compteur nul désactive son bouton, sauf « Envoyer » en sélection explicite lorsqu'un fichier local est disponible pour rouvrir le choix. « VTT + MD » compte les MP3 exploitables auxquels il manque un VTT ou un MD, hors travaux actifs ; en sélection, il se limite aux lignes cochées. Il crée les fichiers manquants sans remplacer ceux qui existent et n'envoie rien vers Drive. Les exclusions de la sélection sont signalées ; une action collective ne reprend aucune tâche suspendue exclue du compteur.
 - Un appui long passe en sélection. La barre affiche le nombre de lignes cochées, une croix pour sortir et « Tout », qui coche les lignes du filtre en cours. Les actions portent alors sur les lignes cochées : récupérer une ligne cochée la transfère de nouveau depuis le boîtier, quel que soit son état ; « VTT + MD » ne remplace aucun fichier. La sélection se vide après l'action.
-- Hors sélection, glisser une tuile vers la droite ouvre la confirmation « Supprimer partout » pour cet enregistrement ; la glisser vers la gauche le traite : récupération puis VTT puis MD si le MP3 n'est que sur le boîtier (même réglage de traitement automatique coupé), sinon transcription de ce qui manque. Un enregistrement occupé affiche « Traitement en cours », un enregistrement complet « Déjà traité ». La tuile revient toujours en place ; le geste est désactivé en sélection.
-- « Supprimer du téléphone » est proposé en sélection ; après une suppression partielle, les cibles qui ont encore des fichiers locaux restent cochées. Les lignes sélectionnées hors cibles restent cochées si elles sont encore présentes.
+- Hors sélection, glisser une tuile de gauche à droite ouvre la confirmation « Supprimer partout » pour cet enregistrement ; annuler remet la tuile en place. La glisser de droite à gauche lance la récupération si le MP3 est sur le boîtier et absent du téléphone, puis le VTT puis le MD, en sautant les étapes déjà faites ; l'enchaînement a lieu alors même si l'option « Créer le VTT et le MD après récupération » est désactivée. Sinon, le geste transcrit ce qui manque, VTT puis MD. Un enregistrement occupé affiche « Traitement en cours », un enregistrement complet « Déjà traité ». La tuile revient toujours en place ; le geste est désactivé en sélection.
 - Chaque ligne affiche un badge et quatre points pour les étapes Téléphone, VTT, MD et Drive. Le badge indique l'erreur, le travail en cours, l'attente ou la dernière étape faite. Une tâche en attente affiche son rang dans la file.
 - La barre d'avancement affiche le type de travail, « Transcription » ou « Synthèse » pour la file de production. Les barres de récupération et d'envoi peuvent s'afficher simultanément.
 
 ### Fiche d'un enregistrement
 
 - Le titre donne le type, la date et l'heure, par exemple « Call · 30 oct. 16:05 ». Le sous-titre donne la durée et l'état.
-- Le menu propose « Récupérer à nouveau » et « Supprimer du téléphone », ainsi que « Supprimer du boîtier » si l'enregistrement y est encore présent. La récupération n'est active que si l'enregistrement est sur le boîtier, que la liaison est ouverte et qu'aucune récupération ne tourne. Le lecteur est libéré avant confirmation de la suppression.
+- Le menu propose « Supprimer partout » et « Libérer l'espace », qui ouvrent la même confirmation que la sélection, ainsi que « Récupérer à nouveau ». La récupération n'est active que si l'enregistrement est sur le boîtier, que la liaison est ouverte et qu'aucune récupération ne tourne. Le lecteur est libéré avant confirmation de la suppression.
 - Le lecteur lit le MP3 du téléphone avec `MediaPlayer` : lecture, pause, barre de position et temps en minutes et secondes. Sans MP3 sur le téléphone, la fiche affiche « Le MP3 n'est pas encore sur le téléphone. ». La lecture se met en pause quand l'app passe en arrière-plan.
 - La fiche affiche le nom du fichier et son dossier. Elle se ferme d'elle-même si l'enregistrement disparaît de la liste.
 - La carte du parcours affiche les quatre étapes, la première raison utile et une seule action principale. Les onglets ne portent aucune action. En attente de configuration, « Ouvrir les réglages » mène à Transcription, ou à Stockage sur le téléphone si le dossier a changé ; pour une synthèse non configurée, il mène à Synthèse.
@@ -147,11 +147,32 @@ L'app reprend l'état de la version 0.1.5 au premier lancement : elle garde l'ad
 - Les récupérations passent l'une après l'autre, de la plus ancienne à la plus récente. Pour une récupération dont l'option capturée est active, une intention est persistée avant transfert puis rendue programmable seulement après validation durable du MP3. Sa consommation est idempotente ; au redémarrage, les intentions validées sont réconciliées sans parcourir les anciens MP3. Une récupération interrompue ne lance ni transcription ni reprise Bluetooth automatique. Une erreur de programmation ne transforme pas une récupération réussie en échec et ne bloque pas les suivantes.
 - Aucune écriture d'enregistrement ni suppression automatique ne modifie le boîtier. Seule la suppression manuelle confirmée ci-dessous envoie une commande de suppression.
 
-## Suppression du boîtier
+## Suppression unifiée
 
-- Depuis la fiche ou la sélection, « Supprimer du boîtier » ne cible que les enregistrements présents sur le boîtier. Un dialogue indique leur nombre, la conservation des copies du téléphone et de Drive et le nombre d'audios sans autre copie confirmée. Cet avertissement ne bloque pas ; annuler n'émet aucune commande. Avant toute commande, les copies connues sont revérifiées sous réservation : si une cible supplémentaire n'a plus de copie audio confirmée, la demande est annulée et doit être redemandée pour afficher un avertissement à jour.
-- Une cible occupée ou en attente bloque toute la sélection. Une demande de traitement admise protège ses cibles dès sa réception et jusqu'à la fin du parcours interactif ; sans sélection explicite, la suppression est bloquée pendant ce parcours. Une demande de traitement chevauchant une suppression réservée est refusée.
-- Après confirmation, chaque nom est envoyé par `0x0d` avec ses 14 octets ASCII ; une relecture complète par `0x18 00` puis `0x0a` confirme sa disparition. Une coupure, un délai dépassé ou une liste incomplète arrête le lot sans renvoi automatique. Le bilan distingue les cibles confirmées, refusées, non vérifiées et non traitées. Les copies du téléphone et de Drive restent intactes ; aucune récupération ni aucun traitement n'est lancé. La fiche d'un enregistrement sans copie connue revient à la liste.
+- Deux actions, « Supprimer partout » et « Libérer l'espace », sont proposées en sélection et dans le menu de la fiche, avec la même confirmation.
+- « Supprimer partout » efface l'enregistrement du boîtier, du téléphone et de Drive, partout où une copie existe et peut être effacée. Sans Drive activé, le niveau Drive est ignoré et la confirmation le dit.
+- « Libérer l'espace » n'efface que les niveaux inférieurs au plus haut niveau présent. Le boîtier est effacé si le téléphone a une copie. Le boîtier et le téléphone sont effacés si le VTT et le MD ont une copie confirmée sur Drive, même sans MP3 sur Drive : la perte du MP3 du téléphone est alors voulue. Un enregistrement qui n'est que sur le boîtier n'est pas touché. Drive n'est jamais modifié par cette action.
+- Une copie Drive est confirmée quand le fichier figure dans la liste Drive du dernier rafraîchissement et qu'un reçu correspond à ce fichier. Une présence non confirmée ne suffit jamais à effacer le téléphone. Un enregistrement sans cible pour « Libérer l'espace » est ignoré.
+- La confirmation est unique. Son titre est « Supprimer partout ? » ou « Libérer l'espace ? », et elle compte les enregistrements par niveau, par exemple « 2 enregistrements seront effacés : 2 du boîtier, 1 du téléphone, 1 de Drive. ». « Libérer l'espace » ajoute que les copies Drive sont conservées.
+- Une cible occupée bloque toute la confirmation, qui nomme les enregistrements concernés. Est occupé un enregistrement en récupération, en traitement, en envoi ou en attente de l'un de ces travaux. La garde de suppression couvre aussi les envois Drive et la mise à la corbeille : un envoi admis avant la confirmation rend le plan bloqué.
+- Après « Supprimer », la fenêtre se ferme et rien d'autre ne s'ouvre. Un message court (snackbar) n'apparaît qu'en cas d'échec : « Suppression incomplète : » suivi de la première cause, et le détail de chaque échec est écrit au journal. La liste Drive et le dossier du téléphone sont relus quand la suppression les a touchés.
+- Les niveaux s'exécutent dans l'ordre Drive, téléphone, boîtier. L'échec d'un niveau n'empêche ni les autres niveaux du même enregistrement, ni les autres enregistrements, sauf l'arrêt de lot du boîtier décrit plus bas. Un enregistrement sans aucune copie restante disparaît de la liste, et la fiche ouverte revient à la liste.
+- Une demande de traitement admise protège ses cibles dès sa réception et jusqu'à la fin du parcours interactif ; sans sélection explicite, la suppression est bloquée pendant ce parcours. Une demande de traitement chevauchant une suppression réservée est refusée. Une suppression ne lance ni récupération ni traitement.
+
+Niveau Drive :
+
+- Le niveau Drive place dans la corbeille les fichiers MP3, VTT et MD reconnus de l'enregistrement dans le dossier Drive choisi (`trashed = true`), récupérables pendant 30 jours. Un fichier déjà absent (404) compte comme réussi. Les reçus de ces fichiers sont retirés de l'état local, puis la liste Drive est relue.
+- Le droit `drive.file` ne permet de supprimer que les fichiers créés par l'app. Un fichier qui ne l'a pas été peut refuser la suppression : l'échec est signalé. Hors ligne ou sans autorisation, le niveau Drive est aussi signalé en échec.
+
+Niveau boîtier :
+
+- Chaque nom est envoyé par `0x0d` avec ses 14 octets ASCII ; une relecture complète par `0x18 00` puis `0x0a` confirme sa disparition. Une coupure, un délai dépassé ou une liste incomplète arrête le lot sans renvoi automatique. Un boîtier hors de portée fait échouer ce niveau, sans relance automatique. Les refus et les erreurs sont écrits au journal.
+
+Niveau téléphone :
+
+- Seuls les MP3, VTT et MD reconnus dans le dossier choisi sont supprimés. Le dossier et les travaux sont revalidés avant suppression. Une erreur sur un fichier n'annule pas les succès précédents : les autres fichiers sont tentés, les refus sont nommés et le dossier est relu ; une relecture impossible est signalée.
+- Une récupération visant une cible en cours de suppression est refusée ; une cible d'une récupération déjà préparée est revalidée avant son transfert si une suppression est intervenue entre-temps.
+- Après suppression, un fichier local reste « Fait », sinon une copie distante confirmée affiche « Sur Drive » et une copie inconnue « Absent ». L'étape Drive dépend du choix d'envoi et des reçus de la destination courante. La ligne demeure si le boîtier ou Drive contient encore un fichier reconnu, même uniquement VTT ou MD ; sinon elle disparaît et la fiche revient à la liste. Un audio encore sur le boîtier reste récupérable. Rien n'est automatiquement récupéré ni produit ; les documents uniquement distants ne sont pas téléchargeables dans la fiche.
 
 ## Stockage sur le téléphone
 
@@ -160,13 +181,6 @@ L'app reprend l'état de la version 0.1.5 au premier lancement : elle garde l'ad
 - L'app lit le dossier à l'ouverture, au rafraîchissement et après chaque écriture. Elle ne retient que les fichiers dont le nom suit `Note-` ou `Call-`, puis 14 chiffres et l'extension `.mp3`, `.vtt` ou `.md`.
 - Une écriture passe par un fichier `.part`. L'ancien fichier du même nom est mis de côté en `.old`, le nouveau prend le nom définitif, puis les restes sont nettoyés. Le dossier doit accepter le renommage.
 - Si la permission est perdue ou si le dossier a disparu, l'app affiche « Dossier du téléphone inaccessible. Choisis-le de nouveau dans Réglages. ».
-
-## Suppression du téléphone
-
-- Depuis le menu de la fiche ou la sélection, un dialogue confirme le nombre d'enregistrements ayant des fichiers locaux. Seuls leurs MP3, VTT et MD reconnus dans le dossier choisi sont supprimés ; ni Drive ni le boîtier ne sont modifiés. Annuler ne fait rien et une confirmation ne sert qu'une fois.
-- Le dialogue avertit si la sauvegarde des documents sur Drive ne peut pas être vérifiée, ou si aucune autre copie de l'audio n'est connue sur Drive ou le boîtier. Ces avertissements ne bloquent pas. Un nom distant seul ne prouve pas la version courante d'un document : les reçus et la destination comptent, et `drive.file` ne révèle pas tous les fichiers Drive.
-- Une cible occupée ou en attente bloque toute la sélection. Le dossier et les travaux sont revalidés avant suppression. Une récupération visant une cible en cours de suppression est refusée ; une cible d'une récupération déjà préparée est revalidée avant son transfert si une suppression est intervenue entre-temps. Une erreur sur un fichier n'annule pas les succès précédents : les autres fichiers sont tentés, les refus sont nommés et le dossier est relu ; une relecture impossible est signalée.
-- Après suppression, un fichier local reste « Fait », sinon une copie distante confirmée affiche « Sur Drive » et une copie inconnue « Absent ». L'étape Drive dépend du choix d'envoi et des reçus de la destination courante. La ligne demeure si le boîtier ou Drive contient encore un fichier reconnu, même uniquement VTT ou MD ; sinon elle disparaît et la fiche revient à la liste. Un audio encore sur le boîtier reste récupérable. Rien n'est automatiquement récupéré ni produit ; les documents uniquement distants ne sont pas téléchargeables dans la fiche.
 
 ## Envoi vers Google Drive
 
@@ -251,6 +265,7 @@ Les empreintes du VTT et du MD et le modèle sont conservés en privé pour un M
 | Synthèse interrompue ou erreur transitoire | Reprise bornée à trois tentatives au total, avec délais persistés ; un appel interrompu peut être facturé. |
 | Synthèse refusée ou invalide, VTT changé, clé ou dossier inaccessible | Suspension visible ; aucun MD invalide ne remplace le fichier existant. |
 | Dossier du téléphone inaccessible ou plein | L'écriture échoue, l'enregistrement passe en erreur, la file s'arrête et le message renvoie vers Réglages. |
+| Suppression : un niveau en échec, boîtier hors de portée compris | Les autres niveaux et enregistrements sont tentés, sans relance automatique. Un message court renvoie au journal. |
 
 ## Architecture du code
 
@@ -263,6 +278,8 @@ Les empreintes du VTT et du MD et le modèle sont conservés en privé pour un M
 | `RecordingState.kt` | Liste réunie, compteurs et état affiché à partir des sources, des travaux et des erreurs |
 | `RecoveryJob.kt`, `SendJob.kt` | File de récupération et file d'envoi |
 | `PhoneDeletion.kt`, `PhoneDeletionOrchestrator.kt`, `PhoneDeletionPresentation.kt` | Préparation, coordination et présentation de la suppression locale |
+| `UnifiedDeletion.kt`, `UnifiedDeletionOrchestrator.kt`, `UnifiedDeletionPresentation.kt` | Ciblage de « Supprimer partout » et « Libérer l'espace », ordre d'exécution et texte de confirmation |
+| `RecordingLocation.kt` | Filtres par emplacement et compteur de l'envoi dans le cloud |
 | `DriveClient.kt` | Dossiers, listes, téléversement, renouvellement du jeton |
 | `Journal.kt` | Journal sur sept jours et ses filtres |
 | `LocalState.kt` | Lecture, écriture et reprise de `state.json` |
@@ -302,7 +319,7 @@ L'app suit le design system commun de la stack, Stack UI. Ses valeurs viennent d
 | Bouton secondaire et champ | `#ECECEC` | `#242424` |
 | Interrupteur éteint | `#8A8A8A` | `#8A8A8A` |
 | Réussite | `#05713A` sur `#DCF3E5` | `#4CC38A` sur vert à 16 % |
-| À relire (avertissement) | `#7C4A00` sur `#FFF1CC` | `#F5B83D` sur ambre à 16 % |
+| Avertissement | `#7C4A00` sur `#FFF1CC` | `#F5B83D` sur ambre à 16 % |
 | Erreur | `#B3130B` sur `#FDE4E1` | `#FF7B72` sur rouge à 16 % |
 | Focus clavier | `#1F5FE0` | `#6C9BFF` |
 
@@ -325,6 +342,6 @@ La police d'interface est Figtree (graisses 400, 500, 600 et 700, en police vari
 
 L'association se fait une fois, et l'app s'ouvre ensuite sur la liste. La liste montre les mêmes enregistrements que DOWAY, avec le bon type. « Récupérer » écrit les MP3 préfixés dans le dossier choisi. « Envoyer » les dépose dans « Dictée » sans créer de doublon avec les fichiers de la version 0.1.5 ni avec les exports de DOWAY. Une récupération continue écran éteint, et un boîtier éteint pendant un transfert ne laisse aucun fichier partiel.
 
-Pour la 0.7.0, la recette physique reste à faire avec des fichiers d'essai sauvegardés : suppression simple et multiple, avertissements sans sauvegarde, refus d'une cible occupée, maintien des documents distants et disparition des fichiers locaux. Les tests Android doivent aussi être exécutés sur appareil ; la compilation ne les exécute pas.
+Pour la 0.9.0, la recette physique reste à faire avec des fichiers d'essai sauvegardés : « Supprimer partout » et « Libérer l'espace », en sélection et dans la fiche, avec et sans Drive activé, boîtier hors de portée, refus d'une cible occupée, les deux gestes et l'absence de fenêtre de résultat. Une compilation ne prouve pas une suppression réelle. Les tests Android doivent aussi être exécutés sur appareil ; la compilation ne les exécute pas.
 
 Pour la 0.4.0, restent à vérifier sur appareil le retrait des récents pendant l'appel et l'écriture, la reprise après redémarrage, les interruptions répétées jusqu'à suspension, la relance manuelle, l'annulation, le maintien des anciens fichiers et les thèmes clair et sombre. Un essai explicitement autorisé d'un VTT synthétique représentatif de deux heures doit vérifier la réception et une réponse non tronquée, et relever les limites et tokens lorsqu'ils sont exposés. Un essai distinct autorisé sur une réunion réelle doit confirmer VTT puis MD en un appui. Sans ces essais et la vérification d'une construction signée, DIC-19 reste ouverte et la 0.4.0 n'est pas annoncée comme livrée.
