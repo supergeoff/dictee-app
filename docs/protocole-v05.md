@@ -67,7 +67,7 @@ Tous les index ci-dessous commencent à zéro dans le payload, sans les cinq oct
 |---|---|---|
 | 0 à 3 | Capacité totale, entier big-endian | 59 934, cohérent avec 59,93 GB affichés par DOWAY ; conversion exacte en octets non établie |
 | 4 à 7 | Espace libre, entier big-endian | 59 911 → 59 910 après ajout de 1 323 968 octets ; compteur grossier d'environ un MB, base et arrondi exacts non établis |
-| 9 | Batterie en pourcentage, probable | Évolue comme la batterie dans les observations ; pas de comparaison indépendante avec une mesure de référence |
+| 9 | Batterie en pourcentage | Confirmé : DOWAY affiche 71 % le 17 novembre à 12:00:23, puis les quatre lectures nRF proches donnent `47` hexadécimal, soit 71 décimal |
 | 10 | Sens inconnu | Reste `00` pendant le test de rétroéclairage ; ce n'est pas le champ confirmé |
 | 11 | Sens inconnu | Reste `01` pendant le rejeu USB ; ce n'est pas le champ qui change |
 | 12 | Sens inconnu | Reste `02` pendant le test de durée ; ce n'est pas le champ de durée qui a été confirmé |
