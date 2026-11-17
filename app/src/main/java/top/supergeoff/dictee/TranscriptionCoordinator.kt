@@ -87,21 +87,20 @@ class TranscriptionCoordinator(
         require(!resumeRecording || (request == RequestedWork.MISSING && names?.size == 1))
         val source = if (request == RequestedWork.REDO_MD) Source.LLM else Source.STT
         val resumed = if (resumeRecording) resumeSuspendedTranscriptions(checkNotNull(names)) else emptyList()
-        val existing = withMutexJournal(source, null) { repository.awaitInitialized().transcriptionTasks }
-        val active = existing.filterNot { it.phase.isTerminal() }.map { it.recordingName }.toSet()
-        // La préparation relit le dossier : elle ne tient aucun verrou, un appui ne doit pas attendre un appel réseau.
-        val prepared = prepareRequested(names, request, active).filter { it.recordingName !in active }.sortedBy { it.recordingName }
-        if (prepared.isEmpty()) return resumed
-        // Un plan qui lit ou écrit un MP3 passe par le verrou de transfert ; une synthèse seule n'en a pas besoin.
-        return resumed + if (prepared.any { it.mp3Sha256.isNotBlank() }) {
-            recoverySafety.withTransferLock(LOCK_WAIT_LOG_MS, { journal(source, null, "en attente d'un transfert en cours") }) {
-                commitPrepared(prepared)
-            }
-        } else commitPrepared(prepared)
+        return resumed + recoverySafety.withTransferLock(LOCK_WAIT_LOG_MS, { journal(source, null, "en attente d'un transfert en cours") }) {
+            val existing = withMutexJournal(source, null) { repository.awaitInitialized().transcriptionTasks }
+            val active = existing.filterNot { it.phase.isTerminal() }.map { it.recordingName }.toSet()
+            val prepared = prepareRequested(names, request, active).filter { it.recordingName !in active }.sortedBy { it.recordingName }
+            commitPrepared(prepared)
+        }
     }
 
     /** Consomme l'intention dans la même écriture que la tâche, avant sa programmation. */
-    suspend fun startAutomatic(requestId: String): List<String> {
+    suspend fun startAutomatic(requestId: String): List<String> = recoverySafety.withTransferLock {
+        startAutomaticLocked(requestId)
+    }
+
+    private suspend fun startAutomaticLocked(requestId: String): List<String> {
         val state = repository.awaitInitialized()
         val request = state.automaticProcessingRequests.firstOrNull { it.id == requestId && it.phase != AutomaticProcessingPhase.RECOVERING }
             ?: return emptyList()
@@ -146,8 +145,7 @@ class TranscriptionCoordinator(
                 added?.let { schedule(it.localId); launch() }
                 listOfNotNull(added?.localId)
             }
-            val result = if (task?.mp3Sha256?.isNotBlank() == true) recoverySafety.withTransferLock(LOCK_WAIT_LOG_MS,
-                { journal(Source.STT, null, "en attente d'un transfert en cours") }) { commit() } else commit()
+            val result = commit()
             if (!retry) return result
             skipPreparation = false
         }
@@ -239,7 +237,9 @@ class TranscriptionCoordinator(
         taskLock.withLock { runLocked(localId) }
     }
 
-    suspend fun retrySynthesis(localId: String) = mutex.withLock {
+    suspend fun retrySynthesis(localId: String) = recoverySafety.withTransferLock { retrySynthesisLocked(localId) }
+
+    private suspend fun retrySynthesisLocked(localId: String) = mutex.withLock {
         val task = repository.awaitInitialized().transcriptionTasks.firstOrNull { it.localId == localId } ?: return@withLock
         val work = task.synthesis ?: return@withLock
         if (!canRetrySuspendedSynthesis(task)) return@withLock

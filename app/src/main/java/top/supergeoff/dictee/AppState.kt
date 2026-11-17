@@ -47,6 +47,8 @@ data class UiState(
     val recovery: Progress? = null,
     val send: Progress? = null,
     val driveSendRequest: DriveSendRequest? = null,
+    val phoneDeletionRequest: PhoneDeletionPlan? = null,
+    val deletingPhone: Boolean = false,
     val transcription: Progress? = null,
     val phoneFolder: String? = null,      // chemin affiché, null sans dossier
     val phoneFolderOk: Boolean = false,
@@ -120,6 +122,9 @@ private data class Live(
     val send: Progress? = null,
     val sendName: String? = null,
     val driveSendRequest: DriveSendRequest? = null,
+    val phoneDeletionRequest: PhoneDeletionPlan? = null,
+    val deletingPhone: Boolean = false,
+    val recoveryNames: Set<String> = emptySet(),
     val message: String? = null,
 )
 
@@ -250,6 +255,8 @@ class AppModel(
     private val driveFlow = MutableStateFlow<DriveListing?>(null)
     private val requestFlow = MutableSharedFlow<UiRequest>(extraBufferCapacity = 8)
     private val phoneMutex = Mutex()
+    private val deletionRequestLock = Any()
+    private val phoneDeletionRequests = PhoneDeletionRequests()
     private val driveMutex = Mutex()
     private val loggedFlags = ConcurrentHashMap.newKeySet<String>()
     private val notificationAsked = AtomicBoolean(false)
@@ -433,14 +440,14 @@ class AppModel(
             return
         }
         val entries = recoveryEntries(names)
-        if (entries.isEmpty() || liveFlow.getAndUpdate { it.copy(recovering = true) }.recovering) return
+        if (entries.isEmpty() || liveFlow.getAndUpdate { if (it.recovering) it else it.copy(recovering = true, recoveryNames = entries.map { entry -> entry.name }.toSet()) }.recovering) return
         jobs.begin()
         try {
             startWork()
             runRecovery(address, uri, entries)
         } finally {
             jobs.end()
-            liveFlow.update { it.copy(recovering = false, recovery = null, recoveryName = null) }
+            liveFlow.update { it.copy(recovering = false, recovery = null, recoveryName = null, recoveryNames = emptySet()) }
         }
     }
 
@@ -464,7 +471,11 @@ class AppModel(
                     connected = true
                     RecoveryJob(session, PhoneFolder(app, uri), File(app.cacheDir, "recovery"), journal)
                         .run(entries, ::publishRecovery, ::applyRecovery,
-                            beforeRecovery = { entry -> recoverySafety.begin(entry.name, uri.toString()) },
+                            beforeRecovery = { entry ->
+                                if (localFlow.phoneTreeUri != uri.toString() || recoveryEntries(names = listOf(entry.name)).none { it == entry })
+                                    throw RecoveryGuardException(IllegalStateException("La sélection ou le dossier a changé."))
+                                recoverySafety.begin(entry.name, uri.toString())
+                            },
                             validateResult = { result -> recoverySafety.finish(result, uri.toString()) },
                             withRecoveryLock = { block -> recoverySafety.withTransferLock(block) })
                 }
@@ -502,6 +513,97 @@ class AppModel(
         }
     }
 
+    private fun deletionProtectedNames(local: LocalState): Set<String> =
+        local.transcriptionTasks.filterNot { it.phase.isTerminal() }.map { it.recordingName }.toSet() +
+            local.automaticProcessingRequests.map { it.recordingName } + liveFlow.value.recoveryNames
+
+    fun requestPhoneDeletion(names: Set<String>) {
+        val local = localRepository.state.value ?: return
+        val folder = local.phoneTreeUri ?: return
+        val current = buildUi(local, phoneFlow.value, driveFlow.value, box.status.value, liveFlow.value)
+        val plan = PhoneDeletion.plan(folder, current.recordings, names.toSet(), deletionProtectedNames(local),
+            current.drive, local, current.documentHashes)
+        synchronized(deletionRequestLock) {
+            phoneDeletionRequests.open(plan)
+            liveFlow.update { it.copy(phoneDeletionRequest = phoneDeletionRequests.current) }
+        }
+    }
+
+    fun cancelPhoneDeletion() = synchronized(deletionRequestLock) {
+        phoneDeletionRequests.cancel()
+        liveFlow.update { it.copy(phoneDeletionRequest = null) }
+    }
+
+    fun confirmPhoneDeletion() {
+        val request = synchronized(deletionRequestLock) {
+            val plan = phoneDeletionRequests.confirm() ?: return
+            liveFlow.update { it.copy(phoneDeletionRequest = null, deletingPhone = true) }
+            plan
+        }
+        jobs.begin()
+        scope.launch {
+            try {
+                val runner = PhoneDeletionOrchestrator(
+                    withTransferLock = { block -> recoverySafety.withTransferLock(block) },
+                    withPhoneLock = { block -> phoneMutex.withLock { block() } },
+                    snapshot = {
+                        val local = localRepository.awaitInitialized()
+                        val folder = local.phoneTreeUri
+                        if (folder != null && folder == request.folderUri) {
+                            val fresh = withContext(Dispatchers.IO) { readFolder(folder.toUri(), phoneFlow.value) }
+                            phoneFlow.value = fresh
+                            if (!fresh.ok) throw PhoneStoreException(PHONE_FOLDER_LOST)
+                        }
+                        val current = buildUi(local, phoneFlow.value, driveFlow.value, box.status.value, liveFlow.value)
+                        DeletionSnapshot(folder, current.recordings, deletionProtectedNames(local), current.drive, local, current.documentHashes)
+                    },
+                    delete = { plan -> withContext(Dispatchers.IO) { PhoneDeletion.execute(plan, PhoneFolder(app, plan.folderUri.toUri())) } },
+                    reread = { result ->
+                        val folder = localRepository.awaitInitialized().phoneTreeUri
+                        if (folder != request.folderUri) throw PhoneStoreException("Le dossier du téléphone a changé.")
+                        val fresh = withContext(Dispatchers.IO) { readFolder(folder.toUri(), phoneFlow.value) }.afterPromotion()
+                        phoneFlow.value = fresh
+                        if (!fresh.ok) throw PhoneStoreException("Lecture du dossier après suppression impossible.")
+                        localRepository.updateDurably { state ->
+                            request.recordings.fold(state) { current, recording ->
+                                val removed = recording.phoneFiles.values.any { it.fileName in result.deleted }
+                                if (!removed) current else {
+                                    var cleaned = current.withoutError(recording.name, Step.SEND)
+                                    if (recording.phoneFiles[FileKind.MP3]?.fileName in result.deleted)
+                                        cleaned = cleaned.withoutError(recording.name, Step.RECOVER)
+                                    if (recording.phoneFiles[FileKind.VTT]?.fileName in result.deleted ||
+                                        recording.phoneFiles[FileKind.MP3]?.fileName in result.deleted)
+                                        cleaned = cleaned.withoutError(recording.name, Step.TRANSCRIBE)
+                                    cleaned
+                                }
+                            }
+                        }
+                    },
+                )
+                when (val result = runner.execute(request.folderUri, request.recordings.map { it.name }.toSet())) {
+                    DeletionOutcome.FolderChanged -> say("Le dossier du téléphone a changé, suppression annulée.")
+                    is DeletionOutcome.Blocked -> say("Enregistrements occupés : ${result.names.sorted().joinToString()}")
+                    is DeletionOutcome.Completed -> {
+                        val failed = result.result.failures
+                        val messages = listOfNotNull(
+                            if (failed.isNotEmpty()) "Fichiers non supprimés : ${failed.keys.joinToString()}" else null,
+                            result.readError,
+                        )
+                        say(if (messages.isEmpty()) "Suppression du téléphone terminée." else messages.joinToString(" "))
+                    }
+                }
+            } catch (e: CancellationException) { throw e }
+              catch (e: Exception) { say(reasonOf(e)); journal.error(Source.FS, reasonOf(e)) }
+            finally {
+                synchronized(deletionRequestLock) {
+                    phoneDeletionRequests.finish()
+                    liveFlow.update { it.copy(deletingPhone = false) }
+                }
+                jobs.end()
+            }
+        }
+    }
+
     // --- Envoi vers Drive
 
     /**
@@ -526,10 +628,8 @@ class AppModel(
         synchronized(driveSendRequests) {
             val request = driveSendRequests.confirm(choice) ?: return
             liveFlow.update { it.copy(driveSendRequest = null, sending = true) }
-            val local = localFlow
-            val current = buildUi(local.copy(driveSendChoice = choice), phoneFlow.value, driveFlow.value, box.status.value, liveFlow.value)
-            val recordings = DriveSync.confirmedSendable(current.recordings, current.drive, local, current.documentHashes, request, choice, displayedNames)
-            scope.launch { sendNow(request, local, recordings) }
+            val folder = localFlow.phoneTreeUri
+            scope.launch { sendNow(request, folder, displayedNames) }
         }
     }
 
@@ -642,22 +742,27 @@ class AppModel(
         transcriptionLifecycle.stop()
     }
 
-    private suspend fun sendNow(request: DriveSendRequest, captured: LocalState, recordings: List<Recording>) {
+    private suspend fun sendNow(request: DriveSendRequest, folder: String?, displayedNames: Set<String>) {
         jobs.begin()
         try {
-            if (recordings.isEmpty()) return
             if (update { it.copy(driveSendChoice = request.choice) }.await().isFailure) {
                 say("Impossible d'enregistrer le choix Drive, envoi annulé.")
                 return
             }
             if (!authorizeOrAsk { send(request.names) }) return
-            val account = captured.driveAccount?.takeIf { it.isNotBlank() } ?: run {
-                say("Adresse du compte Google indisponible, envoi annulé.")
-                return
-            }
             recoverySafety.withTransferLock {
+                val captured = localRepository.awaitInitialized()
+                if (captured.phoneTreeUri != folder) return@withTransferLock
                 val uri = captured.phoneTreeUri?.toUri() ?: return@withTransferLock
-                val safeRecordings = Recordings.sendable(recordings, localFlow.errors)
+                val account = captured.driveAccount?.takeIf { it.isNotBlank() } ?: run {
+                    say("Adresse du compte Google indisponible, envoi annulé.")
+                    return@withTransferLock
+                }
+                readPhone()
+                if (!phoneFlow.value.ok) { say(PHONE_FOLDER_LOST); return@withTransferLock }
+                val current = buildUi(captured, phoneFlow.value, driveFlow.value, box.status.value, liveFlow.value)
+                val safeRecordings = DriveSync.confirmedSendable(current.recordings, current.drive, captured,
+                    current.documentHashes, request, request.choice, displayedNames)
                 if (safeRecordings.isEmpty()) return@withTransferLock
                 startWork()
                 withContext(Dispatchers.IO) { sendRecordings(uri, safeRecordings, request, captured, account) }
@@ -742,7 +847,7 @@ class AppModel(
             return
         }
         scope.launch {
-            if (!keepPhoneFolder(uri)) return@launch
+            if (!recoverySafety.withTransferLock { keepPhoneFolder(uri) }) return@launch
             readPhone()
             resume?.invoke()
         }
@@ -1170,6 +1275,8 @@ class AppModel(
             recovery = live.recovery,
             send = live.send,
             driveSendRequest = live.driveSendRequest,
+            phoneDeletionRequest = live.phoneDeletionRequest,
+            deletingPhone = live.deletingPhone,
             transcription = transcription?.second,
             phoneFolder = local.phoneTreeUri?.let { runCatching { PhoneFolder.displayPath(it.toUri()) }.getOrDefault(it) },
             phoneFolderOk = phone.ok,
