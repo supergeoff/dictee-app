@@ -25,6 +25,71 @@ Pendant le transfert d'un fichier, seuls les octets reçus sur la caractéristiq
 
 Après la connexion, l'application demande un MTU de 247 octets. Le boîtier demande lui-même un MTU, ce qui permet des notifications de 244 octets d'audio sur la caractéristique des fichiers.
 
+## Réglages et relecture de l'état
+
+Les captures DOWAY du 11 novembre 2026 et les rejeux indépendants dans nRF Connect du 17 novembre 2026 distinguent les commandes observées des valeurs effectivement relues. Les captures brutes, adresses Bluetooth et identifiants réels restent hors du dépôt public.
+
+Chaque commande de réglage porte un payload d'un octet. La réponse reprend la commande et porte `00` pour « accepté » ; elle ne renvoie pas la valeur réglée. Aucun refus de réglage n'a été observé. Lire `0x05` après chaque écriture pour vérifier la valeur.
+
+| Réglage | Commande | Valeurs observées dans DOWAY | Rejeu indépendant vérifié |
+|---|---|---|---|
+| Rétroéclairage | `0x1a` | `00` désactivé, `01` activé | Pas encore vérifié |
+| Support USB | `0x13` | `00` désactivé, `01` activé | Pas encore vérifié |
+| Réduction du bruit | `0x17` | `00` désactivé, `05` faible, `09` moyen, `0f` élevé | `00` et `09`, avec relecture |
+| Durée des segments | `0x16` | `00` 30 minutes, `01` 1 heure, `02` 2 heures, `03` 3 heures | `02` et `03`, avec relecture |
+
+Les niveaux de bruit intermédiaires ne sont pas validés. Aucun réglage de gain n'a été identifié. La réinitialisation d'usine et le firmware ne sont pas documentés ; aucune trame n'est inventée pour ces actions. La commande de suppression reste à établir et à rejouer avec confirmation.
+
+### Trames de réglage observées
+
+Les TX utilisent le CRC big-endian, les RX le CRC little-endian. Ces exemples ne contiennent pas d'identifiant personnel.
+
+| Réglage | TX | RX accepté |
+|---|---|---|
+| Rétroéclairage activé | `a00a011a0101ca60` | `a00a011a0100a10a` |
+| Rétroéclairage désactivé | `a00a011a01000aa1` | `a00a011a0100a10a` |
+| USB désactivé | `a00a011301000871` | `a00a011301007108` |
+| USB activé | `a00a01130101c8b0` | `a00a011301007108` |
+| Bruit élevé | `a00a0117010fcd70` | `a00a0117010030c9` |
+| Bruit moyen | `a00a01170109cff0` | `a00a0117010030c9` |
+| Bruit faible | `a00a01170105caf0` | `a00a0117010030c9` |
+| Bruit désactivé | `a00a01170100c930` | `a00a0117010030c9` |
+| Durée 3 heures | `a00a011601030821` | `a00a011601006109` |
+| Durée 1 heure | `a00a01160101c9a0` | `a00a011601006109` |
+| Durée 30 minutes | `a00a011601000961` | `a00a011601006109` |
+| Durée 2 heures | `a00a01160102c8e0` | `a00a011601006109` |
+
+### Champs du payload de 52 octets de `0x05`
+
+Tous les index ci-dessous commencent à zéro dans le payload, sans les cinq octets d'en-tête ni le CRC.
+
+| Index | Interprétation | Preuve et limite |
+|---|---|---|
+| 0 à 3, 4 à 7 | Deux entiers candidats pour capacité et espace libre | Sens et unités non confirmés ; ne pas afficher comme stockage validé |
+| 9 | Batterie en pourcentage, probable | Évolue comme la batterie dans les observations ; pas de comparaison indépendante avec une mesure de référence |
+| 10 | Rétroéclairage, candidat | Valeur `00` observée ; position à confirmer par activation puis retour |
+| 11 | Support USB, candidat | Valeur `01` observée ; position à confirmer par désactivation puis retour |
+| 12 | Sens inconnu | Reste `02` pendant le test de durée ; ce n'est pas le champ de durée qui a été confirmé |
+| 17 à 25 | Nom interne ASCII terminé par zéro | Observé, ne pas confondre avec le numéro de série |
+| 39 | Réduction du bruit | Confirmé : `00` → `09` → `00`, seul octet modifié lors du rejeu |
+| 41 | Durée des segments | Confirmé : `02` → `03` → `02`, seul octet modifié lors du rejeu |
+
+Le rejeu bruit du 17 novembre à 06:39 reçoit deux acquittements `0x17` acceptés et trois états de 52 octets. Seul l'index 39 varie ; l'état final est identique à l'état initial. Le rejeu durée à 06:43 reçoit deux acquittements `0x16` acceptés et trois états ; seul l'index 41 varie, puis revient à sa valeur initiale. Les longueurs et CRC de ces réponses ont été contrôlés. Ces tests établissent les valeurs ci-dessus, pas encore toutes les options des listes.
+
+### Diagnostic de connexion nRF Connect
+
+Les trois connexions de la capture DOWAY négocient un MTU effectif de 247, activent les notifications B0B2, B0B3 et B0B4, lisent 16 octets avec `0x02`, puis rejouent ces octets suivis de `00` avec `0x03`, accepté.
+
+Dans les essais nRF, la même lecture `0x02` retourne une trame valide `a00a01020100210d`, dont le payload est un seul octet `00`. Sa signification reste inconnue : ne pas la traiter comme un identifiant de 16 octets ni comme un appairage accepté. Les connexions sans appairage accepté se terminent après environ 4,9 secondes, avec statut BLE 19 (terminées par le pair). La cause exacte n'est pas établie. MTU 247 seul, puis ajout des trois abonnements, n'ont pas changé cette réponse courte.
+
+Le rejeu direct de l'appairage réellement capturé, sans lecture `0x02`, est accepté dans nRF et permet ensuite `0x05` et les tests de réglage. Le journal montre une connexion maintenue plus de cinq minutes. Cela valide ce rejeu sur ce boîtier, pas une procédure universelle pour un autre appareil. Les identifiants fictifs de ce document ne doivent jamais être rejoués sur un boîtier réel.
+
+Les macros privées exécutent : MTU 247, écriture `0100` des CCCD de B0B2/B0B3/B0B4, appairage capturé, attente de sa réponse, puis lectures et réglages. Une assertion nRF peut signaler une différence sans arrêter la suite ; le journal doit donc être contrôlé. Une déconnexion peut empêcher le retour à la valeur de départ. Les macros ne restaurent pas dynamiquement l'état : elles terminent sur une valeur fixe connue avant l'essai. Ne pas les lancer en boucle ni pendant un enregistrement important.
+
+### Notification spontanée `0x0f`
+
+Des notifications de 20 octets ont été reçues sans demande, dont deux espacées d'environ cinq minutes dans le journal nRF. L'index 1 du payload est cohérent avec la batterie, sans confirmation indépendante. Les autres champs restent inconnus. Journaliser ces notifications sans les confondre avec la réponse d'une commande attendue.
+
 ## Format des trames
 
 ```text
