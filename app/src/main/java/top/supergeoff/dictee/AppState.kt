@@ -808,7 +808,9 @@ class AppModel(
             hasMd = FileKind.MD in recording.phoneFiles,
         )
         when (action) {
-            SwipeProcessing.RECOVER -> recover(listOf(name), processAfter = true)
+            SwipeProcessing.RECOVER ->
+                if (liveFlow.value.recovering) liveFlow.update { it.copy(notice = "Traitement en cours") }
+                else recover(listOf(name), processAfter = true)
             SwipeProcessing.TRANSCRIBE -> transcribe(setOf(name))
             SwipeProcessing.DONE -> liveFlow.update { it.copy(notice = "Déjà traité") }
             SwipeProcessing.BUSY -> liveFlow.update { it.copy(notice = "Traitement en cours") }

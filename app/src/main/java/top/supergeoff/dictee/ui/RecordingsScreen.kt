@@ -38,14 +38,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -260,25 +263,27 @@ private fun DayGroup(
         Column(modifier = Modifier.fillMaxWidth().card()) {
             recordings.forEachIndexed { index, recording ->
                 if (index > 0) HorizontalDivider(color = colors.border)
-                val md = recording.phoneFiles[FileKind.MD]
-                val vtt = recording.phoneFiles[FileKind.VTT]
-                val provenance by produceState(ProvenanceStatus.UNKNOWN, md, vtt, ui.local.synthesisProvenance, ui.local.transcriptionTasks, ui.refreshing, ui.phoneRevision) {
-                    value = ProvenanceStatus.UNKNOWN
-                    if (md != null) value = withContext(Dispatchers.IO) { model.readSynthesis(md.fileName, vtt?.fileName).getOrNull()?.status } ?: ProvenanceStatus.UNKNOWN
-                }
-                SwipeableRecording(
-                    enabled = checked == null,
-                    onDelete = { model.requestDeletion(DeletionMode.EVERYWHERE, setOf(recording.name)) },
-                    onProcess = { model.processOne(recording.name) },
-                ) {
-                    RecordingRow(
-                        recording = recording,
-                        presentation = recordingListPresentation(recording, ui, provenance),
-                        subject = ui.local.recordingSubjects[recording.name],
-                        checked = checked?.let { recording.name in it },
-                        onClick = { onClick(recording.name) },
-                        onLongClick = { onLongClick(recording.name) },
-                    )
+                key(recording.name) {
+                    val md = recording.phoneFiles[FileKind.MD]
+                    val vtt = recording.phoneFiles[FileKind.VTT]
+                    val provenance by produceState(ProvenanceStatus.UNKNOWN, md, vtt, ui.local.synthesisProvenance, ui.local.transcriptionTasks, ui.refreshing, ui.phoneRevision) {
+                        value = ProvenanceStatus.UNKNOWN
+                        if (md != null) value = withContext(Dispatchers.IO) { model.readSynthesis(md.fileName, vtt?.fileName).getOrNull()?.status } ?: ProvenanceStatus.UNKNOWN
+                    }
+                    SwipeableRecording(
+                        enabled = checked == null,
+                        onDelete = { model.requestDeletion(DeletionMode.EVERYWHERE, setOf(recording.name)) },
+                        onProcess = { model.processOne(recording.name) },
+                    ) {
+                        RecordingRow(
+                            recording = recording,
+                            presentation = recordingListPresentation(recording, ui, provenance),
+                            subject = ui.local.recordingSubjects[recording.name],
+                            checked = checked?.let { recording.name in it },
+                            onClick = { onClick(recording.name) },
+                            onLongClick = { onLongClick(recording.name) },
+                        )
+                    }
                 }
             }
         }
@@ -293,10 +298,12 @@ private fun DayGroup(
 @Composable
 private fun SwipeableRecording(enabled: Boolean, onDelete: () -> Unit, onProcess: () -> Unit, content: @Composable () -> Unit) {
     val colors = Dictee.colors
+    val currentOnDelete by rememberUpdatedState(onDelete)
+    val currentOnProcess by rememberUpdatedState(onProcess)
     val state = rememberSwipeToDismissBoxState(confirmValueChange = { target ->
         when (target) {
-            SwipeToDismissBoxValue.StartToEnd -> onDelete()
-            SwipeToDismissBoxValue.EndToStart -> onProcess()
+            SwipeToDismissBoxValue.StartToEnd -> currentOnDelete()
+            SwipeToDismissBoxValue.EndToStart -> currentOnProcess()
             SwipeToDismissBoxValue.Settled -> Unit
         }
         false
@@ -316,7 +323,7 @@ private fun SwipeableRecording(enabled: Boolean, onDelete: () -> Unit, onProcess
 }
 
 @Composable
-private fun SwipeBackground(label: String, background: androidx.compose.ui.graphics.Color, alignment: Alignment) {
+private fun SwipeBackground(label: String, background: Color, alignment: Alignment) {
     Box(Modifier.fillMaxSize().background(background).padding(horizontal = 20.dp), contentAlignment = alignment) {
         Text(label, style = Dictee.type.captionStrong, color = Dictee.colors.onPrimary)
     }
