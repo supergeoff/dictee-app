@@ -29,22 +29,51 @@ class RecordingPipelineTest {
     private fun result(i: PipelineInput) = RecordingPipeline.calculate(i)
     private fun status(i: PipelineInput, stage: PipelineStage) = result(i).steps.single { it.stage == stage }.status
 
-    @Test fun remotePresenceIsDisplayedWithoutClaimingCurrentVersion() {
-        val r = recording(onBox = false)
+    @Test fun remoteCopiesRequireReceiptForCurrentDestinationAndIdentity() {
         val entries = FileKind.entries.map { DriveFile(it.ext, "Call-$name.${it.ext}", 10) }
         val listing = DriveListing(entries.associate { it.name to it.size }, entries)
-        val local = LocalState(driveEnabled = true, driveAccount = "account", chosenFolderId = "folder")
+        val r = Recordings.merge(emptyList(), emptyList(), listing, emptyMap(), Busy()).single()
+        val destination = DriveDestination("account", "folder")
+        val receipts = entries.map { DriveReceipt(destination, it.name, it.id, "hash") }
+        val local = LocalState(driveEnabled = true, driveAccount = destination.account, chosenFolderId = destination.folderId)
         val base = PipelineInput(r, local, Busy(), listing, true, true)
-        val result = result(base)
-        assertEquals(listOf("Sur Drive", "Sur Drive", "Sur Drive", "À faire"), result.steps.map { it.label })
-        assertNull(result.button)
+        val variants = listOf(
+            emptyList(),
+            receipts.map { it.copy(destination = DriveDestination("account", "other")) },
+            receipts.map { it.copy(driveFileId = "other") },
+            receipts.map { it.copy(sha256 = "") },
+        )
+        for (proof in variants) {
+            val presentation = result(base.copy(local = local.copy(driveReceipts = proof)))
+            for (step in presentation.steps.take(3)) {
+                assertEquals(PipelineStatus.TODO, step.status)
+                assertEquals("Absent", step.label)
+                assertTrue(step.reason.orEmpty().contains("non vérifiée"))
+            }
+            assertNull(presentation.button)
+        }
+        val missingDestination = result(base.copy(local = local.copy(chosenFolderId = null, driveReceipts = receipts)))
+        assertEquals(listOf("Absent", "Absent", "Absent"), missingDestination.steps.take(3).map { it.label })
+        val duplicate = entries + DriveFile("duplicate", "Note-$name.vtt", 10)
+        val duplicateResult = result(base.copy(
+            drive = DriveListing(duplicate.associate { it.name to it.size }, duplicate),
+            local = local.copy(driveReceipts = receipts),
+        ))
+        assertEquals("Absent", duplicateResult.steps.single { it.stage == PipelineStage.VTT }.label)
+        val legacy = DriveFile("legacy", "$name.mp3", 10)
+        val legacyResult = result(base.copy(
+            drive = DriveListing(mapOf(legacy.name to legacy.size), listOf(legacy)),
+            local = local.copy(driveReceipts = listOf(DriveReceipt(destination, legacy.name, legacy.id, "hash"))),
+        ))
+        assertEquals("Sur Drive", legacyResult.steps.single { it.stage == PipelineStage.PHONE }.label)
+        val verified = base.copy(local = local.copy(driveReceipts = receipts))
+        assertEquals(listOf("Sur Drive", "Sur Drive", "Sur Drive"), result(verified).steps.take(3).map { it.label })
         val absent = result(base.copy(drive = DriveListing(emptyMap())))
         assertEquals(listOf("Absent", "Absent", "Absent"), absent.steps.take(3).map { it.label })
         val localMp3 = result(base.copy(recording = recording(FileKind.MP3, onBox = false)))
-        assertEquals(listOf("Fait", "Sur Drive", "Sur Drive"), localMp3.steps.take(3).map { it.label })
-        val localVtt = result(base.copy(recording = recording(FileKind.MP3, FileKind.VTT, onBox = false)))
-        assertEquals("Fait", localVtt.steps.single { it.stage == PipelineStage.VTT }.label)
+        assertEquals(listOf("Fait", "Absent", "Absent"), localMp3.steps.take(3).map { it.label })
         assertEquals(PipelineAction.CREATE_VTT_AND_MD, localMp3.button?.action)
+        assertEquals(PipelineAction.CREATE_VTT_AND_MD, result(verified.copy(recording = recording(FileKind.MP3, onBox = false))).button?.action)
         assertEquals(PipelineAction.RECOVER, result(base.copy(recording = recording())).button?.action)
     }
 
