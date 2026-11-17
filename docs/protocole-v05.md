@@ -33,7 +33,7 @@ Chaque commande de réglage porte un payload d'un octet. La réponse reprend la 
 
 | Réglage | Commande | Valeurs observées dans DOWAY | Rejeu indépendant vérifié |
 |---|---|---|---|
-| Rétroéclairage | `0x1a` | `00` désactivé, `01` activé | Pas encore vérifié |
+| Rétroéclairage | `0x1a` | `00` désactivé, `01` activé | `00` et `01`, avec relecture |
 | Support USB | `0x13` | `00` désactivé, `01` activé | Pas encore vérifié |
 | Réduction du bruit | `0x17` | `00` désactivé, `05` faible, `09` moyen, `0f` élevé | `00` et `09`, avec relecture |
 | Durée des segments | `0x16` | `00` 30 minutes, `01` 1 heure, `02` 2 heures, `03` 3 heures | `02` et `03`, avec relecture |
@@ -67,14 +67,15 @@ Tous les index ci-dessous commencent à zéro dans le payload, sans les cinq oct
 |---|---|---|
 | 0 à 3, 4 à 7 | Deux entiers candidats pour capacité et espace libre | Sens et unités non confirmés ; ne pas afficher comme stockage validé |
 | 9 | Batterie en pourcentage, probable | Évolue comme la batterie dans les observations ; pas de comparaison indépendante avec une mesure de référence |
-| 10 | Rétroéclairage, candidat | Valeur `00` observée ; position à confirmer par activation puis retour |
+| 10 | Sens inconnu | Reste `00` pendant le test de rétroéclairage ; ce n'est pas le champ confirmé |
 | 11 | Support USB, candidat | Valeur `01` observée ; position à confirmer par désactivation puis retour |
 | 12 | Sens inconnu | Reste `02` pendant le test de durée ; ce n'est pas le champ de durée qui a été confirmé |
 | 17 à 25 | Nom interne ASCII terminé par zéro | Observé, ne pas confondre avec le numéro de série |
 | 39 | Réduction du bruit | Confirmé : `00` → `09` → `00`, seul octet modifié lors du rejeu |
 | 41 | Durée des segments | Confirmé : `02` → `03` → `02`, seul octet modifié lors du rejeu |
+| 42 | Rétroéclairage | Confirmé : `00` → `01` → `00`, seul octet modifié lors du rejeu |
 
-Le rejeu bruit du 17 novembre à 06:39 reçoit deux acquittements `0x17` acceptés et trois états de 52 octets. Seul l'index 39 varie ; l'état final est identique à l'état initial. Le rejeu durée à 06:43 reçoit deux acquittements `0x16` acceptés et trois états ; seul l'index 41 varie, puis revient à sa valeur initiale. Les longueurs et CRC de ces réponses ont été contrôlés. Ces tests établissent les valeurs ci-dessus, pas encore toutes les options des listes.
+Le rejeu bruit du 17 novembre à 06:39 reçoit deux acquittements `0x17` acceptés et trois états de 52 octets. Seul l'index 39 varie ; l'état final est identique à l'état initial. Le rejeu durée à 06:43 reçoit deux acquittements `0x16` acceptés et trois états ; seul l'index 41 varie, puis revient à sa valeur initiale. Les longueurs et CRC de ces réponses ont été contrôlés. Le rejeu rétroéclairage du 17 novembre à 06:53 reçoit deux acquittements `0x1a` acceptés et trois états ; seul l'index 42 varie (`00` → `01` → `00`). Les six réponses ont des longueurs et CRC valides, et l'état final est identique à l'état initial. L'index 10 reste inchangé, ce qui écarte l'hypothèse initiale de localisation du rétroéclairage à cet index. Ces tests établissent les valeurs ci-dessus, pas encore toutes les options des listes.
 
 ### Diagnostic de connexion nRF Connect
 
