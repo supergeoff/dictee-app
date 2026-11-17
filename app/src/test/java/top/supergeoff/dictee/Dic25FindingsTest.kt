@@ -92,7 +92,7 @@ class Dic25FindingsTest {
         assertTrue(repository.awaitInitialized().transcriptionTasks.any { it.recordingName == "20261111120000" })
     }
 
-    @Test fun `constat 4 la creation d une tache de synthese n attend pas le verrou de transfert`() = runBlocking {
+    @Test fun `constat 4 corrige la creation de synthese attend le verrou de transfert`() = runBlocking {
         val repository = LocalStateRepository(store)
         val safety = RecoverySafety(repository)
         val held = CompletableDeferred<Unit>()
@@ -109,10 +109,11 @@ class Dic25FindingsTest {
             phoneStore = { phone }, synthesisCredentialAccessible = { true },
             prepareRequested = { names, request, active -> TranscriptionPreparation.prepare(phone, "content://folder",
                 sttSettings, emptyMap(), names, mdSettings, request, active) { "id" } })
-        val started = withTimeoutOrNull(1_000) { coordinator.start(setOf("20261111120000"), RequestedWork.MISSING) }
+        val started = async(Dispatchers.Default) { coordinator.start(setOf("20261111120000"), RequestedWork.MISSING) }
+        assertNull(withTimeoutOrNull(200) { started.await() })
         release.complete(Unit)
         holder.await()
-        assertEquals(listOf("id"), started)
+        assertEquals(listOf("id"), started.await())
     }
 
     @Test fun `constat 5 corrige aucune tache de MD seule sans reglages de synthese`() {

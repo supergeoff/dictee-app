@@ -30,6 +30,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.Tab
 import androidx.compose.material3.SecondaryTabRow
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.runtime.produceState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -77,6 +78,7 @@ import top.supergeoff.dictee.RecordingPipeline
 import top.supergeoff.dictee.isValidSynthesisBaseUrl
 import top.supergeoff.dictee.SettingsDestination
 import top.supergeoff.dictee.settingsDestination
+import top.supergeoff.dictee.recordingForDetail
 
 /**
  * Fiche d'un enregistrement : parcours et action principale, lecteur du MP3, puis documents en lecture seule.
@@ -85,10 +87,18 @@ import top.supergeoff.dictee.settingsDestination
  */
 @Composable
 fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Unit, onSettings: (SettingsDestination) -> Unit) {
-    val recording = ui.recordings.firstOrNull { it.name == name }
+    val recording = recordingForDetail(ui.recordings, name)
     if (recording == null) {
         LaunchedEffect(Unit) { onBack() }
         return
+    }
+    val mp3 = recording.phoneFiles[FileKind.MP3]
+    val playback = if (mp3 == null || ui.deletingPhone) null else key(ui.phoneRevision) { rememberPlayback(model, mp3.fileName, mp3.size) }
+    ui.phoneDeletionRequest?.let { plan ->
+        PhoneDeletionDialog(plan, ui.deletingPhone, onConfirm = {
+            playback?.release()
+            model.confirmPhoneDeletion()
+        }, onDismiss = model::cancelPhoneDeletion)
     }
     val canRecover = ui.local.boxList.any { it.name == name } && ui.link == LinkStatus.CONNECTED && !ui.recovering
     Column(modifier = Modifier.fillMaxSize().background(Dictee.colors.background)) {
@@ -129,7 +139,8 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
         RecordingBar(recording, presentation.badge, ui.local.recordingSubjects[name], canRecover, onBack, onRecover = { model.recover(listOf(name)) },
             canRedoVtt = canRedoVtt, canRedoMd = canRedoMd,
             onRedoVtt = { model.transcribe(setOf(name), RequestedWork.REDO_VTT_AND_MD) },
-            onRedoMd = { model.transcribe(setOf(name), RequestedWork.REDO_MD) })
+            onRedoMd = { model.transcribe(setOf(name), RequestedWork.REDO_MD) },
+            onDelete = { model.requestPhoneDeletion(setOf(name)) })
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -155,10 +166,8 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
             if (ui.local.driveEnabled && presentation.steps.any { it.stage == PipelineStage.DRIVE && it.status == PipelineStatus.DONE }) {
                 SecondaryButton("Envoyer sur Drive…", enabled = !ui.sending, onClick = { model.send(listOf(name)) })
             }
-            val mp3 = recording.phoneFiles[FileKind.MP3]
-            val playback = if (mp3 == null) null else rememberPlayback(model, mp3.fileName, mp3.size)
-            if (mp3 == null) MissingMp3() else {
-                Player(playback!!)
+            if (mp3 == null) MissingMp3() else if (playback != null) {
+                Player(playback)
                 FileLine(mp3.fileName, ui.phoneFolder)
             }
             val label = current?.let {
@@ -210,7 +219,7 @@ internal fun RecordingDocuments(
 @Composable
 private fun RecordingBar(
     recording: Recording, badge: String, subject: String?, canRecover: Boolean, onBack: () -> Unit, onRecover: () -> Unit,
-    canRedoVtt: Boolean, canRedoMd: Boolean, onRedoVtt: () -> Unit, onRedoMd: () -> Unit,
+    canRedoVtt: Boolean, canRedoMd: Boolean, onRedoVtt: () -> Unit, onRedoMd: () -> Unit, onDelete: () -> Unit,
 ) {
     val colors = Dictee.colors
     Row(
@@ -236,7 +245,7 @@ private fun RecordingBar(
                     color = when (badge) { "Erreur" -> colors.destructive; "Sur Drive" -> colors.success; else -> colors.textSecondary })
             }
         }
-        RecordingMenu(canRecover, onRecover, canRedoVtt, canRedoMd, onRedoVtt, onRedoMd)
+        RecordingMenu(canRecover, onRecover, canRedoVtt, canRedoMd, onRedoVtt, onRedoMd, onDelete)
     }
 }
 
@@ -247,7 +256,7 @@ private fun duration(recording: Recording): String =
 /** Menu de la fiche : « Récupérer à nouveau », grisé sans liaison avec le boîtier ou pendant une récupération. */
 @Composable
 internal fun RecordingMenu(canRecover: Boolean, onRecover: () -> Unit,
-    canRedoVtt: Boolean, canRedoMd: Boolean, onRedoVtt: () -> Unit, onRedoMd: () -> Unit) {
+    canRedoVtt: Boolean, canRedoMd: Boolean, onRedoVtt: () -> Unit, onRedoMd: () -> Unit, onDelete: () -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
         IconAction(R.drawable.ic_more, "Plus d'actions") { open = true }
@@ -258,6 +267,8 @@ internal fun RecordingMenu(canRecover: Boolean, onRecover: () -> Unit,
             containerColor = Dictee.colors.surface,
             border = BorderStroke(1.dp, Dictee.colors.border),
         ) {
+            DropdownMenuItem(text = { Text("Supprimer du téléphone", style = Dictee.type.rowTitle) },
+                onClick = { open = false; onDelete() })
             DropdownMenuItem(text = { Text("Refaire le VTT et le MD", style = Dictee.type.rowTitle) }, enabled = canRedoVtt,
                 onClick = { open = false; onRedoVtt() })
             DropdownMenuItem(text = { Text("Refaire le MD", style = Dictee.type.rowTitle) }, enabled = canRedoMd,

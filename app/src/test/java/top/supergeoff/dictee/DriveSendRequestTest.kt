@@ -18,8 +18,8 @@ class DriveSendRequestTest {
             DriveSync.isComplete(r, choice, destination, remote, h, proof)
         assertTrue(complete())
         assertFalse(complete(choice = DriveSendChoice.ALL_FILES))
-        assertFalse(complete(recording.copy(phoneFiles = files - FileKind.VTT)))
-        assertFalse(complete(recording.copy(phoneFiles = files - FileKind.MD)))
+        assertTrue(complete(recording.copy(phoneFiles = files - FileKind.VTT)))
+        assertTrue(complete(recording.copy(phoneFiles = files - FileKind.MD)))
         assertFalse(complete(h = hashes + (files.getValue(FileKind.VTT).fileName to "changed")))
         assertFalse(complete(proof = receipts.drop(1)))
     }

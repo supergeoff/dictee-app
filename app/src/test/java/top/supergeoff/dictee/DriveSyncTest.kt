@@ -16,6 +16,24 @@ class DriveSyncTest {
         destination: DriveDestination = this.destination,
     ) = DriveSync.action(fileName, kind, sha256, destination, remote, receipts)
 
+    @Test fun `absent local documents require receipts bound to current destination and remote identity`() {
+        val name = "20261030160502"
+        val r = Recording(name, RecordType.NOTE, 0, false, emptyMap(), DisplayState.OnBox)
+        val docs = listOf(DriveFile("v", "Call-$name.vtt", 1), DriveFile("m", "Call-$name.md", 1))
+        val receipts = docs.map { DriveReceipt(destination, it.name, it.id, "hash") }
+        fun complete(remote: List<DriveFile> = docs, proof: List<DriveReceipt> = receipts, choice: DriveSendChoice = DriveSendChoice.DOCUMENTS_ONLY, dest: DriveDestination = destination) =
+            DriveSync.isComplete(r, choice, dest, remote, emptyMap(), proof)
+        assertEquals(true, complete())
+        assertEquals(false, complete(proof = emptyList()))
+        assertEquals(false, complete(dest = DriveDestination("other", "folder")))
+        assertEquals(false, complete(remote = docs.map { it.copy(id = "different") }))
+        assertEquals(false, complete(remote = docs + docs.first().copy(id = "duplicate")))
+        assertEquals(false, complete(choice = DriveSendChoice.ALL_FILES))
+        assertEquals(true, complete(remote = docs + DriveFile("audio", "$name.mp3", 1), choice = DriveSendChoice.ALL_FILES))
+        val local = r.copy(phoneFiles = mapOf(FileKind.VTT to PhoneFile(docs.first().name, 1)))
+        assertEquals(false, DriveSync.isComplete(local, DriveSendChoice.DOCUMENTS_ONLY, destination, docs, emptyMap(), receipts))
+    }
+
     @Test fun `documents only selects VTT and MD`() {
         assertEquals(setOf(FileKind.VTT, FileKind.MD), DriveSync.requiredKinds(DriveSendChoice.DOCUMENTS_ONLY))
     }

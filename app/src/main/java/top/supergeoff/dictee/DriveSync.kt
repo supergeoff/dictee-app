@@ -71,14 +71,32 @@ object DriveSync {
         remote: List<DriveFile>, hashes: Map<String, String>, receipts: List<DriveReceipt>,
     ): Boolean {
         val documentsComplete = listOf(FileKind.VTT, FileKind.MD).all { kind ->
-            val file = recording.phoneFiles[kind] ?: return@all false
-            val hash = hashes[file.fileName] ?: return@all false
-            action(file.fileName, kind, hash, destination, remote, receipts) == DriveWriteAction.SKIP
+            val file = recording.phoneFiles[kind]
+            if (file != null) {
+                val hash = hashes[file.fileName] ?: return@all false
+                action(file.fileName, kind, hash, destination, remote, receipts) == DriveWriteAction.SKIP
+            } else {
+                hasConfirmedCopy(recording.name, kind, destination, remote, receipts)
+            }
         }
         if (!documentsComplete) return false
         if (choice == DriveSendChoice.DOCUMENTS_ONLY) return true
         val mp3Name = RecordName.fileName(recording.type, recording.name, FileKind.MP3)
         return action(mp3Name, FileKind.MP3, null, destination, remote, receipts) == DriveWriteAction.SKIP
+    }
+
+    fun hasConfirmedCopy(
+        recordingName: String, kind: FileKind, destination: DriveDestination,
+        remote: List<DriveFile>, receipts: List<DriveReceipt>,
+    ): Boolean {
+        val current = remote.filter { entry ->
+            RecordName.parse(entry.name)?.let { it.name == recordingName && it.kind == kind } == true ||
+                (kind == FileKind.MP3 && RecordName.legacyMp3(entry.name) == recordingName)
+        }.singleOrNull() ?: return false
+        return receipts.any { receipt ->
+            receipt.destination == destination && receipt.fileName == current.name &&
+                receipt.driveFileId == current.id && receipt.sha256.isNotBlank()
+        }
     }
 
     fun requiredKinds(choice: DriveSendChoice): Set<FileKind> = when (choice) {
