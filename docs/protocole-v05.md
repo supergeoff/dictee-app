@@ -35,8 +35,8 @@ Chaque commande de réglage porte un payload d'un octet. La réponse reprend la 
 |---|---|---|---|
 | Rétroéclairage | `0x1a` | `00` désactivé, `01` activé | `00` et `01`, avec relecture |
 | Support USB | `0x13` | `00` désactivé, `01` activé | `00` et `01`, avec cycle complet relu à l'index 14 |
-| Réduction du bruit | `0x17` | `00` désactivé, `05` faible, `09` moyen, `0f` élevé | `00` et `09`, avec relecture |
-| Durée des segments | `0x16` | `00` 30 minutes, `01` 1 heure, `02` 2 heures, `03` 3 heures | `02` et `03`, avec relecture |
+| Réduction du bruit | `0x17` | `00` désactivé, `05` faible, `09` moyen, `0f` élevé | Les quatre valeurs, avec relecture |
+| Durée des segments | `0x16` | `00` 30 minutes, `01` 1 heure, `02` 2 heures, `03` 3 heures | Les quatre valeurs, avec relecture |
 
 Les niveaux de bruit intermédiaires ne sont pas validés. Aucun réglage de gain n'a été identifié. La réinitialisation d'usine et le firmware ne sont pas documentés ; aucune trame n'est inventée pour ces actions. La commande de suppression reste à établir et à rejouer avec confirmation.
 
@@ -72,11 +72,11 @@ Tous les index ci-dessous commencent à zéro dans le payload, sans les cinq oct
 | 12 | Sens inconnu | Reste `02` pendant le test de durée ; ce n'est pas le champ de durée qui a été confirmé |
 | 14 | Support USB | Confirmé : second rejeu `0x13`, `01` → `00` → `01`, seul octet modifié |
 | 17 à 25 | Nom interne ASCII terminé par zéro | Observé, ne pas confondre avec le numéro de série |
-| 39 | Réduction du bruit | Confirmé : `00` → `09` → `00`, seul octet modifié lors du rejeu |
-| 41 | Durée des segments | Confirmé : `02` → `03` → `02`, seul octet modifié lors du rejeu |
+| 39 | Réduction du bruit | Confirmé : `00` → `09` → `00`, puis `00` → `05` → `0f` → `00` ; seul champ modifié par ces réglages |
+| 41 | Durée des segments | Confirmé : `02` → `03` → `02`, puis `02` → `00` → `01` → `02` ; seul champ modifié par ces réglages |
 | 42 | Rétroéclairage | Confirmé : `00` → `01` → `00`, seul octet modifié lors du rejeu |
 
-Le rejeu bruit du 17 novembre à 06:39 reçoit deux acquittements `0x17` acceptés et trois états de 52 octets. Seul l'index 39 varie ; l'état final est identique à l'état initial. Le rejeu durée à 06:43 reçoit deux acquittements `0x16` acceptés et trois états ; seul l'index 41 varie, puis revient à sa valeur initiale. Les longueurs et CRC de ces réponses ont été contrôlés. Le rejeu rétroéclairage du 17 novembre à 06:53 reçoit deux acquittements `0x1a` acceptés et trois états ; seul l'index 42 varie (`00` → `01` → `00`). Les six réponses ont des longueurs et CRC valides, et l'état final est identique à l'état initial. L'index 10 reste inchangé, ce qui écarte l'hypothèse initiale de localisation du rétroéclairage à cet index. Ces tests établissent les valeurs ci-dessus, pas encore toutes les options des listes.
+Le rejeu bruit du 17 novembre à 06:39 reçoit deux acquittements `0x17` acceptés et trois états de 52 octets. Seul l'index 39 varie ; l'état final est identique à l'état initial. Le rejeu durée à 06:43 reçoit deux acquittements `0x16` acceptés et trois états ; seul l'index 41 varie, puis revient à sa valeur initiale. Les longueurs et CRC de ces réponses ont été contrôlés. Le rejeu rétroéclairage du 17 novembre à 06:53 reçoit deux acquittements `0x1a` acceptés et trois états ; seul l'index 42 varie (`00` → `01` → `00`). Les six réponses ont des longueurs et CRC valides, et l'état final est identique à l'état initial. L'index 10 reste inchangé, ce qui écarte l'hypothèse initiale de localisation du rétroéclairage à cet index. Le rejeu groupé du 17 novembre à 07:47 complète les listes : bruit `00` → `05` → `0f` → `00` à l'index 39, puis durée `02` → `00` → `01` → `02` à l'index 41. Les six réglages sont acquittés `00`, les sept lectures d'état montrent seulement le champ attendu qui varie à chaque étape, et l'état final est strictement identique à l'état initial. Les 14 notifications ont des longueurs et CRC valides. Toutes les options des quatre réglages ont ainsi été rejouées et relues sur le boîtier testé ; cela n'établit pas leur effet acoustique, la durée effective d'un enregistrement ni l'accès physique par câble USB.
 
 Le rejeu USB du 17 novembre à 07:23 reçoit deux acquittements `0x13` acceptés et trois états, tous avec longueurs et CRC valides. L'état initial et celui après désactivation sont identiques ; après activation, seul l'index 14 passe de `00` à `01`. L'index 11 reste `01` sur les trois lectures. Contrairement aux autres cycles, l'état final n'est donc pas identique à l'état initial : le retour fixe sur Activé n'est pas une restauration de la valeur réellement lue au départ. Le second rejeu du 17 novembre à 07:30 vérifie ensuite le cycle complet `01` → `00` → `01` à l'index 14 : les deux commandes sont acceptées, les six réponses ont des longueurs et CRC valides, seul cet index varie, et l'état final est strictement identique à l'état initial. Le champ USB à l'index 14 est donc confirmé dans les deux sens. L'accès réel aux fichiers par câble USB n'a pas été testé.
 
