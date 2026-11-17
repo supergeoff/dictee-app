@@ -185,6 +185,7 @@ class AppModel(
         get() = checkNotNull(localRepository.state.value) { "L'état local n'est pas encore chargé" }
     private val appLocalState = AppLocalState(localRepository)
     val recoverySafety = RecoverySafety(localRepository)
+    private val recoveryDeletionGuard = RecoveryDeletionGuard()
     private val transcriptionCredentials = AndroidCredentialStore(app)
     val transcriptionSettings = TranscriptionSettingsManager(localRepository, transcriptionCredentials)
     private val synthesisCredentials = AndroidCredentialStore(app, "synthesis-credentials-v1", "synthesis-credentials")
@@ -435,16 +436,21 @@ class AppModel(
     private suspend fun recoverNow(names: List<String>?) {
         val uri = localFlow.phoneTreeUri?.toUri() ?: return
         val address = localFlow.deviceAddress ?: return
+        val entries = recoveryEntries(names)
+        if (entries.isEmpty()) return
+        val recoveryToken = recoveryDeletionGuard.capture(entries.map { it.name }.toSet()) ?: run {
+            say("Suppression en cours, récupération annulée.")
+            return
+        }
         if (!withContext(Dispatchers.IO) { PhoneFolder.hasAccess(app, uri) }) {
             say(PHONE_FOLDER_LOST)
             return
         }
-        val entries = recoveryEntries(names)
-        if (entries.isEmpty() || liveFlow.getAndUpdate { if (it.recovering) it else it.copy(recovering = true, recoveryNames = entries.map { entry -> entry.name }.toSet()) }.recovering) return
+        if (liveFlow.getAndUpdate { if (it.recovering) it else it.copy(recovering = true, recoveryNames = entries.map { entry -> entry.name }.toSet()) }.recovering) return
         jobs.begin()
         try {
             startWork()
-            runRecovery(address, uri, entries)
+            runRecovery(address, uri, entries, recoveryToken)
         } finally {
             jobs.end()
             liveFlow.update { it.copy(recovering = false, recovery = null, recoveryName = null, recoveryNames = emptySet()) }
@@ -463,7 +469,7 @@ class AppModel(
      * Une connexion qui échoue donne « Boîtier hors de portée. » ; une exception plus tard marque l'enregistrement en cours.
      * La liaison se ferme après un échec qui arrête la file, puis à la fin si l'app est en arrière-plan.
      */
-    private suspend fun runRecovery(address: String, uri: Uri, entries: List<ListItem.Entry>) {
+    private suspend fun runRecovery(address: String, uri: Uri, entries: List<ListItem.Entry>, recoveryToken: Map<String, Long>) {
         var connected = false
         val outcome = attempt {
             withContext(Dispatchers.IO) {
@@ -472,7 +478,8 @@ class AppModel(
                     RecoveryJob(session, PhoneFolder(app, uri), File(app.cacheDir, "recovery"), journal)
                         .run(entries, ::publishRecovery, ::applyRecovery,
                             beforeRecovery = { entry ->
-                                if (localFlow.phoneTreeUri != uri.toString() || recoveryEntries(names = listOf(entry.name)).none { it == entry })
+                                if (!recoveryDeletionGuard.isCurrent(recoveryToken, entry.name) ||
+                                    localFlow.phoneTreeUri != uri.toString() || recoveryEntries(names = listOf(entry.name)).none { it == entry })
                                     throw RecoveryGuardException(IllegalStateException("La sélection ou le dossier a changé."))
                                 recoverySafety.begin(entry.name, uri.toString())
                             },
@@ -544,7 +551,9 @@ class AppModel(
         scope.launch {
             try {
                 val runner = PhoneDeletionOrchestrator(
-                    withTransferLock = { block -> recoverySafety.withTransferLock(block) },
+                    withTransferLock = { block -> recoverySafety.withTransferLock {
+                        recoveryDeletionGuard.withDeletion(request.recordings.map { it.name }.toSet(), block)
+                    } },
                     withPhoneLock = { block -> phoneMutex.withLock { block() } },
                     snapshot = {
                         val local = localRepository.awaitInitialized()
