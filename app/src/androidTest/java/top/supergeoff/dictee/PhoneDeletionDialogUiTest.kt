@@ -4,6 +4,9 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.onNodeWithContentDescription
+import top.supergeoff.dictee.ui.RecordingMenu
+import top.supergeoff.dictee.ui.SelectionDeletionButton
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -15,6 +18,23 @@ class PhoneDeletionDialogUiTest {
     private val name = "20261030160502"
     private val recording = Recording(name, RecordType.CALL, 3, false,
         mapOf(FileKind.MP3 to PhoneFile("Call-$name.mp3", 3)), DisplayState.Recovered)
+
+    @Test fun detailMenuRequestsDeletion() {
+        var requests = 0
+        compose.setContent { DicteeTheme(false) {
+            RecordingMenu(false, {}, false, false, {}, {}, onDelete = { requests++ })
+        } }
+        compose.onNodeWithContentDescription("Plus d'actions").performClick()
+        compose.onNodeWithText("Supprimer du téléphone").performClick()
+        compose.runOnIdle { assertEquals(1, requests) }
+    }
+
+    @Test fun selectionRequestsDeletion() {
+        var requests = 0
+        compose.setContent { DicteeTheme(false) { SelectionDeletionButton { requests++ } } }
+        compose.onNodeWithText("Supprimer du téléphone").performClick()
+        compose.runOnIdle { assertEquals(1, requests) }
+    }
 
     @Test fun warningsAndCancellation() {
         var cancelled = 0

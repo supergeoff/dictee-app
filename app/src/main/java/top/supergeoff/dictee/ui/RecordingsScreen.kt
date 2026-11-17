@@ -121,6 +121,28 @@ private class Selection {
 fun RecordingsScreen(ui: UiState, model: AppModel, onOpen: (name: String) -> Unit, onSettings: () -> Unit) {
     var filter by rememberSaveable { mutableStateOf(Filter.ALL) }
     val selection = remember { Selection() }
+    var deletionTargets by remember { mutableStateOf<Set<String>?>(null) }
+    var deletionRevision by remember { mutableStateOf(0L) }
+    var deletionStarted by remember { mutableStateOf(false) }
+    LaunchedEffect(ui.phoneRevision, ui.deletingPhone) {
+        val targets = deletionTargets
+        if (targets != null && ui.deletingPhone) deletionStarted = true
+        if (targets != null && !ui.deletingPhone && (deletionStarted || ui.phoneRevision != deletionRevision)) {
+            if (ui.phoneRevision != deletionRevision) {
+                val remaining = ui.recordings.filter { it.name !in targets || it.phoneFiles.isNotEmpty() }.mapTo(HashSet()) { it.name }
+                selection.retain(remaining)
+            }
+            deletionTargets = null
+        }
+    }
+    ui.phoneDeletionRequest?.let { plan ->
+        PhoneDeletionDialog(plan, ui.deletingPhone, onConfirm = {
+            deletionTargets = plan.recordings.mapTo(HashSet()) { it.name }
+            deletionRevision = ui.phoneRevision
+            deletionStarted = false
+            model.confirmPhoneDeletion()
+        }, onDismiss = model::cancelPhoneDeletion)
+    }
     val shown = remember(ui.recordings, filter) { ui.recordings.filter { filter.matches(it) } }
     val present = remember(ui.recordings) { ui.recordings.mapTo(HashSet()) { it.name } }
     // Une ligne cochée qui disparaît de la liste est oubliée, pour ne pas être recochée si elle revient.
@@ -151,6 +173,7 @@ fun RecordingsScreen(ui: UiState, model: AppModel, onOpen: (name: String) -> Uni
                 )
             }
         }
+        if (checked != null) SelectionDeletionButton { model.requestPhoneDeletion(checked) }
         ActionBar(ui, model, checked, onDone = selection::clear)
     }
 }
@@ -391,4 +414,9 @@ internal fun ActionBarButtons(
             }
         }
     }
+}
+
+@Composable
+internal fun SelectionDeletionButton(onDelete: () -> Unit) {
+    SecondaryButton("Supprimer du téléphone", modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), onClick = onDelete)
 }
