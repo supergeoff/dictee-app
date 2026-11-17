@@ -6,7 +6,7 @@ Le protocole Bluetooth du MECHEN V05 est décrit dans [`protocole-v05.md`](proto
 
 ## Objectif
 
-Dictée récupère les enregistrements du MECHEN V05 par Bluetooth et les range dans un dossier du téléphone choisi par l'utilisateur. Elle peut ensuite envoyer dans un dossier Google Drive les fichiers qui n'y sont pas encore. L'app n'écrit jamais sur le boîtier.
+Dictée récupère les enregistrements du MECHEN V05 par Bluetooth et les range dans un dossier du téléphone choisi par l'utilisateur. Elle peut ensuite envoyer dans un dossier Google Drive les fichiers qui n'y sont pas encore. La suppression sur le boîtier exige une demande explicite ; la récupération ne supprime jamais automatiquement les enregistrements.
 
 ## Décisions
 

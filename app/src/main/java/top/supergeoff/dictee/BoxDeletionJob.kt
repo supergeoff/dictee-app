@@ -14,6 +14,7 @@ class BoxDeletionJob(
     private val delete: suspend (String) -> Int,
     private val list: suspend () -> List<ListItem.Entry>,
     private val onListing: suspend (List<ListItem.Entry>) -> Unit,
+    private val onProgress: (BoxDeletionResult) -> Unit = {},
 ) {
     suspend fun run(names: List<String>): BoxDeletionResult {
         val targets = names.distinct()
@@ -38,11 +39,15 @@ class BoxDeletionJob(
                     confirmed += name
                 }
             } catch (e: CancellationException) {
+                if (name !in refused) unverified += name
+                error = "Suppression interrompue ; état non vérifié."
                 throw e
             } catch (e: Exception) {
                 if (name !in refused) unverified += name
                 error = e.message ?: e.javaClass.simpleName
                 break
+            } finally {
+                onProgress(BoxDeletionResult(confirmed.toSet(), refused.toMap(), unverified.toSet(), targets.drop(next).toSet(), error))
             }
         }
         return BoxDeletionResult(confirmed, refused, unverified, targets.drop(next).toSet(), error)
