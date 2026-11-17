@@ -69,7 +69,10 @@ class V05Session(
         val entries = mutableListOf<ListItem.Entry>()
         while (true) {
             val frame = awaitCommand(Cmd.LIST) ?: throw SessionException("liste incomplète : pas de fin de liste")
-            when (val item = Payloads.listItem(frame.payload)) {
+            val item = try { Payloads.listItem(frame.payload) } catch (_: IllegalArgumentException) {
+                throw SessionException("liste incomplète : entrée mal formée")
+            }
+            when (item) {
                 is ListItem.Entry -> entries += item
                 ListItem.End -> break
             }

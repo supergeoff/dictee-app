@@ -18,6 +18,12 @@ class BoxDeletionTest {
         assertEquals(setOf(b), p.blockedNames)
         assertEquals(2, p.unbackedAudioCount)
     }
+    @Test fun planDistinguishesWhichTargetLacksBackup() {
+        val first = BoxDeletion.plan("address", listOf(recording(a, mp3 = true), recording(b)), setOf(a, b), emptySet(), null, LocalState())
+        val changed = BoxDeletion.plan("address", listOf(recording(a), recording(b, mp3 = true)), setOf(a, b), emptySet(), null, LocalState())
+        assertEquals(first.unbackedAudioCount, changed.unbackedAudioCount)
+        assertNotEquals(first, changed)
+    }
     @Test fun phoneMp3AndValidDriveListingCountAsCopies() {
         val rs = listOf(recording(a, mp3 = true), recording(b))
         val file = DriveFile("id", "$b.mp3", 1)

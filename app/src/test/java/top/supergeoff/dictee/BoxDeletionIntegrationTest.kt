@@ -141,7 +141,7 @@ class BoxDeletionIntegrationTest {
         val link = FakeLink { cmd, _ -> when (cmd) {
             Cmd.DELETE -> { deletes++; if (deletes == 1) reply(Cmd.DELETE, byteArrayOf(0)) else disconnect() }
             Cmd.BEFORE_LIST -> reply(Cmd.BEFORE_LIST, byteArrayOf(0))
-            Cmd.LIST -> { reply(Cmd.LIST, byteArrayOf(0) + b.toByteArray(Charsets.US_ASCII) + byteArrayOf(0, 0, 0, 1, 1)); reply(Cmd.LIST, byteArrayOf(0)) }
+            Cmd.LIST -> { reply(Cmd.LIST, byteArrayOf(0) + b.toByteArray(Charsets.US_ASCII) + byteArrayOf(0, 0, 0, 1, 1)); reply(Cmd.LIST, byteArrayOf(2)) }
         } }
         val session = V05Session(link, {})
         val result = runGuardedBoxDeletion(plan(a, b), { block -> safety.withTransferLock(block) }, guard,
@@ -161,6 +161,68 @@ class BoxDeletionIntegrationTest {
         assertTrue(Recordings.merge(repo.awaitInitialized().boxList, emptyList(), drive, emptyMap(), Busy()) { _, _ -> }.any { it.name == a && !it.onBox })
         repo.updateDurably { it.copy(boxList = listOf(entry(b))) }
         assertFalse(repo.awaitInitialized().boxList.any { it.name == a })
+    }
+
+    @Test fun backupChangesWhileWaitingRequireNewConfirmationButImprovementsDoNot() = runBlocking {
+        for ((initialRisk, currentRisk, shouldStop) in listOf(
+            Triple(setOf(b), setOf(a), true),
+            Triple(emptySet(), setOf(a), true),
+            Triple(setOf(a), emptySet(), false),
+        )) {
+            val safety = RecoverySafety(repository()); val guard = RecoveryDeletionGuard()
+            val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+            val holder = launch { safety.withTransferLock { entered.complete(Unit); release.await() } }
+            entered.await()
+            fun replan(risk: Set<String>): BoxDeletionPlan {
+                val recordings = listOf(a, b).map { name -> Recording(name, RecordType.NOTE, 1, true,
+                    if (name in risk) emptyMap() else mapOf(FileKind.MP3 to PhoneFile("Note-$name.mp3", 1)), DisplayState.OnBox) }
+                return BoxDeletion.plan("box", recordings, setOf(a, b), emptySet(), null, LocalState())
+            }
+            var risk = initialRisk; var emissions = 0
+            val selected = replan(initialRisk)
+            val deletion = async { runGuardedBoxDeletion(selected, { block -> safety.withTransferLock(block) }, guard,
+                { "box" to emptySet() }, { _, names -> emissions++; BoxDeletionResult(names.toSet(), emptyMap(), emptySet(), emptySet(), null) },
+                unbackedNames = { replan(risk).unbackedAudioNames }) }
+            kotlinx.coroutines.yield(); risk = currentRisk; release.complete(Unit); holder.join()
+            val result = deletion.await()
+            assertEquals(if (shouldStop) 0 else 1, emissions)
+            if (shouldStop) { assertTrue(result.error!!.contains("Redemandez")); assertEquals(setOf(a, b), result.untreated) }
+            else assertNull(result.error)
+        }
+    }
+
+    @Test fun driveProofUnavailableWhileWaitingStopsBeforeEmission() = runBlocking {
+        val safety = RecoverySafety(repository()); val guard = RecoveryDeletionGuard()
+        val recording = Recording(a, RecordType.NOTE, 1, true, emptyMap(), DisplayState.OnBox)
+        val file = DriveFile("id", "$a.mp3", 1)
+        var drive: DriveListing? = DriveListing(mapOf(file.name to 1L), listOf(file))
+        val local = LocalState(driveAccount = "account", chosenFolderId = "folder")
+        fun replan() = BoxDeletion.plan("box", listOf(recording), setOf(a), emptySet(), drive, local)
+        val selected = replan(); assertEquals(0, selected.unbackedAudioCount)
+        val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+        val holder = launch { safety.withTransferLock { entered.complete(Unit); release.await() } }; entered.await()
+        var emissions = 0
+        val deletion = async { runGuardedBoxDeletion(selected, { block -> safety.withTransferLock(block) }, guard,
+            { "box" to emptySet() }, { _, _ -> emissions++; error("unexpected") },
+            unbackedNames = { replan().unbackedAudioNames }) }
+        kotlinx.coroutines.yield(); drive = null; release.complete(Unit); holder.join()
+        val result = deletion.await()
+        assertEquals(0, emissions); assertEquals(setOf(a), result.untreated); assertNotNull(result.error)
+    }
+
+    @Test fun malformedListingNeverAppliesOrConfirmsPartialResults() = runBlocking {
+        for (bad in listOf(byteArrayOf(), byteArrayOf(0), byteArrayOf(1), byteArrayOf(2, 0), ByteArray(18))) {
+            var applied = 0
+            val link = FakeLink { cmd, _ -> when (cmd) {
+                Cmd.DELETE, Cmd.BEFORE_LIST -> reply(cmd, byteArrayOf(0))
+                Cmd.LIST -> { reply(cmd, byteArrayOf(0) + b.toByteArray() + byteArrayOf(0, 0, 0, 1)); reply(cmd, bad) }
+            } }
+            val session = V05Session(link, {})
+            val result = BoxDeletionJob(session::deleteRecord, session::listRecords, { applied++ }).run(listOf(a, b))
+            assertEquals(0, applied); assertTrue(result.confirmed.isEmpty())
+            assertEquals(setOf(a), result.unverified); assertEquals(setOf(b), result.untreated)
+            assertNotNull(result.error); assertEquals(1, link.sentPayloads(Cmd.DELETE).size)
+        }
     }
 
     @Test fun deletionInvalidatesCapturedRecoveryAndSerializesAnotherDeletion() = runBlocking {

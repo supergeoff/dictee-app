@@ -20,6 +20,12 @@ fun sessionFrames(): List<Pair<String, ByteArray>> =
         .map { line -> line.split(" ").let { it[0] to hex(it[1]) } }
 
 class FrameTest {
+    @Test fun listItemRejectsMalformedShortPayloads() {
+        assertEquals(ListItem.End, Payloads.listItem(byteArrayOf(2)))
+        for (bad in listOf(byteArrayOf(), byteArrayOf(0), byteArrayOf(1), byteArrayOf(2, 0), ByteArray(18))) {
+            try { Payloads.listItem(bad); org.junit.Assert.fail("payload mal formé accepté") } catch (_: IllegalArgumentException) { }
+        }
+    }
 
     @Test
     fun `le CRC-16 ARC donne les vecteurs de la spec`() {

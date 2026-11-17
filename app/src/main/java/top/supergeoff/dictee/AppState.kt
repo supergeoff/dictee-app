@@ -170,6 +170,7 @@ internal suspend fun runGuardedBoxDeletion(
     guard: RecoveryDeletionGuard,
     snapshot: suspend () -> Pair<String?, Set<String>>,
     execute: suspend (String, List<String>) -> BoxDeletionResult,
+    unbackedNames: suspend () -> Set<String> = { plan.unbackedAudioNames },
 ): BoxDeletionResult = withTransferLock {
     guard.withDeletionSnapshot(plan.names.toSet()) { admittedSends ->
         val (address, protected) = snapshot()
@@ -177,6 +178,7 @@ internal suspend fun runGuardedBoxDeletion(
         when {
             address != plan.address -> BoxDeletionResult(emptySet(), emptyMap(), emptySet(), plan.names.toSet(), "Le boîtier a changé, suppression annulée.")
             blocked.isNotEmpty() -> BoxDeletionResult(emptySet(), emptyMap(), emptySet(), plan.names.toSet(), "Enregistrements occupés : ${blocked.sorted().joinToString()}")
+            (unbackedNames() - plan.unbackedAudioNames).isNotEmpty() -> BoxDeletionResult(emptySet(), emptyMap(), emptySet(), plan.names.toSet(), "Les copies audio ont changé. Redemandez la suppression pour vérifier le nouvel avertissement.")
             plan.names.isEmpty() -> BoxDeletionResult(emptySet(), emptyMap(), emptySet(), emptySet(), null)
             else -> execute(plan.address, plan.names)
         }
@@ -582,11 +584,17 @@ class AppModel(
         return deletionProtectedNames(local, live.recoveryNames, live.sendNames)
     }
 
+    private fun boxDeletionPlan(local: LocalState, address: String, names: Set<String>): BoxDeletionPlan {
+        val phone = phoneFlow.value
+        val knownPhone = if (phone.ok && local.phoneTreeUri != null && phone.folderUri == local.phoneTreeUri) phone else phone.copy(files = emptyList())
+        val current = buildUi(local, knownPhone, driveFlow.value, box.status.value, liveFlow.value)
+        return BoxDeletion.plan(address, current.recordings, names, deletionProtectedNames(local), current.drive, local)
+    }
+
     fun requestBoxDeletion(names: Set<String>) {
         val local = localRepository.state.value ?: return
         val address = local.deviceAddress ?: return
-        val current = buildUi(local, phoneFlow.value, driveFlow.value, box.status.value, liveFlow.value)
-        val plan = BoxDeletion.plan(address, current.recordings, names, deletionProtectedNames(local), current.drive, local)
+        val plan = boxDeletionPlan(local, address, names)
         synchronized(deletionRequestLock) {
             boxDeletionRequests.open(plan)
             liveFlow.update { it.copy(boxDeletionRequest = boxDeletionRequests.current) }
@@ -632,6 +640,11 @@ class AppModel(
                                 if (result.error != null || !foregroundBoxGate.isForeground) box.close()
                                 result
                             }
+                        },
+                        unbackedNames = {
+                            val local = localRepository.awaitInitialized()
+                            val current = boxDeletionPlan(local, plan.address, plan.names.toSet())
+                            current.unbackedAudioNames + (plan.names.toSet() - current.names.toSet())
                         })
                     liveFlow.update { it.copy(boxDeletionResult = latest) }
                 } catch (e: CancellationException) {

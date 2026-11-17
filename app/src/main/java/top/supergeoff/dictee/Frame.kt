@@ -102,12 +102,15 @@ object Payloads {
 
     /** Entrée de liste (statut, nom, taille, indicateur) ou fin de liste (un seul octet). */
     fun listItem(payload: ByteArray): ListItem =
-        if (payload.size < 1 + NAME_LENGTH + 4) ListItem.End
-        else ListItem.Entry(
-            ascii(payload, 1, NAME_LENGTH),
-            uint32(payload, 1 + NAME_LENGTH),
-            if (payload.size > 1 + NAME_LENGTH + 4) payload[1 + NAME_LENGTH + 4].toInt() and 0xff else -1,
-        )
+        if (payload.contentEquals(byteArrayOf(2))) ListItem.End
+        else {
+            require(payload.size >= 1 + NAME_LENGTH + 4) { "entrée de liste mal formée" }
+            ListItem.Entry(
+                ascii(payload, 1, NAME_LENGTH),
+                uint32(payload, 1 + NAME_LENGTH),
+                if (payload.size > 1 + NAME_LENGTH + 4) payload[1 + NAME_LENGTH + 4].toInt() and 0xff else -1,
+            )
+        }
 
     /** Valeur de la trame `0x0b` qui termine l'envoi d'un fichier. */
     const val FILE_END = 0x02

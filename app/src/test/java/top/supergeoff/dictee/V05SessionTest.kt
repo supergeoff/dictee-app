@@ -158,6 +158,17 @@ class V05SessionTest {
     }
 
     @Test
+    fun `liste refuse les payloads courts autres que le marqueur exact`() = runTest {
+        for (bad in listOf(byteArrayOf(), byteArrayOf(0), byteArrayOf(1), byteArrayOf(2, 0), ByteArray(18))) {
+            val link = FakeLink { cmd, _ -> when (cmd) {
+                Cmd.BEFORE_LIST -> reply(cmd, byteArrayOf(0))
+                Cmd.LIST -> { reply(cmd, byteArrayOf(0) + name.toByteArray() + byteArrayOf(0, 0, 0, 1)); reply(cmd, bad) }
+            } }
+            try { session(link).listRecords(); fail("liste mal formée acceptée") } catch (_: SessionException) { }
+        }
+    }
+
+    @Test
     fun `deleteRecord renvoie le statut brut et journalise un seul echange`() = runTest {
         for (status in listOf(0, 1, 255)) {
             val journal = mutableListOf<String>()
