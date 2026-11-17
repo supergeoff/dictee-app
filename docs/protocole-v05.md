@@ -65,7 +65,8 @@ Tous les index ci-dessous commencent à zéro dans le payload, sans les cinq oct
 
 | Index | Interprétation | Preuve et limite |
 |---|---|---|
-| 0 à 3, 4 à 7 | Deux entiers candidats pour capacité et espace libre | Sens et unités non confirmés ; ne pas afficher comme stockage validé |
+| 0 à 3 | Capacité totale, entier big-endian | 59 934, cohérent avec 59,93 GB affichés par DOWAY ; conversion exacte en octets non établie |
+| 4 à 7 | Espace libre, entier big-endian | 59 911 → 59 910 après ajout de 1 323 968 octets ; compteur grossier d'environ un MB, base et arrondi exacts non établis |
 | 9 | Batterie en pourcentage, probable | Évolue comme la batterie dans les observations ; pas de comparaison indépendante avec une mesure de référence |
 | 10 | Sens inconnu | Reste `00` pendant le test de rétroéclairage ; ce n'est pas le champ confirmé |
 | 11 | Sens inconnu | Reste `01` pendant le rejeu USB ; ce n'est pas le champ qui change |
@@ -86,7 +87,9 @@ La capture d'écran DOWAY du 17 novembre à 08:00 affiche « 23 MB sur 59.93 GB 
 
 Les mesures nRF à 08:06 et 08:08 lisent chacune `0x05`, préparent la liste par `0x18 00`, lisent `0x0a` jusqu'au marqueur de fin `a00a010a0102210e`, puis relisent `0x05`. Les 37 notifications ont des longueurs et CRC valides et chaque liste est complète. La liste passe de 13 à 14 entrées ; les anciennes restent identiques, et le seul ajout fait 44 666 octets (environ 11,17 secondes à 4 000 octets/s). Les sommes des tailles passent de 21 252 842 à 21 297 508 octets.
 
-Les compteurs restent 59 934 et 59 911 avant comme après, y compris après la liste. Seule la batterie candidate change de 75 à 74. Ce fichier trop petit ne permet pas d'observer le pas d'arrondi du stockage ; il ne confirme ni ne réfute l'hypothèse capacité/libre en MB. Une nouvelle mesure avec un enregistrement d'environ cinq minutes reste nécessaire, sans suppression entre les lectures. Ne pas confondre somme des fichiers audio et occupation totale du système de fichiers. Les noms réels des enregistrements ne sont pas conservés dans ce document public.
+Les compteurs restent 59 934 et 59 911 avant comme après, y compris après la liste. Seule la batterie candidate change de 75 à 74. Ce fichier trop petit ne permet pas d'observer le pas d'arrondi du stockage ; il ne confirme ni ne réfute l'hypothèse capacité/libre en MB. La mesure suivante à 08:18, décrite ci-dessous, ajoute un enregistrement assez long pour observer une variation. Ne pas confondre somme des fichiers audio et occupation totale du système de fichiers. Les noms réels des enregistrements ne sont pas conservés dans ce document public.
+
+La mesure du 17 novembre à 08:18 contient 20 notifications dont les longueurs et CRC sont valides, une liste complète de 15 fichiers et deux états identiques encadrant cette liste. Les 14 entrées précédentes restent inchangées ; le seul ajout fait 1 323 968 octets, soit environ 331 secondes au débit de 4 000 octets/s. La somme des tailles atteint 22 621 476 octets. Le premier compteur reste 59 934 et le second diminue de 59 911 à 59 910. Le sens espace libre du second compteur est ainsi étayé par une variation cohérente avec l'ajout, et le premier correspond à la capacité affichée par DOWAY. Ce seul pas de compteur ne distingue pas une unité décimale de 1 000 000 octets d'une unité binaire de 1 048 576 octets, ni le mode d'arrondi. Ne pas présenter une conversion en octets comme exacte. Aucun fichier n'a disparu entre ces deux listes ; aucun effacement n'était requis pour cette mesure.
 
 ### Diagnostic de connexion nRF Connect
 
