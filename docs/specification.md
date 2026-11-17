@@ -6,7 +6,7 @@ Le protocole Bluetooth du MECHEN V05 est décrit dans [`protocole-v05.md`](proto
 
 ## Objectif
 
-Dictée récupère les enregistrements du MECHEN V05 par Bluetooth et les range dans un dossier du téléphone choisi par l'utilisateur. Elle peut ensuite envoyer dans un dossier Google Drive les fichiers qui n'y sont pas encore. L'app n'écrit jamais sur le boîtier.
+Dictée récupère les enregistrements du MECHEN V05 par Bluetooth et les range dans un dossier du téléphone choisi par l'utilisateur. Elle peut ensuite envoyer dans un dossier Google Drive les fichiers qui n'y sont pas encore. La suppression sur le boîtier exige une demande explicite ; la récupération ne supprime jamais automatiquement les enregistrements.
 
 ## Décisions
 
@@ -54,7 +54,7 @@ L'app garde une seule activité. Le passage d'un écran à l'autre suit une pile
 ### Fiche d'un enregistrement
 
 - Le titre donne le type, la date et l'heure, par exemple « Call · 30 oct. 16:05 ». Le sous-titre donne la durée et l'état.
-- Le menu propose « Récupérer à nouveau » et « Supprimer du téléphone ». La récupération n'est active que si l'enregistrement est sur le boîtier, que la liaison est ouverte et qu'aucune récupération ne tourne. Le lecteur est libéré avant confirmation de la suppression.
+- Le menu propose « Récupérer à nouveau » et « Supprimer du téléphone », ainsi que « Supprimer du boîtier » si l'enregistrement y est encore présent. La récupération n'est active que si l'enregistrement est sur le boîtier, que la liaison est ouverte et qu'aucune récupération ne tourne. Le lecteur est libéré avant confirmation de la suppression.
 - Le lecteur lit le MP3 du téléphone avec `MediaPlayer` : lecture, pause, barre de position et temps en minutes et secondes. Sans MP3 sur le téléphone, la fiche affiche « Le MP3 n'est pas encore sur le téléphone. ». La lecture se met en pause quand l'app passe en arrière-plan.
 - La fiche affiche le nom du fichier et son dossier. Elle se ferme d'elle-même si l'enregistrement disparaît de la liste.
 - La carte du parcours affiche les quatre étapes, la première raison utile et une seule action principale. Les onglets ne portent aucune action. En attente de configuration, « Ouvrir les réglages » mène à Transcription, ou à Stockage sur le téléphone si le dossier a changé ; pour une synthèse non configurée, il mène à Synthèse.
@@ -140,11 +140,17 @@ L'app reprend l'état de la version 0.1.5 au premier lancement : elle garde l'ad
 
 ## Récupération par Bluetooth
 
-- La liaison s'ouvre au passage au premier plan, au toucher sur la pastille, au geste de rafraîchissement et après une association. Elle se ferme quand l'app passe en arrière-plan, sauf pendant une récupération, et à la fin d'une récupération faite en arrière-plan.
+- La liaison s'ouvre au passage au premier plan, au toucher sur la pastille, au geste de rafraîchissement et après une association. Elle se ferme quand l'app passe en arrière-plan, sauf pendant une récupération ou une suppression du boîtier, et à la fin de l'opération faite en arrière-plan.
 - La séquence de connexion et de lecture de la liste est celle de [`protocole-v05.md`](protocole-v05.md) : appairage rejoué, numéro de série, informations, mise à l'heure, `0x18` avec `00`, puis `0x0a`.
 - Le transfert utilise `0x0b`. Le flux est écrit dans `<nom>.mp3.part`, dans le cache de l'app, puis contrôlé (taille annoncée et en-tête MP3). Le fichier valide est copié dans le dossier du téléphone sous `<Type>-<nom>.mp3`, en remplaçant un fichier du même nom en cas de nouvelle récupération, puis le fichier du cache est supprimé.
 - Les récupérations passent l'une après l'autre, de la plus ancienne à la plus récente. Pour une récupération dont l'option capturée est active, une intention est persistée avant transfert puis rendue programmable seulement après validation durable du MP3. Sa consommation est idempotente ; au redémarrage, les intentions validées sont réconciliées sans parcourir les anciens MP3. Une récupération interrompue ne lance ni transcription ni reprise Bluetooth automatique. Une erreur de programmation ne transforme pas une récupération réussie en échec et ne bloque pas les suivantes.
-- Le boîtier n'est jamais modifié : l'app n'envoie aucune commande de suppression ni d'écriture d'enregistrement.
+- Aucune écriture d'enregistrement ni suppression automatique ne modifie le boîtier. Seule la suppression manuelle confirmée ci-dessous envoie une commande de suppression.
+
+## Suppression du boîtier
+
+- Depuis la fiche ou la sélection, « Supprimer du boîtier » ne cible que les enregistrements présents sur le boîtier. Un dialogue indique leur nombre, la conservation des copies du téléphone et de Drive et le nombre d'audios sans autre copie confirmée. Cet avertissement ne bloque pas ; annuler n'émet aucune commande. Avant toute commande, les copies connues sont revérifiées sous réservation : si une cible supplémentaire n'a plus de copie audio confirmée, la demande est annulée et doit être redemandée pour afficher un avertissement à jour.
+- Une cible occupée ou en attente bloque toute la sélection. Une demande de traitement admise protège ses cibles dès sa réception et jusqu'à la fin du parcours interactif ; sans sélection explicite, la suppression est bloquée pendant ce parcours. Une demande de traitement chevauchant une suppression réservée est refusée.
+- Après confirmation, chaque nom est envoyé par `0x0d` avec ses 14 octets ASCII ; une relecture complète par `0x18 00` puis `0x0a` confirme sa disparition. Une coupure, un délai dépassé ou une liste incomplète arrête le lot sans renvoi automatique. Le bilan distingue les cibles confirmées, refusées, non vérifiées et non traitées. Les copies du téléphone et de Drive restent intactes ; aucune récupération ni aucun traitement n'est lancé. La fiche d'un enregistrement sans copie connue revient à la liste.
 
 ## Stockage sur le téléphone
 

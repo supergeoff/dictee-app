@@ -69,13 +69,23 @@ class V05Session(
         val entries = mutableListOf<ListItem.Entry>()
         while (true) {
             val frame = awaitCommand(Cmd.LIST) ?: throw SessionException("liste incomplète : pas de fin de liste")
-            when (val item = Payloads.listItem(frame.payload)) {
+            val item = try { Payloads.listItem(frame.payload) } catch (_: IllegalArgumentException) {
+                throw SessionException("liste incomplète : entrée mal formée")
+            }
+            when (item) {
                 is ListItem.Entry -> entries += item
                 ListItem.End -> break
             }
         }
         journal("liste : ${entries.size} enregistrements")
         return entries
+    }
+
+    /** Demande la suppression de `name` et renvoie le statut brut du boîtier. */
+    suspend fun deleteRecord(name: String): Int {
+        val payload = command(Cmd.DELETE, Payloads.deleteRequest(name)).payload
+        if (payload.size != 1) throw SessionException("réponse à 0x0d : statut mal formé")
+        return Payloads.status(payload)
     }
 
     /**
@@ -228,6 +238,10 @@ class V05Session(
                 }
                 val frame = Frame.parse(n.bytes)
                 if (frame == null) {
+                    if (cmd == Cmd.DELETE) {
+                        journal("RX ${n.bytes.hexString()} (trame invalide)")
+                        throw SessionException("réponse à 0x0d : trame invalide")
+                    }
                     journal("RX ${n.bytes.hexString()} (trame invalide, ignorée)")
                     continue
                 }

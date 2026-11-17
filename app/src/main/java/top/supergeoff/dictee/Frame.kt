@@ -12,6 +12,7 @@ object Cmd {
     const val NEW_RECORD = 0x06
     const val LIVE_END = 0x07
     const val LIST = 0x0a
+    const val DELETE = 0x0d
     const val LIVE_START = 0x15
 
     /** L'application demande un enregistrement en mémoire avec cette commande : le boîtier répond par le statut et la taille, envoie l'audio sur la caractéristique des fichiers, puis termine par une trame 02. */
@@ -101,18 +102,27 @@ object Payloads {
 
     /** Entrée de liste (statut, nom, taille, indicateur) ou fin de liste (un seul octet). */
     fun listItem(payload: ByteArray): ListItem =
-        if (payload.size < 1 + NAME_LENGTH + 4) ListItem.End
-        else ListItem.Entry(
-            ascii(payload, 1, NAME_LENGTH),
-            uint32(payload, 1 + NAME_LENGTH),
-            if (payload.size > 1 + NAME_LENGTH + 4) payload[1 + NAME_LENGTH + 4].toInt() and 0xff else -1,
-        )
+        if (payload.contentEquals(byteArrayOf(2))) ListItem.End
+        else {
+            require(payload.size >= 1 + NAME_LENGTH + 4) { "entrée de liste mal formée" }
+            ListItem.Entry(
+                ascii(payload, 1, NAME_LENGTH),
+                uint32(payload, 1 + NAME_LENGTH),
+                if (payload.size > 1 + NAME_LENGTH + 4) payload[1 + NAME_LENGTH + 4].toInt() and 0xff else -1,
+            )
+        }
 
     /** Valeur de la trame `0x0b` qui termine l'envoi d'un fichier. */
     const val FILE_END = 0x02
 
     /** Taille annoncée par la réponse à `0x0b` (statut, puis taille sur 4 octets), ou null pour un payload plus court. */
     fun fileSize(payload: ByteArray): Long? = if (payload.size < 5) null else uint32(payload, 1)
+
+    /** Payload de `0x0d` : les 14 octets ASCII non nuls du nom. */
+    fun deleteRequest(name: String): ByteArray {
+        require(name.length == NAME_LENGTH && name.all { it.code in 1..0x7f }) { "nom inattendu : $name" }
+        return name.toByteArray(Charsets.US_ASCII)
+    }
 
     /** Payload de `0x0b` : le nom, puis la position de départ sur 4 octets. */
     fun fileRequest(name: String, offset: Long): ByteArray {

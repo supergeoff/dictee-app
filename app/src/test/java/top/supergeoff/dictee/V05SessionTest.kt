@@ -158,6 +158,87 @@ class V05SessionTest {
     }
 
     @Test
+    fun `liste refuse les payloads courts autres que le marqueur exact`() = runTest {
+        for (bad in listOf(byteArrayOf(), byteArrayOf(0), byteArrayOf(1), byteArrayOf(2, 0), ByteArray(18))) {
+            val link = FakeLink { cmd, _ -> when (cmd) {
+                Cmd.BEFORE_LIST -> reply(cmd, byteArrayOf(0))
+                Cmd.LIST -> { reply(cmd, byteArrayOf(0) + name.toByteArray() + byteArrayOf(0, 0, 0, 1)); reply(cmd, bad) }
+            } }
+            try { session(link).listRecords(); fail("liste mal formée acceptée") } catch (_: SessionException) { }
+        }
+    }
+
+    @Test
+    fun `deleteRecord renvoie le statut brut et journalise un seul echange`() = runTest {
+        for (status in listOf(0, 1, 255)) {
+            val journal = mutableListOf<String>()
+            val link = FakeLink { cmd, _ -> reply(cmd, byteArrayOf(status.toByte())) }
+            assertEquals(status, session(link, journal).deleteRecord(name))
+            assertEquals(listOf(0x0d), link.written.map { it[3].toInt() and 0xff })
+            assertArrayEquals(name.toByteArray(Charsets.US_ASCII), link.sentPayloads(0x0d).single())
+            assertTrue(journal.any { it == "TX ${link.written.single().toHex()}" })
+            assertTrue(journal.any { it.startsWith("RX a00a010d") })
+        }
+    }
+
+    @Test
+    fun `deleteRecord refuse une reponse vide sans relance`() = runTest {
+        val link = FakeLink { cmd, _ -> reply(cmd, ByteArray(0)) }
+        try {
+            session(link).deleteRecord(name)
+            fail("exception attendue")
+        } catch (_: SessionException) { }
+        assertEquals(listOf(0x0d), link.written.map { it[3].toInt() and 0xff })
+    }
+
+    @Test
+    fun `deleteRecord refuse un statut suivi d'octets excedentaires sans relance`() = runTest {
+        val link = FakeLink { cmd, _ -> reply(cmd, byteArrayOf(0, 1)) }
+        try {
+            session(link).deleteRecord(name)
+            fail("exception attendue")
+        } catch (_: SessionException) { }
+        assertEquals(listOf(0x0d), link.written.map { it[3].toInt() and 0xff })
+    }
+
+    @Test
+    fun `deleteRecord refuse un CRC invalide meme suivi d'une reponse valide sans relance`() = runTest {
+        val link = FakeLink { cmd, _ ->
+            val invalid = Frame.build(cmd, byteArrayOf(0))
+            invalid[invalid.lastIndex] = (invalid.last().toInt() xor 0xff).toByte()
+            assertEquals(null, Frame.parse(invalid))
+            reply(invalid.toHex())
+            reply(cmd, byteArrayOf(0))
+        }
+        try {
+            session(link).deleteRecord(name)
+            fail("exception attendue")
+        } catch (_: SessionException) { }
+        assertEquals(listOf(0x0d), link.written.map { it[3].toInt() and 0xff })
+    }
+
+    @Test
+    fun `deleteRecord expire apres cinq secondes sans relance`() = runTest {
+        val link = FakeLink { _, _ -> }
+        try {
+            session(link).deleteRecord(name)
+            fail("exception attendue")
+        } catch (_: SessionException) { }
+        assertEquals(5_000L, currentTime)
+        assertEquals(listOf(0x0d), link.written.map { it[3].toInt() and 0xff })
+    }
+
+    @Test
+    fun `deleteRecord echoue sur coupure sans relance`() = runTest {
+        val link = FakeLink { _, _ -> disconnect() }
+        try {
+            session(link).deleteRecord(name)
+            fail("exception attendue")
+        } catch (_: SessionException) { }
+        assertEquals(listOf(0x0d), link.written.map { it[3].toInt() and 0xff })
+    }
+
+    @Test
     fun `le transfert rejoue les trames 0x0b observees`() = runTest {
         val fileName = "20260101153000"
         // 76 644 octets, construits en répétant le flux MP3 de stream.bin.
