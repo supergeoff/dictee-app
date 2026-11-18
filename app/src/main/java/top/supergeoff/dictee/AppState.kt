@@ -134,6 +134,7 @@ private data class Live(
     val deletingBox: Boolean = false,
     val boxDeletionResult: BoxDeletionResult? = null,
     val recoveryNames: Set<String> = emptySet(),
+    val connectingBoxLists: Int = 0,
     val boxStatusAddress: String? = null,   // adresse de la dernière lecture publiée par la liaison
     val settingBox: Boolean = false,
     val message: String? = null,
@@ -311,7 +312,10 @@ class AppModel(
     }
 
     private val auth = GoogleAuth(app)
-    private val box = BoxConnection(app, journal)
+    private val boxReadingPublisher = BoxReadingPublisher { reading ->
+        recordBoxReading(localRepository, reading).deviceAddress == reading.address
+    }
+    private val box = BoxConnection(app, journal, boxReadingPublisher)
     private val saver = Dispatchers.IO.limitedParallelism(1)
     private val phoneFlow = MutableStateFlow(PhoneSnapshot())
     private val driveFlow = MutableStateFlow<DriveListing?>(null)
@@ -337,22 +341,8 @@ class AppModel(
 
     init {
         scope.launch { reconcileProcessing() }
-        scope.launch { collectBoxReadings() }
     }
 
-    /** Chaque lecture publiée par la liaison est rattachée à l'adresse encore associée ([recordBoxReading]) ; l'adresse de la lecture sert à la fraîcheur. */
-    private suspend fun collectBoxReadings() {
-        box.readings.collect { reading ->
-            liveFlow.update { it.copy(boxStatusAddress = reading.address) }
-            try {
-                recordBoxReading(localRepository, reading)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                journal.error(Source.FS, "enregistrement de l'état du boîtier : ${reasonOf(e)}")
-            }
-        }
-    }
     @Volatile private var searching = false   // la feuille de recherche du boîtier est ouverte : le modèle ne rouvre pas la liaison
     @Volatile private var afterBluetooth: (() -> Unit)? = null
     @Volatile private var afterPhoneFolder: (() -> Unit)? = null
@@ -374,10 +364,11 @@ class AppModel(
     }
 
     val ui: StateFlow<UiState> = combine(
-        localSnapshot, phoneFlow, driveFlow, box.status, liveFlow,
-    ) { snapshot, phone, drive, link, live ->
+        localSnapshot, phoneFlow, driveFlow, combine(box.status, boxReadingPublisher.freshAddress) { link, fresh -> link to fresh }, liveFlow,
+    ) { snapshot, phone, drive, linkSnapshot, live ->
+        val (link, fresh) = linkSnapshot
         initialUiState(snapshot.state, snapshot.initialization)
-            ?: buildUi(checkNotNull(snapshot.state), phone, drive, link, live)
+            ?: buildUi(checkNotNull(snapshot.state), phone, drive, link, live.copy(boxStatusAddress = fresh.takeIf { it == boxReadingPublisher.freshAddress.value }))
     }.stateIn(scope, SharingStarted.Eagerly, UiState(initialized = false))
 
     fun retryLocalState() {
@@ -444,7 +435,14 @@ class AppModel(
 
     /** Relit la liste du boîtier ; un boîtier qui ne répond pas donne le message « Boîtier hors de portée. ». */
     fun connectBox() {
-        if (hasBluetooth()) scope.launch { if (!readBoxList()) say(OUT_OF_RANGE) } else askBluetooth { connectBox() }
+        if (hasBluetooth()) {
+            liveFlow.update { it.copy(connectingBoxLists = it.connectingBoxLists + 1) }
+            scope.launch {
+                try { if (!readBoxList()) say(OUT_OF_RANGE) } finally {
+                    liveFlow.update { it.copy(connectingBoxLists = it.connectingBoxLists - 1) }
+                }
+            }
+        } else askBluetooth { connectBox() }
     }
 
     /**
@@ -530,8 +528,8 @@ class AppModel(
     /** Une écriture exige une lecture fraîche de la liaison courante et aucun travail occupant le boîtier. */
     private fun boxSettingWritable(address: String): Boolean {
         val live = liveFlow.value
-        return isBoxStatusFresh(address, live.boxStatusAddress, box.status.value) &&
-            !live.recovering && !live.deletingBox && !live.deletingPhone && !live.refreshing && !searching
+        return isBoxStatusFresh(address, boxReadingPublisher.freshAddress.value, box.status.value) &&
+            !live.recovering && !live.deletingBox && !live.deletingPhone && !live.refreshing && live.connectingBoxLists == 0 && !searching
     }
 
     // --- Récupération
@@ -1487,7 +1485,7 @@ class AppModel(
             local = local,
             recordings = Recordings.merge(local.boxList, phone.files, listing, local.errors, busy, ::noteUnknownFlag),
             link = if (local.deviceAddress == null) LinkStatus.NONE else link,
-            refreshing = live.refreshing,
+            refreshing = live.refreshing || live.connectingBoxLists > 0,
             recovering = live.recovering,
             sending = live.sending,
             recovery = live.recovery,

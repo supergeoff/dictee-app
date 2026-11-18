@@ -2,11 +2,8 @@ package top.supergeoff.dictee
 
 import android.content.Context
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -23,9 +20,9 @@ enum class LinkStatus { NONE, OFFLINE, CONNECTING, CONNECTED }
  * Une exception, celle de la liaison ou celle du bloc de [withSession], ferme la liaison et remonte.
  * Les lignes de la session et de la liaison vont au journal avec la source BLE.
  */
-class BoxConnection(context: Context, private val log: Log) {
+internal class BoxConnection(context: Context, private val log: Log, private val publisher: BoxReadingPublisher) {
     /** Liaison ouverte avec sa session. [dropped] passe à vrai quand la liaison se coupe : la session ne sert plus. */
-    private class Open(val address: String, val session: V05Session, val dropped: AtomicBoolean)
+    private class Open(val address: String, val session: V05Session, val dropped: AtomicBoolean, val generation: Long)
 
     private val appContext = context.applicationContext
     private val mutex = Mutex()
@@ -39,21 +36,18 @@ class BoxConnection(context: Context, private val log: Log) {
     /** OFFLINE au départ. */
     val status: StateFlow<LinkStatus> = statusFlow.asStateFlow()
 
-    /** Dernière lecture publiée après chaque poignée de main et chaque relecture d'écriture de réglage. */
-    private val readingsFlow = MutableSharedFlow<BoxReading>(replay = 1)
-    val readings: SharedFlow<BoxReading> = readingsFlow.asSharedFlow()
-
     /** Liste des enregistrements du boîtier. Ouvre la liaison si elle est fermée. */
     suspend fun list(address: String): List<ListItem.Entry> = withSession(address) { it.listRecords() }
 
     /**
-     * Écrit le réglage puis relit l'état. La relecture, réussie ou refusée, est publiée sur [readings]
+     * Écrit le réglage puis relit l'état. La relecture, réussie ou refusée, est publiée durablement
      * avec l'adresse de la liaison : l'affichage porte la valeur réelle. Une exception ne publie rien.
      */
     suspend fun writeSetting(address: String, setting: BoxSetting): BoxSettingResult =
         withSession(address) { session ->
             val result = session.writeSetting(setting)
-            readingsFlow.tryEmit(BoxReading(address, result.status))
+            val generation = synchronized(lock) { current?.generation ?: throw SessionException("liaison Bluetooth coupée") }
+            publisher.publish(generation, BoxReading(address, result.status))
             result
         }
 
@@ -77,20 +71,30 @@ class BoxConnection(context: Context, private val log: Log) {
         closeCurrent()
         statusFlow.value = LinkStatus.CONNECTING
         val dropped = AtomicBoolean(false)
-        val link = BleLink.connect(appContext, address, journal) { onLinkClosed(dropped) }
+        val generation = publisher.open()
+        val link = BleLink.connect(appContext, address, journal) { onLinkClosed(dropped, generation) }
         val session = V05Session(link, journal)
-        synchronized(lock) { current = Open(address, session, dropped) }
+        synchronized(lock) { current = Open(address, session, dropped, generation) }
         val status = session.handshake()
         synchronized(lock) {
             if (dropped.get()) throw SessionException("liaison Bluetooth coupée")
             statusFlow.value = LinkStatus.CONNECTED
         }
-        if (status != null) readingsFlow.tryEmit(BoxReading(address, status))
+        if (status != null) {
+            try {
+                publisher.publish(generation, BoxReading(address, status))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log.error(Source.FS, "enregistrement de l'état du boîtier : ${e.message ?: e.javaClass.simpleName}")
+            }
+        }
         return session
     }
 
     /** Appelé depuis le fil du GATT quand la liaison se coupe ou se ferme : l'état passe à OFFLINE si c'est la liaison courante. */
-    private fun onLinkClosed(dropped: AtomicBoolean) {
+    private fun onLinkClosed(dropped: AtomicBoolean, generation: Long) {
+        publisher.close(generation)
         synchronized(lock) {
             dropped.set(true)
             if (current?.dropped === dropped) statusFlow.value = LinkStatus.OFFLINE
@@ -102,6 +106,7 @@ class BoxConnection(context: Context, private val log: Log) {
         val old = synchronized(lock) {
             val previous = current
             current = null
+            previous?.let { publisher.close(it.generation) }
             statusFlow.value = LinkStatus.OFFLINE
             previous
         }

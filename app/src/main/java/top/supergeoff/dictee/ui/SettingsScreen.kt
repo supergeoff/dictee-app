@@ -237,7 +237,7 @@ private fun RowScope.BoxSettingSegment(label: String, selected: Boolean, enabled
     Box(
         modifier = Modifier
             .weight(1f)
-            .height(Tokens.BUTTON_HEIGHT_COMPACT_DP.dp)
+            .height(48.dp)
             .then(if (selected) Modifier.softShadow(SegmentShape, elevation = 2.dp, lightOnly = false) else Modifier)
             .clip(SegmentShape)
             .background(if (selected) colors.surface else Color.Transparent)
