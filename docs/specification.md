@@ -1,6 +1,6 @@
 # Dictée : spécification du produit
 
-Statut : ce document décrit le comportement visé pour la version 0.7.0. La recette sur appareil, la vérification Drive réelle et celle de l'APK signé restent à faire.
+Statut : ce document décrit le comportement livré pour la version 0.9.0. La recette sur appareil, la vérification Drive réelle et celle de l'APK signé restent à faire, ainsi que la recette matérielle des réglages du boîtier.
 
 Le protocole Bluetooth du MECHEN V05 est décrit dans [`protocole-v05.md`](protocole-v05.md).
 
@@ -66,6 +66,10 @@ L'app garde une seule activité. Le passage d'un écran à l'autre suit une pile
 ### Réglages
 
 - Les sections sont Boîtier, Stockage sur le téléphone, Google Drive, Transcription, Synthèse, Apparence et À propos.
+- La section Boîtier affiche le boîtier associé avec « Changer », la batterie en pourcentage et le stockage dans les unités affichées par DOWAY, par exemple « 23 Mo utilisés sur 59 934 Mo ». Une capacité ou un espace libre incohérent est signalé « Stockage inconnu » plutôt que converti en valeur négative. Elle règle la réduction du bruit (Coupée, Faible, Moyenne, Élevée), la durée des segments (30 minutes, 1 heure, 2 heures, 3 heures) et le rétro-éclairage (Désactivé, Activé). Le choix d'un segment écrit le réglage immédiatement, sans bouton « Enregistrer ». Une valeur lue qui n'est pas documentée n'active aucun choix et est signalée « Inconnu » ; les choix documentés restent disponibles.
+- Les commandes du boîtier exigent un boîtier associé, une liaison ouverte et une lecture `0x05` valide obtenue sur cette liaison. Elles sont grisées hors ligne, sans lecture fraîche, pendant leur propre écriture et pendant une récupération, une suppression du boîtier, une recherche ou une lecture déjà en cours. Une lecture invalide ou en échec sur une liaison encore ouverte les laisse grisées jusqu'à une nouvelle lecture réussie. Une seule écriture est admise à la fois, et « Changer » suit les mêmes protections.
+- Après l'acquittement d'un réglage, l'app envoie `0x05` et l'affichage n'est jamais optimiste : la valeur confirmée vient de cette relecture. Si la valeur relue correspond au choix, elle devient la dernière lecture enregistrée ; si elle diffère, l'interface affiche la valeur réellement relue avec « Réglage non appliqué. La valeur relue est affichée. ». Un statut d'acquittement différent de `00` est un refus, signalé par « Le boîtier a refusé ce réglage. ». Une coupure, un délai dépassé ou une réponse invalide ne provoque aucun renvoi automatique, car la commande peut avoir été appliquée : l'app signale « Réglage non vérifié. Reconnecte le boîtier avant de réessayer. », ne conserve aucune intention de rejeu et n'affiche pas de bouton « Réessayer ». Le succès concordant affiche « Réglage appliqué et relu. ».
+- Hors ligne ou sans lecture fraîche sur la liaison courante, la rubrique indique « Dernières valeurs lues » : les valeurs affichées sont la dernière lecture enregistrée, pas une lecture fraîche. Sans aucune lecture, elle affiche « Non lu » plutôt qu'une valeur inventée. L'app ne change aucune valeur au démarrage ou à l'ouverture des réglages. Le support USB et le gain restent hors périmètre : l'app ne les affiche ni ne les règle.
 - La section Transcription règle l'adresse du serveur, la langue et la clé, protégée par Android Keystore. La langue vaut `auto` par défaut pour détecter automatiquement le français et l'anglais ; une langue déjà enregistrée, comme `fr`, reste inchangée tant que l'utilisateur ne la modifie pas. Le test de connexion n'est pas encore disponible : l'écran l'annonce pour une version ultérieure.
 - « Créer le VTT et le MD après récupération » est désactivé par défaut. Son activation ne traite pas les MP3 déjà présents ; sa désactivation n'annule pas les demandes déjà programmées. La valeur est capturée au début de chaque récupération individuelle. Drive reste manuel.
 - Une clé déjà enregistrée est indiquée par des points sans être relue ; une saisie la remplace, et une saisie effacée conserve la précédente.
@@ -118,9 +122,10 @@ L'état se calcule à chaque rafraîchissement à partir des trois sources, des 
 
 ### État local
 
-Le fichier `state.json`, version 7, du stockage interne ne garde que ce qui ne se déduit pas des trois sources :
+Le fichier `state.json`, version 8, du stockage interne ne garde que ce qui ne se déduit pas des trois sources :
 
 - l'adresse et le nom du boîtier associé ;
+- la dernière lecture valide du boîtier (`0x05` : batterie, capacité, espace libre, réduction du bruit, durée des segments, rétroéclairage), rattachée à l'adresse associée et remplacée à chaque nouvelle lecture ;
 - la dernière liste lue sur le boîtier (nom, taille, indicateur), remplacée à chaque lecture et utilisée quand le boîtier est hors de portée ;
 - l'adresse du dossier du téléphone (URI de l'arborescence choisie) ;
 - l'activation de Drive, le compte Google autorisé, les dossiers Drive connus (identifiant, nom, origine) et le dossier choisi ;
@@ -141,7 +146,7 @@ L'app reprend l'état de la version 0.1.5 au premier lancement : elle garde l'ad
 ## Récupération par Bluetooth
 
 - La liaison s'ouvre au passage au premier plan, au toucher sur la pastille, au geste de rafraîchissement et après une association. Elle se ferme quand l'app passe en arrière-plan, sauf pendant une récupération ou une suppression du boîtier, et à la fin de l'opération faite en arrière-plan.
-- La séquence de connexion et de lecture de la liste est celle de [`protocole-v05.md`](protocole-v05.md) : appairage rejoué, numéro de série, informations, mise à l'heure, `0x18` avec `00`, puis `0x0a`.
+- La séquence de connexion et de lecture de la liste est celle de [`protocole-v05.md`](protocole-v05.md) : appairage rejoué, numéro de série, informations, mise à l'heure, `0x18` avec `00`, puis `0x0a`. La réponse à `0x05` est décodée à chaque ouverture de liaison — y compris lorsqu'elle sert une récupération, une suppression ou un réglage — et publiée avec l'adresse du boîtier avant les opérations qui utilisent la session. Une lecture reçue pour une adresse qui n'est plus associée est ignorée, et une coupure ou un échec de lecture conserve la dernière valeur valide sans la présenter comme fraîche.
 - Le transfert utilise `0x0b`. Le flux est écrit dans `<nom>.mp3.part`, dans le cache de l'app, puis contrôlé (taille annoncée et en-tête MP3). Le fichier valide est copié dans le dossier du téléphone sous `<Type>-<nom>.mp3`, en remplaçant un fichier du même nom en cas de nouvelle récupération, puis le fichier du cache est supprimé.
 - Les récupérations passent l'une après l'autre, de la plus ancienne à la plus récente. Pour une récupération dont l'option capturée est active, une intention est persistée avant transfert puis rendue programmable seulement après validation durable du MP3. Sa consommation est idempotente ; au redémarrage, les intentions validées sont réconciliées sans parcourir les anciens MP3. Une récupération interrompue ne lance ni transcription ni reprise Bluetooth automatique. Une erreur de programmation ne transforme pas une récupération réussie en échec et ne bloque pas les suivantes.
 - Aucune écriture d'enregistrement ni suppression automatique ne modifie le boîtier. Seule la suppression manuelle confirmée ci-dessous envoie une commande de suppression.
@@ -258,6 +263,7 @@ Les empreintes du VTT et du MD et le modèle sont conservés en privé pour un M
 | Fichier | Rôle |
 |---|---|
 | `Frame.kt`, `V05Session.kt` | Trames du protocole, session et transfert |
+| `BoxStatus.kt`, `BoxSettingsFlow.kt`, `BoxSettingsPresentation.kt` | État lu par `0x05`, enregistrement et écriture des réglages du boîtier, règles de la section Boîtier |
 | `RecordName.kt` | Lecture et écriture des noms, type, durée, types MIME |
 | `RecordingState.kt` | Liste réunie, compteurs et état affiché à partir des sources, des travaux et des erreurs |
 | `RecoveryJob.kt`, `SendJob.kt` | File de récupération et file d'envoi |
@@ -318,11 +324,14 @@ La police d'interface est Figtree (graisses 400, 500, 600 et 700, en police vari
 3. Le calcul de l'état affiché donne la valeur attendue pour chaque ligne du tableau « État affiché ».
 4. La détection des fichiers déjà présents dans Drive tient compte des noms préfixés et des noms de la version 0.1.5. Une erreur 401 déclenche un seul nouvel essai avec un jeton neuf.
 5. Les tokens de `Tokens.kt` correspondent à la copie de `tokens.json`.
-6. L'APK se compile et le lint passe.
+6. Le décodage de `0x05` rejette les longueurs invalides, les valeurs inconnues restent identifiables, les commandes des trois réglages sont relues avant confirmation et aucun rejeu n'est conservé après une coupure.
+7. L'APK se compile et le lint passe.
 
 ### Sur un téléphone
 
 L'association se fait une fois, et l'app s'ouvre ensuite sur la liste. La liste montre les mêmes enregistrements que DOWAY, avec le bon type. « Récupérer » écrit les MP3 préfixés dans le dossier choisi. « Envoyer » les dépose dans « Dictée » sans créer de doublon avec les fichiers de la version 0.1.5 ni avec les exports de DOWAY. Une récupération continue écran éteint, et un boîtier éteint pendant un transfert ne laisse aucun fichier partiel.
+
+Pour la 0.9.0, la recette matérielle des réglages du boîtier reste à faire, avec un accord explicite avant toute modification réelle du boîtier : comparer la batterie et le stockage avec DOWAY, régler puis relire chaque niveau de bruit, chaque durée de segment et les deux états du rétro-éclairage, vérifier les valeurs après reconnexion, puis mettre le boîtier hors de portée pour contrôler les choix grisés et l'affichage des dernières valeurs. La compilation ne prouve pas l'effet réel des réglages.
 
 Pour la 0.7.0, la recette physique reste à faire avec des fichiers d'essai sauvegardés : suppression simple et multiple, avertissements sans sauvegarde, refus d'une cible occupée, maintien des documents distants et disparition des fichiers locaux. Les tests Android doivent aussi être exécutés sur appareil ; la compilation ne les exécute pas.
 
