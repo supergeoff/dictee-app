@@ -85,6 +85,7 @@ class UrlTranscriptionClient(
             field("response_format", "vtt")
             field("background", "true")
             field("language", task.language)
+            if (task.glossary.isNotEmpty()) field("prompt", task.glossary)
             val filename = task.mp3Name.replace(Regex("[\\\"\r\n]"), "_")
             write("--$boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"$filename\"\r\nContent-Type: audio/mpeg\r\n\r\n")
             openMp3(task).use { source -> resources.registerSource(source); source.copyTo(output, 64 * 1024) }

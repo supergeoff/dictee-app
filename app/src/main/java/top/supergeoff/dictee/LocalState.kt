@@ -248,6 +248,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
                         .put("submitAttempts", task.submitAttempts)
                         .put("nextAttemptAtMillis", task.nextAttemptAtMillis ?: JSONObject.NULL)
                         .put("subjectAttempted", task.subjectAttempted)
+                        .put("glossary", task.glossary)
                         .put("synthesis", task.synthesis?.let { writeSynthesis(it) } ?: JSONObject.NULL))
                 }
             })
@@ -362,6 +363,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
             submitAttempts = o.intOr("submitAttempts", 0),
             nextAttemptAtMillis = if (o.isNull("nextAttemptAtMillis")) null else o.getLong("nextAttemptAtMillis"),
             subjectAttempted = version >= 5 && o.booleanOr("subjectAttempted", false),
+            glossary = o.stringOrNull("glossary") ?: "",
         )
         val addressSafeTask = when {
             // Corrige les suspensions terminales enregistrées par la migration précédente.

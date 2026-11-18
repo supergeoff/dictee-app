@@ -15,6 +15,29 @@ class LocalStateTest {
     @get:Rule val tmp = TemporaryFolder()
     private fun file() = File(tmp.root, "state.json")
 
+    @Test fun frozenTaskGlossaryRoundTripsIndependentlyOfCurrentSettings() {
+        val store = LocalStateStore(file())
+        val task = TranscriptionTask("local", "synthetic", "a.mp3", "a.vtt", "folder", "hash",
+            "https://example.invalid/v1", "ref", "fr", "model", TranscriptionPhase.PENDING,
+            glossary = "Original\nNeMo")
+        store.save(LocalState(transcriptionSettings = TranscriptionSettings(glossary = "Changed"), transcriptionTasks = listOf(task)))
+        assertEquals("Original\nNeMo", store.load().transcriptionTasks.single().glossary)
+        val json = org.json.JSONObject(file().readText())
+        json.getJSONArray("transcriptionTasks").getJSONObject(0).remove("glossary")
+        file().writeText(json.toString())
+        assertEquals("", store.load().transcriptionTasks.single().glossary)
+    }
+
+    @Test fun glossarySettingsRoundTripAndOldSettingsDefaultToEmpty() {
+        val store = LocalStateStore(file())
+        store.save(LocalState(transcriptionSettings = TranscriptionSettings(glossary = " NeMo \nTerme (souvent entendu : a, b)")))
+        assertEquals(" NeMo \nTerme (souvent entendu : a, b)", store.load().transcriptionSettings.glossary)
+        val json = org.json.JSONObject(file().readText())
+        json.getJSONObject("transcriptionSettings").remove("glossary")
+        file().writeText(json.toString())
+        assertEquals("", store.load().transcriptionSettings.glossary)
+    }
+
     @Test
     fun `drive_choice_and_receipts_round_trip`() {
         val receipt = DriveReceipt(DriveDestination("account-1", "folder-1"), "Note.vtt", "file-1", "a".repeat(64))
