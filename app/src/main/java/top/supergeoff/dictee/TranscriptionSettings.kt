@@ -20,6 +20,7 @@ data class TranscriptionSettings(
     val language: String = "auto",
     val model: String = "dictee-diarize",
     val credentialRef: String? = null,
+    val glossary: String = "",
 )
 
 /** Seul le défaut relatif ou une adresse HTTP(S) de serveur terminée par /v1 est admis. */
@@ -127,6 +128,7 @@ class TranscriptionSettingsManager(private val repository: LocalStateRepository,
 
     suspend fun save(settings: TranscriptionSettings, newSecret: String?) = mutex.withLock {
         if (!isValidTranscriptionBaseUrl(settings.baseUrl)) throw InvalidTranscriptionAddressException()
+        require(ComplementaryGlossary.validationError(settings.glossary) == null) { "Glossaire hors limites" }
         try {
             repository.awaitInitialized()
             val newRef = newSecret?.takeIf { it.isNotEmpty() }?.let { credentials.save(it) }

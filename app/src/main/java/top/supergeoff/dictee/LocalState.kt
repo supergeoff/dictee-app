@@ -193,7 +193,8 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
                 .put("baseUrl", state.transcriptionSettings.baseUrl)
                 .put("language", state.transcriptionSettings.language)
                 .put("model", state.transcriptionSettings.model)
-                .put("credentialRef", state.transcriptionSettings.credentialRef ?: JSONObject.NULL))
+                .put("credentialRef", state.transcriptionSettings.credentialRef ?: JSONObject.NULL)
+                .put("glossary", state.transcriptionSettings.glossary))
             .put("synthesisSettings", JSONObject()
                 .put("baseUrl", state.synthesisSettings.baseUrl)
                 .put("model", state.synthesisSettings.model)
@@ -338,6 +339,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
             language = o.stringOrNull("language") ?: defaults.language,
             model = o.stringOrNull("model") ?: defaults.model,
             credentialRef = o.stringOrNull("credentialRef"),
+            glossary = o.stringOrNull("glossary") ?: "",
         )
     }
 

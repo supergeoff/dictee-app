@@ -13,6 +13,45 @@ import java.io.File
 @OptIn(ExperimentalCoroutinesApi::class)
 class TranscriptionSettingsFormTest {
     @get:Rule val tmp = TemporaryFolder()
+
+    @Test fun glossaryEditsPreserveOccurrencesAndPendingInputOnFailure() = runTest {
+        var fail = true
+        var saved: TranscriptionSettings? = null
+        val form = TranscriptionSettingsForm(backgroundScope) { settings, _ ->
+            if (fail) error("failure")
+            saved = settings
+        }
+        form.initialize(TranscriptionSettings(glossary = "A\nA"))
+        form.removeGlossaryEntry(1)
+        form.setGlossaryInput("NeMo\r\nTerme (souvent entendu : a, b)")
+        assertTrue(form.addGlossaryEntry())
+        assertEquals("A\nNeMo\nTerme (souvent entendu : a, b)", form.state.value.glossary)
+        form.setGlossaryInput("Pending")
+        assertTrue(form.submit())
+        form.setGlossaryInput("blocked")
+        runCurrent()
+        assertEquals("Pending", form.state.value.glossaryInput)
+        assertNotNull(form.state.value.message)
+        assertFalse(form.state.value.toString().contains("NeMo"))
+        fail = false
+        assertTrue(form.submit())
+        runCurrent()
+        assertEquals("A\nNeMo\nTerme (souvent entendu : a, b)\nPending", saved!!.glossary)
+        assertEquals("", form.state.value.glossaryInput)
+    }
+
+    @Test fun oversizedGlossaryNeverSavesOrDiscardsInput() = runTest {
+        var saves = 0
+        val form = TranscriptionSettingsForm(backgroundScope) { _, _ -> saves++ }
+        form.initialize(TranscriptionSettings())
+        form.setGlossaryInput("a".repeat(20001))
+        assertFalse(form.addGlossaryEntry())
+        assertFalse(form.submit())
+        runCurrent()
+        assertEquals(20001, form.state.value.glossaryInput.length)
+        assertEquals("", form.state.value.glossary)
+        assertEquals(0, saves)
+    }
     @Test fun successClearsOnlyAfterConfirmationAndRejectsConcurrentSubmit() = runTest {
         val started = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
