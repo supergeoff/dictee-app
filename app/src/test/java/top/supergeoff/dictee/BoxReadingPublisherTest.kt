@@ -33,7 +33,43 @@ class BoxReadingPublisherTest {
         assertNull(messageFirst.message)
         val staleFresh = boxUiPublication(localSnapshot, LinkStatus.CONNECTED, publication, null, message, publication)
         assertFalse(staleFresh.fresh)
-        assertNull(staleFresh.message)
+        assertEquals("Réglage non vérifié. Reconnecte le boîtier avant de réessayer.", staleFresh.message)
+    }
+
+    @Test fun `resultat non verifie si publication invalidee avant livraison`() = runTest {
+        val publisher = BoxReadingPublisher { true }
+        val token = publisher.open()
+        val published = publisher.publish(token, BoxReading(address, status))
+        val local = LocalState(deviceAddress = address, boxStatus = status.copy(noise = 0))
+        val message = "Réglage non appliqué. La valeur relue est affichée."
+        publisher.close(token)
+        val projected = boxUiPublication(local, LinkStatus.CONNECTED, published, publisher.publication.value, message, published)
+        assertFalse(projected.fresh)
+        assertEquals(local.boxStatus, projected.local.boxStatus)
+        assertEquals("Réglage non vérifié. Reconnecte le boîtier avant de réessayer.", projected.message)
+    }
+
+    @Test fun `resultat non verifie si publication remplacee ou reconnexion meme adresse`() = runTest {
+        val publisher = BoxReadingPublisher { true }
+        val token = publisher.open()
+        val published = publisher.publish(token, BoxReading(address, status))
+        val local = LocalState(deviceAddress = address, boxStatus = status.copy(noise = 0))
+        val message = "Réglage non appliqué. La valeur relue est affichée."
+        val replacement = publisher.publish(token, BoxReading(address, status.copy(noise = 1)))
+        val replaced = boxUiPublication(local, LinkStatus.CONNECTED, replacement, publisher.publication.value, message, published)
+        assertTrue(replaced.fresh)
+        assertEquals(replacement.reading.status, replaced.local.boxStatus)
+        assertEquals("Réglage non vérifié. Reconnecte le boîtier avant de réessayer.", replaced.message)
+        publisher.close(token)
+        val reconnected = publisher.open()
+        val next = publisher.publish(reconnected, BoxReading(address, status))
+        val projected = boxUiPublication(local, LinkStatus.CONNECTED, next, publisher.publication.value, message, published)
+        assertEquals("Réglage non vérifié. Reconnecte le boîtier avant de réessayer.", projected.message)
+        assertNull(boxUiPublication(local, LinkStatus.CONNECTED, next, next, null, null).message)
+        assertNull(boxUiPublication(local, LinkStatus.CONNECTED, next, next, null, published).message)
+        val otherBox = local.copy(deviceAddress = "BB")
+        assertEquals("Réglage non vérifié. Reconnecte le boîtier avant de réessayer.",
+            boxUiPublication(otherBox, LinkStatus.CONNECTED, published, published, message, published).message)
     }
 
     @Test fun `reconnexion a la meme adresse ignore une publication retardee`() = runTest {

@@ -35,7 +35,11 @@ internal fun boxUiPublication(
     return BoxUiPublication(
         local = if (reading != null) local.copy(boxStatus = reading.reading.status) else local,
         fresh = reading != null,
-        message = message.takeIf { messagePublication == null || messagePublication === reading },
+        message = when {
+            message == null || messagePublication == null || messagePublication === reading -> message
+            messagePublication === current && isBoxStatusFresh(local.deviceAddress, current.reading.address, link) -> null
+            else -> BOX_SETTING_UNVERIFIED
+        },
     )
 }
 
