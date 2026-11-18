@@ -24,7 +24,7 @@ val BOX_NOISE_CHOICES: List<Pair<NoiseReduction, String>> = listOf(
     NoiseReduction.DESACTIVE to "Coupée",
     NoiseReduction.FAIBLE to "Faible",
     NoiseReduction.MOYEN to "Moyenne",
-    NoiseReduction.ELEVE to "Élevé",
+    NoiseReduction.ELEVE to "Élevée",
 )
 
 /** Les quatre durées de segment, dans l'ordre du sélecteur. */

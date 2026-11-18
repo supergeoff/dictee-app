@@ -142,7 +142,7 @@ private fun BoxSection(ui: UiState, model: AppModel, onAssociate: () -> Unit) {
     val local = ui.local
     val associated = local.deviceAddress != null
     val status = local.boxStatus
-    val busy = ui.recovering || ui.deletingBox || ui.settingBox
+    val busy = ui.refreshing || ui.recovering || ui.deletingBox || ui.settingBox
     val editable = boxSettingsEditable(ui.link, ui.boxStatusFresh, busy, hasStatus = status != null)
     Section("Boîtier") {
         GroupCard {
@@ -157,7 +157,7 @@ private fun BoxSection(ui: UiState, model: AppModel, onAssociate: () -> Unit) {
             if (associated && status != null) {
                 RowDivider()
                 ListRow(title = "Batterie", weight = FontWeight.Normal) {
-                    Text(batteryLabel(status.batteryPercent), style = Dictee.type.mono, color = Dictee.colors.textSecondary)
+                    Text(batteryLabel(status.batteryPercent), style = Dictee.type.caption, color = Dictee.colors.textSecondary)
                 }
                 RowDivider()
                 ListRow(title = "Stockage", weight = FontWeight.Normal) {
@@ -228,7 +228,8 @@ private fun <T> BoxSettingSelector(
     }
 }
 
-/** Un choix du sélecteur d'un réglage du boîtier : le même segment que les boutons du thème, mu quand [enabled] est faux. */
+/** Un choix du sélecteur d'un réglage du boîtier : le même segment que les boutons du thème, mu quand [enabled] est faux.
+ * Toucher le choix déjà actif ne déclenche rien : seul un nouveau choix écrit le réglage. */
 @Composable
 private fun RowScope.BoxSettingSegment(label: String, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
     val colors = Dictee.colors
@@ -247,7 +248,7 @@ private fun RowScope.BoxSettingSegment(label: String, selected: Boolean, enabled
                 interactionSource = source,
                 indication = LocalIndication.current,
                 role = Role.RadioButton,
-                onClick = onClick,
+                onClick = { if (!selected) onClick() },
             ),
         contentAlignment = Alignment.Center,
     ) {

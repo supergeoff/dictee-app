@@ -39,7 +39,7 @@ class BoxSettingsPresentationTest {
 
     @Test fun noiseChoicesCoverTheFourDocumentedLevels() {
         assertEquals(
-            listOf(0x00 to "Coupée", 0x05 to "Faible", 0x09 to "Moyenne", 0x0f to "Élevé"),
+            listOf(0x00 to "Coupée", 0x05 to "Faible", 0x09 to "Moyenne", 0x0f to "Élevée"),
             BOX_NOISE_CHOICES.map { it.first.raw to it.second },
         )
         BOX_NOISE_CHOICES.forEach { (choice, _) -> assertEquals(choice, noiseReductionChoice(choice.raw)) }
