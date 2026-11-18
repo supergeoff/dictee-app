@@ -2,8 +2,11 @@ package top.supergeoff.dictee
 
 import android.content.Context
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -36,8 +39,23 @@ class BoxConnection(context: Context, private val log: Log) {
     /** OFFLINE au départ. */
     val status: StateFlow<LinkStatus> = statusFlow.asStateFlow()
 
+    /** Dernière lecture publiée après chaque poignée de main et chaque relecture d'écriture de réglage. */
+    private val readingsFlow = MutableSharedFlow<BoxReading>(replay = 1)
+    val readings: SharedFlow<BoxReading> = readingsFlow.asSharedFlow()
+
     /** Liste des enregistrements du boîtier. Ouvre la liaison si elle est fermée. */
     suspend fun list(address: String): List<ListItem.Entry> = withSession(address) { it.listRecords() }
+
+    /**
+     * Écrit le réglage puis relit l'état. La relecture, réussie ou refusée, est publiée sur [readings]
+     * avec l'adresse de la liaison : l'affichage porte la valeur réelle. Une exception ne publie rien.
+     */
+    suspend fun writeSetting(address: String, setting: BoxSetting): BoxSettingResult =
+        withSession(address) { session ->
+            val result = session.writeSetting(setting)
+            readingsFlow.tryEmit(BoxReading(address, result.status))
+            result
+        }
 
     /** Exécute [block] avec la session du boîtier d'adresse [address]. Ouvre la liaison si elle est fermée, ou si elle va vers un autre boîtier. */
     suspend fun <T> withSession(address: String, block: suspend (V05Session) -> T): T = mutex.withLock {
@@ -62,11 +80,12 @@ class BoxConnection(context: Context, private val log: Log) {
         val link = BleLink.connect(appContext, address, journal) { onLinkClosed(dropped) }
         val session = V05Session(link, journal)
         synchronized(lock) { current = Open(address, session, dropped) }
-        session.handshake()
+        val status = session.handshake()
         synchronized(lock) {
             if (dropped.get()) throw SessionException("liaison Bluetooth coupée")
             statusFlow.value = LinkStatus.CONNECTED
         }
+        readingsFlow.tryEmit(BoxReading(address, status))
         return session
     }
 

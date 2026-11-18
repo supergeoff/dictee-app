@@ -52,6 +52,8 @@ data class UiState(
     val boxDeletionRequest: BoxDeletionPlan? = null,
     val deletingBox: Boolean = false,
     val boxDeletionResult: BoxDeletionResult? = null,
+    val settingBox: Boolean = false,      // écriture d'un réglage du boîtier en cours
+    val boxStatusFresh: Boolean = false,  // lecture de la liaison courante correspondant au boîtier associé
     val transcription: Progress? = null,
     val phoneFolder: String? = null,      // chemin affiché, null sans dossier
     val phoneFolderOk: Boolean = false,
@@ -132,6 +134,8 @@ private data class Live(
     val deletingBox: Boolean = false,
     val boxDeletionResult: BoxDeletionResult? = null,
     val recoveryNames: Set<String> = emptySet(),
+    val boxStatusAddress: String? = null,   // adresse de la dernière lecture publiée par la liaison
+    val settingBox: Boolean = false,
     val message: String? = null,
 )
 
@@ -316,6 +320,7 @@ class AppModel(
     private val deletionRequestLock = Any()
     private val phoneDeletionRequests = PhoneDeletionRequests()
     private val boxDeletionRequests = BoxDeletionRequests()
+    private val boxSettingAdmission = BoxSettingAdmission()
     private val driveMutex = Mutex()
     private val loggedFlags = ConcurrentHashMap.newKeySet<String>()
     private val notificationAsked = AtomicBoolean(false)
@@ -332,6 +337,21 @@ class AppModel(
 
     init {
         scope.launch { reconcileProcessing() }
+        scope.launch { collectBoxReadings() }
+    }
+
+    /** Chaque lecture publiée par la liaison est rattachée à l'adresse encore associée ([recordBoxReading]) ; l'adresse de la lecture sert à la fraîcheur. */
+    private suspend fun collectBoxReadings() {
+        box.readings.collect { reading ->
+            liveFlow.update { it.copy(boxStatusAddress = reading.address) }
+            try {
+                recordBoxReading(localRepository, reading)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                journal.error(Source.FS, "enregistrement de l'état du boîtier : ${reasonOf(e)}")
+            }
+        }
     }
     @Volatile private var searching = false   // la feuille de recherche du boîtier est ouverte : le modèle ne rouvre pas la liaison
     @Volatile private var afterBluetooth: (() -> Unit)? = null
@@ -462,9 +482,10 @@ class AppModel(
         scope.launch {
             try {
                 val saved = recoverySafety.withTransferLock {
-                    update { it.copy(deviceAddress = address, deviceName = name, boxList = emptyList()) }.await()
+                    update { it.copy(deviceAddress = address, deviceName = name, boxList = emptyList(), boxStatus = null) }.await()
                 }
                 if (saved.isFailure) return@launch
+                liveFlow.update { it.copy(boxStatusAddress = null) }
                 note("Boîtier associé : $name ($address)")
                 box.close()
                 if (hasBluetooth()) readBoxList()
@@ -472,6 +493,45 @@ class AppModel(
                 if (started) refreshCoordinator.finish()
             }
         }
+    }
+
+    /**
+     * Écrit un réglage du boîtier après admission unique : une seconde demande simultanée est
+     * ignorée, les contrôles sont grisés pendant l'écriture. L'écriture est refusée sans message
+     * si un travail occupe la liaison ou si la lecture n'est pas fraîche ; l'adresse et les
+     * occupations sont revalidées sous le verrou de transfert avant l'émission.
+     */
+    fun setBoxSetting(setting: BoxSetting) {
+        if (!boxSettingAdmission.tryStart()) return
+        liveFlow.update { it.copy(settingBox = true) }
+        scope.launch {
+            try {
+                writeBoxSetting(setting)
+            } finally {
+                liveFlow.update { it.copy(settingBox = false) }
+                boxSettingAdmission.finish()
+            }
+        }
+    }
+
+    private suspend fun writeBoxSetting(setting: BoxSetting) {
+        localRepository.awaitInitialized()
+        val address = localFlow.deviceAddress ?: return
+        if (!boxSettingWritable(address)) return
+        recoverySafety.withTransferLock {
+            val current = localRepository.awaitInitialized()
+            if (current.deviceAddress != address || !boxSettingWritable(address)) return@withTransferLock
+            withContext(Dispatchers.IO) {
+                deliverBoxSetting(setting, send = { box.writeSetting(address, it) }, onMessage = ::say)
+            }
+        }
+    }
+
+    /** Une écriture exige une lecture fraîche de la liaison courante et aucun travail occupant le boîtier. */
+    private fun boxSettingWritable(address: String): Boolean {
+        val live = liveFlow.value
+        return isBoxStatusFresh(address, live.boxStatusAddress, box.status.value) &&
+            !live.recovering && !live.deletingBox && !live.deletingPhone && !live.refreshing && !searching
     }
 
     // --- Récupération
@@ -1438,6 +1498,8 @@ class AppModel(
             boxDeletionRequest = live.boxDeletionRequest,
             deletingBox = live.deletingBox,
             boxDeletionResult = live.boxDeletionResult,
+            settingBox = live.settingBox,
+            boxStatusFresh = isBoxStatusFresh(local.deviceAddress, live.boxStatusAddress, link),
             transcription = transcription?.second,
             phoneFolder = local.phoneTreeUri?.let { runCatching { PhoneFolder.displayPath(it.toUri()) }.getOrDefault(it) },
             phoneFolderOk = phone.ok,

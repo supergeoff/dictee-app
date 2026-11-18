@@ -576,6 +576,24 @@ class AppStateIntegrationTest {
         assertFalse(file().readText().contains(secret))
     }
 
+    @Test fun `un echec de reglage ne cree aucune tache ni intention durable`() = runBlocking {
+        val store = LocalStateStore(file())
+        val avant = LocalState(deviceAddress = "AA:BB:CC:DD:EE:FF", boxStatus = BoxStatus(71, 100, 50, 9, 2, 1))
+        store.save(avant)
+        val repo = LocalStateRepository(store)
+        repo.awaitInitialized()
+        val messages = mutableListOf<String>()
+        val coupure: suspend (BoxSetting) -> BoxSettingResult = { throw SessionException("liaison Bluetooth coupée") }
+        deliverBoxSetting(BoxSetting.Duration(SegmentDuration.HEURES_2), send = coupure, onMessage = { messages += it })
+        assertEquals(listOf("Réglage non vérifié. Reconnecte le boîtier avant de réessayer."), messages)
+        val persisted = store.load()
+        assertEquals(avant, persisted)
+        assertTrue(persisted.transcriptionTasks.isEmpty())
+        assertTrue(persisted.automaticProcessingRequests.isEmpty())
+        assertTrue(persisted.errors.isEmpty())
+        assertEquals(avant.boxStatus, repo.awaitInitialized().boxStatus)
+    }
+
     @Test fun `apres migration un echec disque bloque toujours l effet protege`() = runBlocking {
         val before = org.json.JSONObject().put("version", 3).put("transcriptionSettings", org.json.JSONObject()
             .put("baseUrl", "https://example.invalid/v1?key=synthetic-failure-secret").put("credentialRef", "ref-kept")).toString()
