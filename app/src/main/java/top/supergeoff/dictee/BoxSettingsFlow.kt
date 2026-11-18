@@ -57,8 +57,8 @@ class BoxSettingAdmission {
 /** Message après l'écriture d'un réglage, à partir de l'acquittement et de la relecture. */
 fun boxSettingMessage(setting: BoxSetting, result: BoxSettingResult): String = when {
     !result.accepted -> "Le boîtier a refusé ce réglage."
-    result.isApplied(setting) -> "Réglage appliqué et relu."
-    else -> "Réglage non appliqué. La valeur relue est affichée."
+    result.isApplied(setting) -> "Réglage appliqué et vérifié par relecture."
+    else -> "La valeur relue diffère du réglage demandé."
 }
 
 private const val BOX_SETTING_UNVERIFIED = "Réglage non vérifié. Reconnecte le boîtier avant de réessayer."

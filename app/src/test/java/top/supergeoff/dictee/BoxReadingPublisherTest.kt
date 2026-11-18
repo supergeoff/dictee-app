@@ -21,7 +21,7 @@ class BoxReadingPublisherTest {
         val generation = publisher.open()
         publisher.publish(generation, BoxReading(address, status))
         val publication = publisher.publication.value!!
-        val message = "Réglage non appliqué. La valeur relue est affichée."
+        val message = "La valeur relue diffère du réglage demandé."
         // Snapshot local retardé, puis propagation de fraîcheur retardée indépendamment.
         val freshFirst = boxUiPublication(localSnapshot, LinkStatus.CONNECTED, publication, publication, message, publication)
         assertTrue(freshFirst.fresh)
@@ -36,12 +36,35 @@ class BoxReadingPublisherTest {
         assertEquals("Réglage non vérifié. Reconnecte le boîtier avant de réessayer.", staleFresh.message)
     }
 
+    @Test fun `messages projetes restent des faits historiques apres deconnexion`() = runTest {
+        val publisher = BoxReadingPublisher { true }
+        val token = publisher.open()
+        val published = publisher.publish(token, BoxReading(address, status))
+        val local = LocalState(deviceAddress = address, boxStatus = status)
+        val setting = BoxSetting.Noise(NoiseReduction.FAIBLE)
+        val messages = listOf(
+            boxSettingMessage(setting, BoxSettingResult(true, status)),
+            boxSettingMessage(setting, BoxSettingResult(true, status.copy(noise = 9))),
+            boxSettingMessage(setting, BoxSettingResult(false, status)),
+        )
+        val projected = messages.map {
+            boxUiPublication(local, LinkStatus.CONNECTED, published, published, it, published).message
+        }
+        publisher.close(token)
+        assertNull(publisher.publication.value)
+        assertEquals(listOf(
+            "Réglage appliqué et vérifié par relecture.",
+            "La valeur relue diffère du réglage demandé.",
+            "Le boîtier a refusé ce réglage.",
+        ), projected)
+    }
+
     @Test fun `resultat non verifie si publication invalidee avant livraison`() = runTest {
         val publisher = BoxReadingPublisher { true }
         val token = publisher.open()
         val published = publisher.publish(token, BoxReading(address, status))
         val local = LocalState(deviceAddress = address, boxStatus = status.copy(noise = 0))
-        val message = "Réglage non appliqué. La valeur relue est affichée."
+        val message = "La valeur relue diffère du réglage demandé."
         publisher.close(token)
         val projected = boxUiPublication(local, LinkStatus.CONNECTED, published, publisher.publication.value, message, published)
         assertFalse(projected.fresh)
@@ -54,7 +77,7 @@ class BoxReadingPublisherTest {
         val token = publisher.open()
         val published = publisher.publish(token, BoxReading(address, status))
         val local = LocalState(deviceAddress = address, boxStatus = status.copy(noise = 0))
-        val message = "Réglage non appliqué. La valeur relue est affichée."
+        val message = "La valeur relue diffère du réglage demandé."
         val replacement = publisher.publish(token, BoxReading(address, status.copy(noise = 1)))
         val replaced = boxUiPublication(local, LinkStatus.CONNECTED, replacement, publisher.publication.value, message, published)
         assertTrue(replaced.fresh)
@@ -115,7 +138,7 @@ class BoxReadingPublisherTest {
         job.await()
         assertEquals(status, store.load().boxStatus)
         assertEquals(address, publisher.publication.value?.reading?.address)
-        assertEquals(listOf("Réglage non appliqué. La valeur relue est affichée."), messages)
+        assertEquals(listOf("La valeur relue diffère du réglage demandé."), messages)
         val publication = publisher.publication.value!!
         val delayedLocal = LocalState(deviceAddress = address, boxStatus = status.copy(noise = 0))
         val projected = boxUiPublication(delayedLocal, LinkStatus.CONNECTED, publication, publication, messages.single(), publication)

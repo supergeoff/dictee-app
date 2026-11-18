@@ -98,7 +98,7 @@ class BoxSettingsFlowTest {
     @Test fun `un reglage accepte et relu confirme son application`() {
         val setting = BoxSetting.Noise(NoiseReduction.MOYEN)
         val relu = BoxStatus(100, 0, 0, noise = 9, segmentDuration = 2, backlight = 1)
-        assertEquals("Réglage appliqué et relu.", boxSettingMessage(setting, BoxSettingResult(true, relu)))
+        assertEquals("Réglage appliqué et vérifié par relecture.", boxSettingMessage(setting, BoxSettingResult(true, relu)))
     }
 
     @Test fun `un refus du boitier est signale meme si la relecture concorde`() {
@@ -112,7 +112,7 @@ class BoxSettingsFlowTest {
     @Test fun `une divergence de relecture est signalee`() {
         val setting = BoxSetting.Noise(NoiseReduction.MOYEN)
         val divergent = BoxStatus(100, 0, 0, noise = 5, segmentDuration = 0, backlight = 0)
-        assertEquals("Réglage non appliqué. La valeur relue est affichée.", boxSettingMessage(setting, BoxSettingResult(true, divergent)))
+        assertEquals("La valeur relue diffère du réglage demandé.", boxSettingMessage(setting, BoxSettingResult(true, divergent)))
     }
 
     @Test fun `une relecture divergente publie la valeur reelle`() = runTest {
@@ -132,7 +132,7 @@ class BoxSettingsFlowTest {
             published += result.status
             result
         }, onMessage = { messages += it })
-        assertEquals(listOf("Réglage non appliqué. La valeur relue est affichée."), messages)
+        assertEquals(listOf("La valeur relue diffère du réglage demandé."), messages)
         assertEquals(listOf(BoxStatus(100, 0L, 0L, 5, 0, 0)), published)
     }
 
