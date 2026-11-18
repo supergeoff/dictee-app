@@ -135,9 +135,10 @@ private data class Live(
     val boxDeletionResult: BoxDeletionResult? = null,
     val recoveryNames: Set<String> = emptySet(),
     val connectingBoxLists: Int = 0,
-    val boxStatusAddress: String? = null,   // adresse de la dernière lecture publiée par la liaison
+    val boxStatusAddress: String? = null,
     val settingBox: Boolean = false,
     val message: String? = null,
+    val messagePublication: BoxReadingPublication? = null,
 )
 
 internal fun deletionProtectedNames(local: LocalState, recoveryNames: Set<String>, sendNames: Set<String>): Set<String> =
@@ -364,11 +365,15 @@ class AppModel(
     }
 
     val ui: StateFlow<UiState> = combine(
-        localSnapshot, phoneFlow, driveFlow, combine(box.status, boxReadingPublisher.freshAddress) { link, fresh -> link to fresh }, liveFlow,
+        localSnapshot, phoneFlow, driveFlow, combine(box.status, boxReadingPublisher.publication) { link, publication -> link to publication }, liveFlow,
     ) { snapshot, phone, drive, linkSnapshot, live ->
-        val (link, fresh) = linkSnapshot
-        initialUiState(snapshot.state, snapshot.initialization)
-            ?: buildUi(checkNotNull(snapshot.state), phone, drive, link, live.copy(boxStatusAddress = fresh.takeIf { it == boxReadingPublisher.freshAddress.value }))
+        val (link, publication) = linkSnapshot
+        initialUiState(snapshot.state, snapshot.initialization) ?: run {
+            val projected = boxUiPublication(checkNotNull(snapshot.state), link, publication,
+                boxReadingPublisher.publication.value, live.message, live.messagePublication)
+            buildUi(projected.local, phone, drive, link, live.copy(
+                boxStatusAddress = publication?.reading?.address.takeIf { projected.fresh }, message = projected.message))
+        }
     }.stateIn(scope, SharingStarted.Eagerly, UiState(initialized = false))
 
     fun retryLocalState() {
@@ -520,7 +525,14 @@ class AppModel(
             val current = localRepository.awaitInitialized()
             if (current.deviceAddress != address || !boxSettingWritable(address)) return@withTransferLock
             withContext(Dispatchers.IO) {
-                deliverBoxSetting(setting, send = { box.writeSetting(address, it) }, onMessage = ::say)
+                var publication: BoxReadingPublication? = null
+                deliverBoxSetting(setting, send = {
+                    val (result, published) = box.writeSetting(address, it)
+                    publication = published
+                    result
+                }, onMessage = { message ->
+                    liveFlow.update { it.copy(message = message, messagePublication = publication) }
+                })
             }
         }
     }
@@ -528,7 +540,7 @@ class AppModel(
     /** Une écriture exige une lecture fraîche de la liaison courante et aucun travail occupant le boîtier. */
     private fun boxSettingWritable(address: String): Boolean {
         val live = liveFlow.value
-        return isBoxStatusFresh(address, boxReadingPublisher.freshAddress.value, box.status.value) &&
+        return isBoxStatusFresh(address, boxReadingPublisher.publication.value?.reading?.address, box.status.value) &&
             !live.recovering && !live.deletingBox && !live.deletingPhone && !live.refreshing && live.connectingBoxLists == 0 && !searching
     }
 
@@ -1256,7 +1268,7 @@ class AppModel(
         }
     }
 
-    fun consumeMessage() = liveFlow.update { it.copy(message = null) }
+    fun consumeMessage() = liveFlow.update { it.copy(message = null, messagePublication = null) }
 
     // --- Lectures
 
@@ -1358,7 +1370,7 @@ class AppModel(
      */
     private fun update(change: (LocalState) -> LocalState) = localRepository.update(change)
 
-    private fun say(message: String) = liveFlow.update { it.copy(message = message) }
+    private fun say(message: String) = liveFlow.update { it.copy(message = message, messagePublication = null) }
 
     /**
      * Une action de l'utilisateur au journal, source APP, écrite hors du fil principal et dans l'ordre des actions.

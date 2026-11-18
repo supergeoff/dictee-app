@@ -43,12 +43,12 @@ internal class BoxConnection(context: Context, private val log: Log, private val
      * Écrit le réglage puis relit l'état. La relecture, réussie ou refusée, est publiée durablement
      * avec l'adresse de la liaison : l'affichage porte la valeur réelle. Une exception ne publie rien.
      */
-    suspend fun writeSetting(address: String, setting: BoxSetting): BoxSettingResult =
+    suspend fun writeSetting(address: String, setting: BoxSetting): Pair<BoxSettingResult, BoxReadingPublication> =
         withSession(address) { session ->
             val result = session.writeSetting(setting)
             val generation = synchronized(lock) { current?.generation ?: throw SessionException("liaison Bluetooth coupée") }
-            publisher.publish(generation, BoxReading(address, result.status))
-            result
+            val publication = publisher.publish(generation, BoxReading(address, result.status))
+            result to publication
         }
 
     /** Exécute [block] avec la session du boîtier d'adresse [address]. Ouvre la liaison si elle est fermée, ou si elle va vers un autre boîtier. */

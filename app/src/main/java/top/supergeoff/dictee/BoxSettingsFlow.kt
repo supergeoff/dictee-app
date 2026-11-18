@@ -24,6 +24,21 @@ suspend fun recordBoxReading(repository: LocalStateRepository, reading: BoxReadi
 fun isBoxStatusFresh(associatedAddress: String?, readingAddress: String?, link: LinkStatus): Boolean =
     associatedAddress != null && readingAddress == associatedAddress && link == LinkStatus.CONNECTED
 
+internal data class BoxUiPublication(val local: LocalState, val fresh: Boolean, val message: String?)
+
+/** La valeur fraîche et son éventuel message proviennent de la même publication durable. */
+internal fun boxUiPublication(
+    local: LocalState, link: LinkStatus, publication: BoxReadingPublication?,
+    current: BoxReadingPublication?, message: String?, messagePublication: BoxReadingPublication?,
+): BoxUiPublication {
+    val reading = publication?.takeIf { it === current && isBoxStatusFresh(local.deviceAddress, it.reading.address, link) }
+    return BoxUiPublication(
+        local = if (reading != null) local.copy(boxStatus = reading.reading.status) else local,
+        fresh = reading != null,
+        message = message.takeIf { messagePublication == null || messagePublication === reading },
+    )
+}
+
 /** Une seule écriture de réglage à la fois : [tryStart] est faux tant qu'une écriture est admise. */
 class BoxSettingAdmission {
     private val active = AtomicBoolean(false)
