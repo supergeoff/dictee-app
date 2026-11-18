@@ -1,5 +1,6 @@
 package top.supergeoff.dictee
 
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
@@ -48,6 +49,29 @@ class BoxSettingsFlowTest {
         val current = recordBoxReading(repo, BoxReading("99:88:77:66:55:44", BoxStatus(99, 9, 9, 9, 9, 9)))
         assertEquals(avant.boxStatus, current.boxStatus)
         assertEquals(avant, store.load())
+    }
+
+    @Test fun `une lecture retardee ne remplace pas le nouveau boitier`() = runBlocking {
+        val store = LocalStateStore(file())
+        store.save(LocalState(deviceAddress = address))
+        val repo = LocalStateRepository(store)
+        repo.awaitInitialized()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val association = repo.update {
+            entered.countDown()
+            check(release.await(10, TimeUnit.SECONDS))
+            it.copy(deviceAddress = "nouveau", boxStatus = null)
+        }
+        assertTrue(entered.await(5, TimeUnit.SECONDS))
+        val reading = async(start = CoroutineStart.UNDISPATCHED) {
+            recordBoxReading(repo, BoxReading(address, BoxStatus(71, 10, 5, 0, 0, 0)))
+        }
+        release.countDown()
+        association.await().getOrThrow()
+        reading.await()
+        assertEquals("nouveau", store.load().deviceAddress)
+        assertNull(store.load().boxStatus)
     }
 
     @Test fun `un echec de sauvegarde de la lecture est propage`() = runTest {

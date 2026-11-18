@@ -133,6 +133,16 @@ class V05SessionTest {
     }
 
     @Test
+    fun `une information invalide ne bloque pas la liste`() = runTest {
+        val link = FakeLink { cmd, _ ->
+            if (cmd == Cmd.INFO) reply(cmd, ByteArray(51)) else sessionReplies(cmd)
+        }
+        val session = session(link)
+        session.handshake()
+        assertTrue(session.listRecords().isNotEmpty())
+    }
+
+    @Test
     fun `un appairage refuse arrete la session`() = runTest {
         val link = FakeLink { cmd, _ ->
             if (cmd == Cmd.BIND) reply(Cmd.BIND, byteArrayOf(1)) else sessionReplies(cmd)

@@ -41,15 +41,21 @@ class BoxStatusTest {
     }
 
     @Test fun lesEntiersDontLeBitDePoidsFortVautUnSontNonSignes() {
-        val status = BoxStatus.parse(statusPayload(total = 0xEA1E, free = 0xEA07, battery = 0xFF,
+        val status = BoxStatus.parse(statusPayload(total = 0xEA1E, free = 0xEA07, battery = 100,
             noise = 0xFF, duration = 0xFF, backlight = 0xFF))
         assertEquals(59_934L, status.totalMb)
         assertEquals(59_911L, status.freeMb)
-        assertEquals(255, status.batteryPercent)
+        assertEquals(100, status.batteryPercent)
         assertEquals(0xFF, status.noise)
         assertEquals(0xFF, status.segmentDuration)
         assertEquals(0xFF, status.backlight)
         assertEquals(4_294_967_295L, BoxStatus.parse(statusPayload(total = -1)).totalMb)
+    }
+
+    @Test fun uneBatterieHorsPlageEstRejetee() {
+        for (battery in listOf(101, 255)) {
+            assertThrows(IllegalArgumentException::class.java) { BoxStatus.parse(statusPayload(battery = battery)) }
+        }
     }
 
     @Test fun lesQuatreNiveauxDeBruitOntUnLibelle() {

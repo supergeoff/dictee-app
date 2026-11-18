@@ -18,8 +18,10 @@ data class BoxStatus(
             require(payload.size == PAYLOAD_LENGTH) {
                 "état du boîtier : ${payload.size} octets, $PAYLOAD_LENGTH attendus"
             }
+            val battery = payload[9].toInt() and 0xff
+            require(battery <= 100) { "batterie hors plage : $battery" }
             return BoxStatus(
-                batteryPercent = payload[9].toInt() and 0xff,
+                batteryPercent = battery,
                 totalMb = readUnsignedInt(payload, 0),
                 freeMb = readUnsignedInt(payload, 4),
                 noise = payload[39].toInt() and 0xff,

@@ -82,7 +82,7 @@ class V05Session(
 
     /** Appairage rejoué, numéro de série et informations pour le journal, mise à l'heure.
      * Renvoie l'état lu avec 0x05. */
-    suspend fun handshake(): BoxStatus {
+    suspend fun handshake(): BoxStatus? {
         val id = command(Cmd.BIND_READ).payload
         if (id.isEmpty()) throw SessionException("identifiant d'appairage vide")
         journal("identifiant d'appairage : ${Payloads.bindIdText(id)}")
@@ -90,7 +90,11 @@ class V05Session(
             throw SessionException("appairage refusé")
         }
         journal("numéro de série : ${String(command(Cmd.SERIAL).payload, Charsets.US_ASCII)}")
-        val status = readStatus()
+        val info = command(Cmd.INFO).payload
+        val status = try { BoxStatus.parse(info) } catch (e: IllegalArgumentException) {
+            journal("état du boîtier invalide : ${e.message}")
+            null
+        }
         command(Cmd.TIME, Payloads.timeRequest(clock()))
         return status
     }
@@ -104,8 +108,17 @@ class V05Session(
      * (délai dépassé, coupure) remontent sans relance de la commande de réglage.
      */
     suspend fun writeSetting(setting: BoxSetting): BoxSettingResult {
-        val accepted = Payloads.status(command(setting.command, byteArrayOf(setting.raw.toByte())).payload) == 0
-        return BoxSettingResult(accepted, readStatus())
+        journal("réglage demandé : commande 0x%02x, valeur 0x%02x".format(setting.command, setting.raw))
+        val ack = Payloads.status(command(setting.command, byteArrayOf(setting.raw.toByte())).payload)
+        journal("réglage : statut 0x%02x".format(ack))
+        val status = readStatus()
+        val actual = when (setting) {
+            is BoxSetting.Noise -> status.noise
+            is BoxSetting.Duration -> status.segmentDuration
+            is BoxSetting.Backlight -> status.backlight
+        }
+        journal("réglage : valeur relue 0x%02x".format(actual))
+        return BoxSettingResult(ack == 0, status)
     }
 
     /** La fonction envoie `0x18` avec 00, puis lit la liste des enregistrements jusqu'à la notification de fin. */

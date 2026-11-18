@@ -11,9 +11,9 @@ data class BoxReading(val address: String, val status: BoxStatus)
  * une lecture reçue pour une ancienne adresse est ignorée, sans écriture. Propage l'échec d'une sauvegarde.
  */
 suspend fun recordBoxReading(repository: LocalStateRepository, reading: BoxReading): LocalState {
-    val current = repository.awaitInitialized()
-    if (current.deviceAddress != reading.address) return current
-    return repository.updateDurably { it.copy(boxStatus = reading.status) }
+    return repository.updateDurably {
+        if (it.deviceAddress == reading.address) it.copy(boxStatus = reading.status) else it
+    }
 }
 
 /**

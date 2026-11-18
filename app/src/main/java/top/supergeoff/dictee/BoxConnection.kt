@@ -85,7 +85,7 @@ class BoxConnection(context: Context, private val log: Log) {
             if (dropped.get()) throw SessionException("liaison Bluetooth coupée")
             statusFlow.value = LinkStatus.CONNECTED
         }
-        readingsFlow.tryEmit(BoxReading(address, status))
+        if (status != null) readingsFlow.tryEmit(BoxReading(address, status))
         return session
     }
 
