@@ -23,8 +23,8 @@ android {
         applicationId = "top.supergeoff.dictee"
         minSdk = 31
         targetSdk = 35
-        versionCode = 22
-        versionName = "0.10.1"
+        versionCode = 23
+        versionName = "0.10.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
