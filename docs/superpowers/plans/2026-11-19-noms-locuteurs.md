@@ -151,3 +151,15 @@ La recette sur téléphone a montré que `dictee-diarize` produit des étiquette
 - **UI.** Le dialogue par locuteur est remplacé par un dialogue « Locuteurs » unique (`ui/SpeakersDialog.kt`), ouvert depuis n'importe quelle puce ou étiquette de segment. Chaque ligne a un bouton lecture et un champ avec suggestions du carnet ; « Enregistrer » est désactivé sans changement ou avec un nom invalide ; une phrase annonce les fusions, sans confirmation. `SpeakerRenamePresentation.kt` porte l'état du dialogue et perd `speakerMergeNotice` et `speakerNameChoices`.
 - **Documentation.** `docs/specification.md` et la spec du chantier décrivent le nouveau parcours, les nouvelles règles et l'observation des étiquettes d'une lettre.
 - **Vérification.** `./gradlew testDebugUnitTest assembleDebug lint` et `./gradlew compileDebugAndroidTestKotlin` passent. La recette sur téléphone du renommage groupé et du MD refait reste à faire.
+
+### Seconde révision : retour à l'origine et prompt
+
+L'utilisateur veut pouvoir retirer un nom et revenir à l'étiquette d'origine, et que le MD cite les intervenants nommés. Deux changements, chacun en test d'abord pour le code pur et le coordinateur.
+
+- **Prompt par défaut** (`SynthesisSettings.kt`, `LocalState.kt`). Le texte demande d'attribuer propos, décisions et actions aux intervenants nommés (porteur nommé dans Actions), sans rien inventer et sans traiter une étiquette d'une lettre ou « Non disponible » comme un nom. `PREVIOUS_DEFAULT_SYNTHESIS_PROMPT` garde l'ancien texte : `readSynthesisSettings` remplace un prompt enregistré identique à lui par le nouveau défaut, sans changer la version de `state.json`. Un autre prompt, y compris celui figé dans une tâche, ne change jamais.
+- **`SpeakerNames.kt`.** `SpeakerLabel(current, original?)` ; `labels` en rend un par couple distinct. `renameInVtt(vtt, renames: Map<SpeakerLabel, String>)` écrit `<v.spk-ORIG Nom>`, garde une classe `spk-` existante et les autres classes, et retire la classe quand le nom égale l'origine. Une origine hors `[A-Za-z0-9_-]+` ne reçoit pas de classe. `WebVtt.parse` rend le nom courant sans changement.
+- **`SpeakerRenamePresentation.kt`.** `SpeakerLabel.shownOrigin` et `initialInput`, `speakerRenameDraft(labels, inputs)` par `SpeakerLabel` : un champ vide vise l'origine, une fusion déjà enregistrée n'est pas annoncée de nouveau.
+- **`TranscriptionCoordinator.renameSpeakers`.** Clé `SpeakerLabel`. Une cible égale à l'origine passe sans validation de nom et n'entre pas dans le carnet. Mêmes garde-fous qu'avant ; un couple inconnu est « Locuteur introuvable. ».
+- **UI.** `AppModel.readTranscript` rend un `TranscriptFile(cues, speakers)`. `SpeakersDialog` préremplit le nom courant, affiche l'origine à gauche et un bouton ✕ (paramètre `trailing` de `DicteeTextField`).
+- **Documentation.** `docs/specification.md` et la spec du chantier décrivent le format `spk-`, le retour, la fusion défaisable et le prompt.
+- **Vérification.** `./gradlew testDebugUnitTest assembleDebug lint compileDebugAndroidTestKotlin` passent. La recette sur téléphone (nommer, revenir à l'étiquette, fusionner puis défaire, MD refait avec les noms) reste à faire.

@@ -15,6 +15,21 @@ La recette sur téléphone a relevé que `dictee-diarize` produit des étiquette
 - la fusion n'a plus de dialogue de confirmation, seulement une phrase d'avertissement ;
 - la provenance n'est plus réécrite, puisque le VTT change et que le MD est refait.
 
+## Seconde révision : retour à l'étiquette d'origine
+
+Retirer un nom perdait l'étiquette d'origine, puisque le VTT ne gardait que la valeur de `<v>`. Le renommage garde maintenant l'origine dans une classe de voix :
+
+- `<v A>` renommé en Marie devient `<v.spk-A Marie>`. L'origine doit correspondre à `[A-Za-z0-9_-]+` ; sinon aucune classe n'est posée et le retour est impossible pour ce locuteur.
+- Une balise qui porte déjà `spk-X` la garde : `X` reste l'origine après plusieurs renommages. Les autres classes sont préservées, la classe `spk-` s'ajoute après elles.
+- Revenir à l'origine retire la classe : `<v X>`, ou `<v.loud X>` s'il reste une autre classe.
+- `SpeakerNames.labels` rend des `SpeakerLabel(current, original?)` : le nom courant et l'origine (la classe `spk-`, ou la valeur elle-même tant que rien n'a été renommé, si elle correspond au motif).
+- Le dialogue « Locuteurs » affiche l'origine à gauche, un champ prérempli avec le nom courant s'il diffère de l'origine (« (laisser A) » sinon) et un bouton ✕ qui vide la saisie. Un champ vidé sur un locuteur nommé ramène à l'origine ; « Enregistrer » exige un changement effectif.
+- Une fusion garde la classe de chaque balise. Deux locuteurs fusionnés sous « Marie » ont donc deux lignes, `(Marie, A)` et `(Marie, B)`, et les vider rend A et B. Les correspondances de `renameSpeakers` et de `renameInVtt` ont pour clé le `SpeakerLabel` (nom courant et origine), non le seul nom courant, pour distinguer ces lignes.
+- Une origine rétablie n'entre pas dans le carnet. Le retour n'est pas soumis à la limite de 40 caractères.
+- La rangée de puces, les étiquettes des segments et `WebVtt.parse` restent sur le nom courant. Le MD est refait après chaque `Done`.
+
+Le prompt de synthèse par défaut demande en plus d'attribuer propos, décisions et actions aux intervenants nommés, sans traiter une étiquette d'une lettre ni « Non disponible » comme un nom. Un prompt enregistré identique à l'ancien défaut suit le nouveau à la lecture de l'état local ; un prompt personnalisé ne change jamais.
+
 ## Choix
 
 | Sujet | Décision | Raison |
@@ -23,7 +38,7 @@ La recette sur téléphone a relevé que `dictee-diarize` produit des étiquette
 | Fichiers | Le VTT est réécrit (balises `<v>`), le MD est refait par la synthèse existante | Les étiquettes d'une lettre ne figurent pas dans le MD : un remplacement n'aurait rien à remplacer ou toucherait des mots ordinaires. |
 | Granularité | Un dialogue pour tous les locuteurs, une écriture du VTT par enregistrement | Un seul VTT modifié, une seule synthèse relancée. |
 | Carnet de noms | Dans `state.json`, sur le téléphone uniquement | Le plus simple ; aucune donnée ne quitte le téléphone en dehors des fichiers. |
-| Format des étiquettes | Aucune hypothèse dans le code : toute valeur de `<v …>` est une étiquette renommable. Observé : une lettre (A, B, C…) | Le code reste valable si le format change. |
+| Format des étiquettes | Aucune hypothèse dans le code : toute valeur de `<v …>` est une étiquette renommable. Observé : une lettre (A, B, C…). Le retour à l'origine ne vaut que pour une étiquette `[A-Za-z0-9_-]+` | Le code reste valable si le format change. |
 
 ## Parcours
 
@@ -39,9 +54,9 @@ La recette sur téléphone a relevé que `dictee-diarize` produit des étiquette
           │ toucher n'importe quelle puce (ou l'étiquette d'un segment)
           ▼
 ┌─ Locuteurs ──────────────────────────┐
-│ A  ▶  [ Marie              ▾ ]       │
-│ B  ▶  [ Paul D.            ▾ ]       │
-│ C  ▶  [ (laisser C)        ▾ ]       │
+│ A  ▶  [ Marie            ✕ ]         │
+│ B  ▶  [ Paul D.          ✕ ]         │
+│ C  ▶  [ (laisser C)        ]         │
 │ Le MD sera refait avec ces noms.     │
 │              [Annuler] [Enregistrer] │
 └──────────────────────────────────────┘
@@ -49,9 +64,9 @@ La recette sur téléphone a relevé que `dictee-diarize` produit des étiquette
 
 - La rangée « Locuteurs » liste les valeurs distinctes de `<v>` dans l'ordre d'apparition. Sans balise `<v>`, elle n'apparaît pas.
 - Chaque ligne du dialogue porte une étiquette, un bouton ▶ et un champ. ▶ place le lecteur de la fiche au premier segment de l'étiquette et le lance.
-- Chaque champ est une saisie avec les suggestions du carnet, filtrées sans tenir compte de la casse ni des accents. Un champ vide laisse l'étiquette. Un nom absent du carnet s'y ajoute à l'enregistrement.
+- Chaque champ est une saisie avec les suggestions du carnet, filtrées sans tenir compte de la casse ni des accents. Un champ vide vise l'origine : il laisse l'étiquette d'un locuteur non nommé et ramène un locuteur nommé à son étiquette. Un nom absent du carnet s'y ajoute à l'enregistrement.
 - « Enregistrer » est désactivé quand aucun nom ne change ou quand un nom saisi est invalide.
-- Si plusieurs étiquettes portent le même nom, une phrase sous la liste l'annonce : « A et B seront fusionnés. ». Il n'y a pas de dialogue de confirmation.
+- Si plusieurs locuteurs finissent sous le même nom, une phrase sous la liste l'annonce : « A et B seront fusionnés. ». Il n'y a pas de dialogue de confirmation.
 
 ### Après l'enregistrement
 
@@ -73,8 +88,8 @@ Réglages › Transcription › Locuteurs liste les noms, du plus récent au moi
 
 - **Disponibilité.** Le nommage exige un VTT local lisible. Il est indisponible pendant une transcription ou une synthèse active sur cet enregistrement, avec la raison affichée. Un VTT modifié pendant qu'une tâche tourne la suspendrait ; cette règle l'évite.
 - **Nom valide.** Texte d'une ligne, 1 à 40 caractères après suppression des espaces aux bords, sans `<`, `>`, `&` ni saut de ligne. Ces caractères ne sont pas échappés : un nom qui les contient est refusé.
-- **Une écriture par enregistrement.** Toutes les correspondances (étiquette vers nom) sont appliquées en une passe et promues en une seule écriture du VTT. Une étiquette absente des correspondances reste inchangée. Une correspondance vide, ou qui ne change aucun nom, est refusée avec « Aucun nom modifié. » sans écriture. Une étiquette introuvable dans le VTT refuse tout le renommage.
-- **Réécriture du VTT.** Seule la valeur des balises `<v étiquette>` figurant dans les correspondances change ; classes `<v.x …>`, horodatages, notes, styles et texte restent identiques à l'octet près. Le résultat est revalidé par `WebVtt.parse`, puis promu par le mécanisme `.part` / `.old` existant, seulement si le VTT garde l'empreinte lue.
+- **Une écriture par enregistrement.** Toutes les correspondances (locuteur vers nom) sont appliquées en une passe et promues en une seule écriture du VTT. Un locuteur absent des correspondances reste inchangé. Une correspondance vide, ou qui ne change aucun nom, est refusée avec « Aucun nom modifié. » sans écriture. Un locuteur introuvable dans le VTT refuse tout le renommage.
+- **Réécriture du VTT.** Seule la valeur des balises `<v étiquette>` figurant dans les correspondances change, avec la classe `spk-` décrite plus haut ; les autres classes `<v.x …>`, horodatages, notes, styles et texte restent identiques à l'octet près. Le résultat est revalidé par `WebVtt.parse`, puis promu par le mécanisme `.part` / `.old` existant, seulement si le VTT garde l'empreinte lue.
 - **Fusion.** Plusieurs étiquettes envoyées vers le même nom fusionnent. Un nom égal à une étiquette laissée telle quelle fusionne aussi. L'écran l'annonce, sans confirmation.
 - **MD.** Le nommage n'écrit jamais le MD. Après un renommage réussi, l'app lance « Refaire le MD » sur le nouveau VTT.
 - **Provenance.** Elle n'est plus réécrite : le VTT change, donc le MD existant est présenté comme issu de l'ancien VTT jusqu'à son remplacement par le MD refait.
@@ -84,7 +99,7 @@ Réglages › Transcription › Locuteurs liste les noms, du plus récent au moi
 
 ## Code touché
 
-- `SpeakerNames.kt` (sans dépendance Android, test d'abord) : liste des étiquettes, réécriture du VTT par correspondances, validation du nom, tri et filtre du carnet.
+- `SpeakerNames.kt` (sans dépendance Android, test d'abord) : liste des locuteurs (`SpeakerLabel`), réécriture du VTT par correspondances, validation du nom, tri et filtre du carnet.
 - `SpeakerRenamePresentation.kt` (sans dépendance Android, test d'abord) : état du dialogue (correspondances effectives, saisies invalides, phrases de fusion), suggestions, messages.
 - `LocalState.kt` : carnet de noms et migration.
 - `TranscriptionCoordinator.kt` : `renameSpeakers`, contrôle de disponibilité, une promotion du VTT, carnet, journal (source APP).
