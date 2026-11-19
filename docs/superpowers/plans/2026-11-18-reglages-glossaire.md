@@ -30,6 +30,16 @@
 - Une tâche relue après changement des réglages doit envoyer son ancien glossaire (tâche 3).
 - Un aller-retour par le prompt ou les dossiers Drive doit revenir à la rubrique d’origine, sans perte du brouillon (tâche 4).
 
+## Résultat d’exécution
+
+Le code et les tests ont été implémentés dans `feature/reglages-glossaire`. Les tests unitaires, `assembleDebug`, `lint` et `compileDebugAndroidTestKotlin` ont passé après la revue indépendante. Les cases ci-dessous décrivent la procédure originale ; les preuves d’exécution sont les commits et les résultats de commande, pas une recette UI supposée.
+
+La revue a relevé que le test du menu ne couvrait pas le routage de l’activité. Le routage et les opérations de pile utilisés par `MainActivity` ont donc été extraits dans `SettingsRoutes.kt`, avec des tests unitaires écrits et exécutés en échec avant implémentation, puis réussis. Ils couvrent les accès directs, les correspondances des rubriques, le retour Prompt/Drive et les callbacks périmés.
+
+La validation UI comportementale et visuelle reste à effectuer : aucun appareil Android n’est connecté. Les tests Compose sont compilés mais n’ont pas été exécutés. Le retour visuel et la conservation du brouillon sur appareil ne sont pas présentés comme vérifiés. Aucun push ni aucune fusion n’a été effectué.
+
+Décisions d’exécution : utiliser les outils locaux et le JDK via `mise exec`, avec le SDK fourni par `ANDROID_HOME` ; conserver les erreurs HTTP existantes ; ajouter la couverture du routage de production en tests unitaires faute d’appareil. Cette dernière vérifie les routes et la pile mais ne remplace pas une recette réelle des écrans.
+
 ## Préparation d’exécution
 
 - [ ] Lire la spec, charger les skills d’exécution, TDD et worktrees, puis créer un worktree isolé selon le skill. La spec et ce plan étant initialement non suivis, les transférer explicitement et ne pas emporter les autres fichiers non suivis.

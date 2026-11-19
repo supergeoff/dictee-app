@@ -1,6 +1,5 @@
 package top.supergeoff.dictee.ui
 
-import androidx.compose.foundation.relocation.bringIntoViewRequester
 
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
@@ -25,8 +24,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Button
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -58,7 +55,10 @@ import top.supergeoff.dictee.LocalState
 import top.supergeoff.dictee.R
 import top.supergeoff.dictee.ThemeChoice
 import top.supergeoff.dictee.UiState
-import top.supergeoff.dictee.SettingsDestination
+/** Une rubrique par écran, sans formulaire imbriqué sur la page principale. */
+enum class SettingsPage(val title: String) {
+    HOME("Réglages"), BOX("Boîtier"), STORAGE("Stockage et Google Drive"), TRANSCRIPTION("Transcription"), SYNTHESIS("Synthèse")
+}
 
 private val SegmentShape = RoundedCornerShape(Tokens.RADIUS_INNER_DP.dp)
 
@@ -78,21 +78,11 @@ fun SettingsScreen(
     onDriveFolders: () -> Unit,
     onJournal: () -> Unit,
     onPrompt: () -> Unit,
-    destination: SettingsDestination? = null,
+    page: SettingsPage = SettingsPage.HOME,
+    onPage: (SettingsPage) -> Unit,
 ) {
-    val storageBringIntoView = remember { androidx.compose.foundation.relocation.BringIntoViewRequester() }
-    val transcriptionBringIntoView = remember { androidx.compose.foundation.relocation.BringIntoViewRequester() }
-    val synthesisBringIntoView = remember { androidx.compose.foundation.relocation.BringIntoViewRequester() }
-    LaunchedEffect(destination) {
-        when (destination) {
-            SettingsDestination.STORAGE -> storageBringIntoView.bringIntoView()
-            SettingsDestination.TRANSCRIPTION -> transcriptionBringIntoView.bringIntoView()
-            SettingsDestination.SYNTHESIS -> synthesisBringIntoView.bringIntoView()
-            null -> Unit
-        }
-    }
     Column(modifier = Modifier.fillMaxSize().background(Dictee.colors.background)) {
-        TopBar("Réglages", onBack)
+        TopBar(page.title, onBack)
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -101,20 +91,32 @@ fun SettingsScreen(
                 .padding(start = 16.dp, end = 16.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
-            BoxSection(ui.local, busy = ui.recovering, onAssociate = onAssociate)
-            androidx.compose.foundation.layout.Box(Modifier.bringIntoViewRequester(storageBringIntoView)) {
-                StorageSection(ui.phoneFolder, busy = ui.recovering || ui.sending, onChange = model::choosePhoneFolder)
+            when (page) {
+                SettingsPage.HOME -> SettingsHomeSections(ui.local.theme, model::setTheme, onJournal, onPage)
+                SettingsPage.BOX -> BoxSection(ui.local, busy = ui.recovering, onAssociate = onAssociate)
+                SettingsPage.STORAGE -> {
+                    StorageSection(ui.phoneFolder, busy = ui.recovering || ui.sending, onChange = model::choosePhoneFolder)
+                    DriveSection(ui.local, model, onDriveFolders)
+                }
+                SettingsPage.TRANSCRIPTION -> TranscriptionSection(ui.local, model.transcriptionForm, model::setAutoProcessAfterRecovery)
+                SettingsPage.SYNTHESIS -> SynthesisSection(ui.local.synthesisSettings, model.synthesisForm, onPrompt)
             }
-            DriveSection(ui.local, model, onDriveFolders)
-            androidx.compose.foundation.layout.Box(Modifier.bringIntoViewRequester(transcriptionBringIntoView)) {
-                TranscriptionSection(ui.local, model.transcriptionForm, model::setAutoProcessAfterRecovery)
-            }
-            androidx.compose.foundation.layout.Box(Modifier.bringIntoViewRequester(synthesisBringIntoView)) {
-                SynthesisSection(ui.local.synthesisSettings, model.synthesisForm, onPrompt)
-            }
-            AppearanceSection(ui.local.theme, model::setTheme)
-            AboutSection(onJournal)
         }
+    }
+}
+
+@Composable
+internal fun SettingsHomeSections(theme: ThemeChoice, onTheme: (ThemeChoice) -> Unit, onJournal: () -> Unit, onPage: (SettingsPage) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+        GroupCard {
+            val pages = listOf(SettingsPage.BOX, SettingsPage.STORAGE, SettingsPage.TRANSCRIPTION, SettingsPage.SYNTHESIS)
+            pages.forEachIndexed { index, page ->
+                if (index > 0) RowDivider()
+                ListRow(title = page.title, onClick = { onPage(page) }) { Chevron() }
+            }
+        }
+        AppearanceSection(theme, onTheme)
+        AboutSection(onJournal)
     }
 }
 
@@ -248,20 +250,25 @@ internal fun TranscriptionSection(local: LocalState, form: TranscriptionSettings
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             AutomaticProcessingSetting(local.autoProcessAfterRecovery, onAutoProcessChange)
             if (local.transcriptionAddressNeedsReview) {
-                Text("L’ancienne adresse de transcription était invalide. Saisis une adresse de serveur et enregistre les réglages.", color = Dictee.colors.textSecondary)
+                Text("L’ancienne adresse de transcription était invalide. Saisis une adresse de serveur et enregistre les réglages.", style = Dictee.type.caption, color = Dictee.colors.textSecondary)
             }
-            OutlinedTextField(draft.baseUrl, form::setBaseUrl, enabled = draft.initialized && !draft.saving, label = { Text("Adresse du serveur (/v1)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            Text("Adresse du serveur (/v1)", style = Dictee.type.label, color = Dictee.colors.text)
+            DicteeTextField(draft.baseUrl, form::setBaseUrl, enabled = draft.initialized && !draft.saving, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.fillMaxWidth().testTag("transcription-address").semantics { contentDescription = "Adresse du serveur (/v1)" })
             Text("Clé", style = Dictee.type.label, color = Dictee.colors.text)
             DicteeTextField(draft.secret, form::setSecret, enabled = draft.initialized && !draft.saving, placeholder = if (settings.credentialRef != null) "••••••••" else null, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth().testTag("transcription-secret").semantics { contentDescription = "Clé" })
-            Text(if (settings.credentialRef == null) "Aucune clé enregistrée" else "Une clé est enregistrée. Saisis une nouvelle clé pour la remplacer.", color = Dictee.colors.textSecondary)
-            OutlinedTextField(draft.language, form::setLanguage, enabled = draft.initialized && !draft.saving, label = { Text("Langue") }, supportingText = { Text("auto : détection automatique (français et anglais).") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(draft.model, form::setModel, enabled = draft.initialized && !draft.saving, label = { Text("Modèle") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            Button(onClick = { form.submit() }, enabled = draft.initialized && !draft.saving) { Text(if (draft.saving) "Enregistrement…" else "Enregistrer") }
-            draft.message?.let { Text(it, color = Dictee.colors.textSecondary) }
+            Text(if (settings.credentialRef == null) "Aucune clé enregistrée" else "Une clé est enregistrée. Saisis une nouvelle clé pour la remplacer.", style = Dictee.type.caption, color = Dictee.colors.textSecondary)
+            Text("Langue", style = Dictee.type.label, color = Dictee.colors.text)
+            DicteeTextField(draft.language, form::setLanguage, enabled = draft.initialized && !draft.saving, modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Langue" })
+            Text("auto : détection automatique (français et anglais).", style = Dictee.type.caption, color = Dictee.colors.textSecondary)
+            Text("Modèle", style = Dictee.type.label, color = Dictee.colors.text)
+            DicteeTextField(draft.model, form::setModel, enabled = draft.initialized && !draft.saving, modifier = Modifier.fillMaxWidth().testTag("transcription-model").semantics { contentDescription = "Modèle" })
+            GlossaryEditor(form)
+            PrimaryButton(if (draft.saving) "Enregistrement…" else "Enregistrer", enabled = draft.initialized && !draft.saving, modifier = Modifier.fillMaxWidth().testTag("transcription-save")) { form.submit() }
+            draft.message?.let { Text(it, style = Dictee.type.bodySm, color = Dictee.colors.text) }
             transcriptionTaskSettingsMessages(local.transcriptionTasks).forEach { message ->
-                Text(message, color = Dictee.colors.textSecondary)
+                Text(message, style = Dictee.type.caption, color = Dictee.colors.textSecondary)
             }
-            Text("Le test de connexion sera disponible ultérieurement.", color = Dictee.colors.textSecondary)
+            Text("Le test de connexion sera disponible ultérieurement.", style = Dictee.type.caption, color = Dictee.colors.textSecondary)
         }
     }
 }
