@@ -13,7 +13,7 @@ class SpeakerRenamePresentationTest {
     private val labels = listOf(a, b, c)
 
     @Test fun `le message annonce le MD refait ou donne la raison du refus`() {
-        assertEquals("VTT mis à jour. Le MD est refait avec ces noms.", speakerRenameMessage(SpeakerRenameResult.Done))
+        assertEquals("VTT mis à jour. Le MD va être refait avec ces noms.", speakerRenameMessage(SpeakerRenameResult.Done))
         assertEquals("Aucun nom modifié.", speakerRenameMessage(SpeakerRenameResult.Refused("Aucun nom modifié.")))
     }
 

@@ -73,7 +73,7 @@ Le prompt de synthèse par défaut demande en plus d'attribuer propos, décision
 ```
 │ Locuteurs : [Marie ✎] [Paul D. ✎] [C ✎] │
 │ 00:00 · Marie                        │
-toast : « VTT mis à jour. Le MD est refait avec ces noms. »
+toast : « VTT mis à jour. Le MD va être refait avec ces noms. »
 ```
 
 L'app lance ensuite « Refaire le MD » sur le nouveau VTT, comme le fait le menu de la fiche. Si la synthèse n'est pas configurée, l'app affiche son message habituel (« Réglages de synthèse à compléter. Ouvre Réglages, rubrique Synthèse. ») ; sans MP3 sur le téléphone, la synthèse ne part pas. Dans ces cas le VTT reste renommé et « Refaire le MD » du menu de la fiche permet de relancer plus tard. Les toasts de l'app ne portent pas d'action.

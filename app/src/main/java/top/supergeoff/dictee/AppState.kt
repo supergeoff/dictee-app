@@ -101,7 +101,7 @@ sealed class UiRequest {
 }
 
 /** Contenu lisible d'un VTT : ses segments (locuteur = nom courant) et ses locuteurs avec leur origine. */
-data class TranscriptFile(val cues: List<VttCue>, val speakers: List<SpeakerLabel>)
+data class TranscriptFile(val cues: List<VttCue>, val speakers: List<SpeakerLabel>, val firstCueMs: Map<SpeakerLabel, Long>)
 
 /** Dossier du téléphone tel que lu : ses fichiers, et s'il répond. */
 internal data class PhoneSnapshot(val files: List<PhoneFile> = emptyList(), val ok: Boolean = false, val revision: Long = 0, val documentHashes: Map<String, String> = emptyMap(), val folderUri: String? = null) {
@@ -866,11 +866,14 @@ class AppModel(
      * Lance la transcription de [names] (null : tout ce qui est éligible). La planification WorkManager est confirmée avant
      * la tâche durable et le service ; la boucle interactive suit ensuite les tâches jusqu'à leur fin ou leur suspension.
      */
-    fun transcribe(names: Set<String>?, request: RequestedWork = RequestedWork.MISSING, resumeRecording: Boolean = false) {
+    fun transcribe(
+        names: Set<String>?, request: RequestedWork = RequestedWork.MISSING, resumeRecording: Boolean = false,
+        announceRequestExclusions: Boolean = false,
+    ) {
         val job = launchProcessingRequest(scope, recoveryDeletionGuard, names) {
             jobs.track {
                 try {
-                    if (request == RequestedWork.MISSING) announceExclusions(names)
+                    if (request == RequestedWork.MISSING || announceRequestExclusions) announceExclusions(names, request)
                     logTranscriptionRequest(names, request)
                     val started = transcriptionCoordinator.start(names, request, resumeRecording)
                     if (started.isEmpty()) reportUnconfiguredSynthesis(names, request)
@@ -919,11 +922,11 @@ class AppModel(
     }
 
     /** Signale les éléments choisis qui ne seront pas transcrits : sans MP3 sur le téléphone ou en erreur de récupération. */
-    private suspend fun announceExclusions(names: Set<String>?) {
+    private suspend fun announceExclusions(names: Set<String>?, request: RequestedWork) {
         val state = localRepository.awaitInitialized()
         val current = buildUi(state, phoneFlow.value, driveFlow.value, box.status.value, liveFlow.value)
         val active = state.transcriptionTasks.filter { !it.phase.isTerminal() }.mapTo(mutableSetOf()) { it.recordingName }
-        synthesisSelectionMessage(current.recordings, names, state.errors, active)?.let { say(it) }
+        synthesisSelectionMessage(current.recordings, names, state.errors, active, request)?.let { say(it) }
     }
 
     private suspend fun followTranscriptions(excluded: MutableSet<String>): InteractiveRun {
@@ -991,7 +994,7 @@ class AppModel(
                             say("VTT mis à jour. Le MD ne peut pas être refait sans le MP3 sur le téléphone.")
                         else -> {
                             say(speakerRenameMessage(result))
-                            transcribe(setOf(name), RequestedWork.REDO_MD)
+                            transcribe(setOf(name), RequestedWork.REDO_MD, announceRequestExclusions = true)
                         }
                     }
                 } catch (e: CancellationException) {
@@ -1307,7 +1310,7 @@ class AppModel(
         val tree = localFlow.phoneTreeUri ?: return Result.failure(PhoneStoreException(PHONE_FOLDER_LOST))
         return try {
             val bytes = PhoneFolder(app, tree.toUri()).open(fileName).use { it.readBytes() }
-            Result.success(TranscriptFile(WebVtt.parse(bytes), SpeakerNames.labels(bytes)))
+            Result.success(TranscriptFile(WebVtt.parse(bytes), SpeakerNames.labels(bytes), SpeakerNames.firstCueStarts(bytes)))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

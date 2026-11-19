@@ -30,6 +30,21 @@ object SpeakerNames {
         return voiceLineIndexes(lines).mapNotNull { voice.find(lines[it])?.let(::labelOf) }.distinct()
     }
 
+    /**
+     * Début (ms) du premier segment de chaque locuteur de [labels], avec le même parcours et les mêmes clés ; le locuteur d'un segment dont
+     * l'horodatage est illisible n'a pas d'entrée.
+     */
+    fun firstCueStarts(vtt: ByteArray): Map<SpeakerLabel, Long> {
+        val lines = splitLines(decodeUtf8(vtt)).map { it.first }
+        val starts = linkedMapOf<SpeakerLabel, Long>()
+        for (index in voiceLineIndexes(lines)) {
+            val label = voice.find(lines[index])?.let(::labelOf) ?: continue
+            if (label in starts) continue
+            WebVtt.startMs(lines[index - 1])?.let { starts[label] = it }
+        }
+        return starts
+    }
+
     /** Nom normalisé (`trim`) ou null s'il est invalide. */
     fun validate(name: String): String? {
         val trimmed = name.trim()

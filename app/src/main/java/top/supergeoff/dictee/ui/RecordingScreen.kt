@@ -340,7 +340,7 @@ private fun Transcript(
         }
         if (editing) {
             SpeakersDialog(
-                labels = result?.getOrNull()?.speakers.orEmpty(), firstCueMs = loaded.mapNotNull { cue -> cue.speaker?.let { it to cue.startMs } }.distinctBy { it.first }.toMap(),
+                labels = result?.getOrNull()?.speakers.orEmpty(), firstCueMs = result?.getOrNull()?.firstCueMs.orEmpty(),
                 book = speakerBook, playback = playback,
                 onSave = { renames -> editing = false; model.renameSpeakers(recordingName, renames) },
                 onDismiss = { editing = false },

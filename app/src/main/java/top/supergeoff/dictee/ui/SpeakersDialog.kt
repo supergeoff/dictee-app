@@ -39,7 +39,7 @@ import top.supergeoff.dictee.speakerSuggestions
 
 /**
  * Dialogue « Locuteurs » : une ligne par locuteur de [labels], qui montre son origine (« A »), un bouton lecture qui lance l'extrait au
- * premier segment du nom courant ([firstCueMs], avec le lecteur [playback] s'il existe) et un champ de nom, prérempli avec le nom courant
+ * premier segment de ce locuteur ([firstCueMs], avec le lecteur [playback] s'il existe) et un champ de nom, prérempli avec le nom courant
  * quand il diffère de l'origine. Un champ vide vise l'origine : vider un locuteur nommé le ramène à son origine. Le bouton ✕ du champ vide la
  * saisie. Le champ qui a le focus propose les noms du carnet [book] filtrés par sa saisie. « Enregistrer » envoie à [onSave] les
  * correspondances locuteur vers nom (ou origine rétablie) ; il reste désactivé sans changement ou avec un nom invalide. Les locuteurs qui
@@ -49,13 +49,15 @@ import top.supergeoff.dictee.speakerSuggestions
 @Composable
 internal fun SpeakersDialog(
     labels: List<SpeakerLabel>,
-    firstCueMs: Map<String, Long>,
+    firstCueMs: Map<SpeakerLabel, Long>,
     book: List<SpeakerName>,
     playback: Playback?,
     onSave: (Map<SpeakerLabel, String>) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val inputs = remember { mutableStateMapOf<SpeakerLabel, String>().apply { labels.forEach { put(it, it.initialInput) } } }
+    // Les saisies sont indexées par locuteur : un locuteur sans saisie (VTT changé sous le dialogue) montre son nom courant.
+    val edits = remember { mutableStateMapOf<SpeakerLabel, String>() }
+    val inputs = labels.associateWith { edits[it] ?: it.initialInput }
     var focused by remember { mutableStateOf<SpeakerLabel?>(null) }
     val draft = speakerRenameDraft(labels, inputs)
     val canPlay = playback != null && playback.status != PlaybackStatus.FAILED
@@ -68,12 +70,12 @@ internal fun SpeakersDialog(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
                     Row(modifier = Modifier.widthIn(min = 56.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(label.shownOrigin, style = Dictee.type.label, color = Dictee.colors.text, maxLines = 1, modifier = Modifier.widthIn(min = 16.dp))
-                        if (canPlay) IconAction(R.drawable.ic_play, "Écouter un extrait de ${label.shownOrigin}") { playback?.playFrom(firstCueMs[label.current] ?: 0L) }
+                        if (canPlay) IconAction(R.drawable.ic_play, "Écouter un extrait de ${label.shownOrigin}") { playback?.playFrom(firstCueMs[label] ?: 0L) }
                     }
                     Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        val query = inputs[label].orEmpty()
+                        val query = inputs.getValue(label)
                         DicteeTextField(
-                            query, { inputs[label] = it }, placeholder = "(laisser ${label.shownOrigin})",
+                            query, { edits[label] = it }, placeholder = "(laisser ${label.shownOrigin})",
                             keyboardOptions = KeyboardOptions(imeAction = if (label == labels.last()) ImeAction.Done else ImeAction.Next),
                             modifier = Modifier.fillMaxWidth()
                                 .onFocusChanged { if (it.isFocused) focused = label else if (focused == label) focused = null }
@@ -81,7 +83,7 @@ internal fun SpeakersDialog(
                             trailing = if (query.isEmpty()) null else {
                                 {
                                     Box(
-                                        modifier = Modifier.size(28.dp).clip(ControlShape).pressable { inputs[label] = "" },
+                                        modifier = Modifier.size(28.dp).clip(ControlShape).pressable { edits[label] = "" },
                                         contentAlignment = Alignment.Center,
                                     ) {
                                         Icon(
@@ -95,7 +97,7 @@ internal fun SpeakersDialog(
                         val suggestions = if (focused == label) speakerSuggestions(book, query) else emptyList()
                         if (suggestions.isNotEmpty()) {
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                suggestions.forEach { FilterPill(it.name, selected = false, onClick = { inputs[label] = it.name }) }
+                                suggestions.forEach { FilterPill(it.name, selected = false, onClick = { edits[label] = it.name }) }
                             }
                         }
                     }

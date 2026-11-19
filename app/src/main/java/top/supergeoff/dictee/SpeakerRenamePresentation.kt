@@ -1,8 +1,8 @@
 package top.supergeoff.dictee
 
-/** Texte du toast après un renommage groupé : le MD est refait sur le nouveau VTT, ou la raison du refus. */
+/** Texte du toast après un renommage groupé : le MD va être refait sur le nouveau VTT, ou la raison du refus. */
 internal fun speakerRenameMessage(result: SpeakerRenameResult): String = when (result) {
-    SpeakerRenameResult.Done -> "VTT mis à jour. Le MD est refait avec ces noms."
+    SpeakerRenameResult.Done -> "VTT mis à jour. Le MD va être refait avec ces noms."
     is SpeakerRenameResult.Refused -> result.reason
 }
 

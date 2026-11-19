@@ -29,6 +29,30 @@ class SpeakerNamesTest {
     }
 
     @Test
+    fun `firstCueStarts rend le debut du premier segment de chaque locuteur`() {
+        assertEquals(mapOf(a to 0L, b to 2000L, alice to 8000L), SpeakerNames.firstCueStarts(vtt(sample)))
+    }
+
+    @Test
+    fun `firstCueStarts distingue deux locuteurs qui portent le meme nom`() {
+        val source = "WEBVTT\n\n" +
+            "00:00:01.500 --> 00:00:02.000\n<v.spk-A Marie>Un</v>\n\n" +
+            "00:00:03.000 --> 00:00:04.000\n<v.spk-B Marie>Deux</v>\n\n" +
+            "00:01:05.250 --> 00:01:06.000\n<v.spk-B Marie>Trois</v>\n\n" +
+            "01:00:00.000 --> 01:00:01.000\n<v.spk-A Marie>Quatre</v>\n"
+        assertEquals(
+            mapOf(label("Marie", "A") to 1500L, label("Marie", "B") to 3000L),
+            SpeakerNames.firstCueStarts(vtt(source)),
+        )
+    }
+
+    @Test
+    fun `firstCueStarts a les memes cles que labels`() {
+        val bytes = vtt(sample)
+        assertEquals(SpeakerNames.labels(bytes), SpeakerNames.firstCueStarts(bytes).keys.toList())
+    }
+
+    @Test
     fun `labels est vide sans balise de voix`() {
         assertEquals(emptyList<SpeakerLabel>(), SpeakerNames.labels(vtt("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nTexte\n")))
     }
