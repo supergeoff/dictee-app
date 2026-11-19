@@ -33,7 +33,7 @@ data class KnownFolder(val id: String, val name: String, val origin: FolderOrigi
 /** Étape de traitement d'un enregistrement, dont l'erreur est gardée jusqu'à une réussite. */
 enum class Step { RECOVER, SEND, TRANSCRIBE }
 
-/** État local tenu dans `state.json`, version 8. */
+/** État local tenu dans `state.json`, version 9. */
 data class LocalState(
     val deviceAddress: String? = null,
     val deviceName: String? = null,
@@ -58,6 +58,8 @@ data class LocalState(
     val driveReceipts: List<DriveReceipt> = emptyList(),
     /** Dernière lecture du boîtier, valeurs brutes conservées ; null avant la première lecture. */
     val boxStatus: BoxStatus? = null,
+    /** Carnet des noms de locuteurs, le plus récent en tête ; absent d'une version antérieure, il est vide. */
+    val speakerNames: List<SpeakerName> = emptyList(),
 ) {
     /** Remplace la preuve d'envoi du même nom vers la même destination. */
     fun withoutDriveReceipt(destination: DriveDestination, fileName: String): LocalState = copy(
@@ -235,6 +237,9 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
                 .put("segmentDuration", status.segmentDuration)
                 .put("backlight", status.backlight)
             } ?: JSONObject.NULL)
+            .put("speakerNames", JSONArray().apply {
+                state.speakerNames.forEach { put(JSONObject().put("name", it.name).put("lastUsedAt", it.lastUsedAt)) }
+            })
             .put("transcriptionTasks", JSONArray().apply {
                 state.transcriptionTasks.forEach { task ->
                     put(JSONObject()
@@ -316,7 +321,14 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
                 }
             } else emptyList(),
             boxStatus = if (version >= 8) readBoxStatus(json) else null,
+            speakerNames = if (version >= 9) json.arrayOrNull("speakerNames")?.let { readSpeakerNames(it) }.orEmpty()
+            else emptyList(),
         )
+    }
+
+    private fun readSpeakerNames(array: JSONArray): List<SpeakerName> = List(array.length()) { i ->
+        val o = array.getJSONObject(i)
+        SpeakerName(o.getString("name"), o.getLong("lastUsedAt"))
     }
 
     /** Une valeur nulle reste une absence de lecture ; un champ absent ou tout autre contenu invalide fait échouer le chargement. */
@@ -469,7 +481,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
     }
 
     private companion object {
-        const val VERSION = 8
+        const val VERSION = 9
     }
 }
 
