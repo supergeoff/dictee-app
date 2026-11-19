@@ -982,8 +982,15 @@ class AppModel(
                         return@track
                     }
                     val result = transcriptionCoordinator.renameSpeakers(name, folderUri, vtt.fileName, renames)
-                    say(speakerRenameMessage(result))
-                    if (result == SpeakerRenameResult.Done) transcribe(setOf(name), RequestedWork.REDO_MD)
+                    when {
+                        result != SpeakerRenameResult.Done -> say(speakerRenameMessage(result))
+                        recording.phoneFiles[FileKind.MP3] == null ->
+                            say("VTT mis à jour. Le MD ne peut pas être refait sans le MP3 sur le téléphone.")
+                        else -> {
+                            say(speakerRenameMessage(result))
+                            transcribe(setOf(name), RequestedWork.REDO_MD)
+                        }
+                    }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
