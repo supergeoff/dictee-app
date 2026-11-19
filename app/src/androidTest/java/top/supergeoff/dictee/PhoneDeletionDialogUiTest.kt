@@ -22,7 +22,7 @@ class PhoneDeletionDialogUiTest {
     @Test fun detailMenuRequestsDeletion() {
         var requests = 0
         compose.setContent { DicteeTheme(false) {
-            RecordingMenu(false, {}, false, false, {}, {}, onDelete = { requests++ })
+            RecordingMenu(false, {}, false, false, {}, {}, onDelete = { requests++ }, onBox = false, onDeleteBox = {})
         } }
         compose.onNodeWithContentDescription("Plus d'actions").performClick()
         compose.onNodeWithText("Supprimer du téléphone").performClick()

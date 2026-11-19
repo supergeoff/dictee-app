@@ -63,7 +63,7 @@ class SynthesisRecordingUiTest {
         compose.setContent {
             DicteeTheme(false) {
                 RecordingMenu(canRecover = false, onRecover = {}, canRedoVtt = true, canRedoMd = false,
-                    onRedoVtt = { actions += "vtt" }, onRedoMd = { actions += "md" }, onDelete = {})
+                    onRedoVtt = { actions += "vtt" }, onRedoMd = { actions += "md" }, onDelete = {}, onBox = false, onDeleteBox = {})
             }
         }
         compose.onNodeWithContentDescription("Plus d'actions").performClick()
