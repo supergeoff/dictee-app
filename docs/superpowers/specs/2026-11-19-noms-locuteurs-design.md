@@ -53,8 +53,10 @@ toast : « VTT et MD mis à jour. »
 Si le MD ne contient pas l'étiquette telle quelle :
 
 ```
-toast : « VTT mis à jour. Le MD ne cite pas SPEAKER_00. »  [Refaire le MD]
+toast : « VTT mis à jour. Le MD ne cite pas SPEAKER_00. »
 ```
+
+Les toasts de l'app ne portent pas d'action : « Refaire le MD » reste dans le menu de la fiche.
 
 Un nom déjà attribué se renomme de la même façon : « Marie ✎ » ouvre le même dialogue.
 
