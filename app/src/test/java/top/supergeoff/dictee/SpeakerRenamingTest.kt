@@ -117,6 +117,61 @@ class SpeakerRenamingTest {
         assertArrayEquals(md, phone.files.getValue(mdName))
     }
 
+    private fun assertNothingWritten(vttBefore: ByteArray = vtt, mdBefore: ByteArray? = md) {
+        assertArrayEquals(vttBefore, phone.files.getValue(vttName))
+        if (mdBefore != null) assertArrayEquals(mdBefore, phone.files.getValue(mdName))
+        assertTrue(store.load().speakerNames.isEmpty())
+        assertTrue(promotedFolders.isEmpty())
+    }
+
+    @Test fun unknownLabelRefusesWithoutWriting() {
+        val repo = seed(provenance = ::provenance)
+        assertEquals(SpeakerRenameResult.Refused("Locuteur introuvable."), rename(coordinator(repo), from = "SPEAKER_09"))
+        assertNothingWritten()
+        assertEquals(provenance(), store.load().synthesisProvenance.single())
+    }
+
+    @Test fun sameNameRefusesWithoutWriting() {
+        val repo = seed()
+        assertEquals(SpeakerRenameResult.Refused("Le locuteur porte déjà ce nom."), rename(coordinator(repo), to = " SPEAKER_00 "))
+        assertNothingWritten()
+    }
+
+    @Test fun nonUtf8MdRefusesBeforeAnyWrite() {
+        val invalid = byteArrayOf(0xC3.toByte(), 0x28)
+        val repo = seed(md = invalid)
+        val result = rename(coordinator(repo))
+        assertEquals(SpeakerRenameResult.Refused("Le MD n'est pas de l'UTF-8 valide."), result)
+        assertNothingWritten(mdBefore = invalid)
+    }
+
+    @Test fun mdFailureAfterVttStillRecordsNameInBook() {
+        val repo = seed(provenance = ::provenance)
+        val provenanceBefore = provenance()
+        folder = object : PhoneStore by phone {
+            override fun writeGuarded(fileName: String, source: File, replace: Boolean, promote: ((() -> Unit) -> Unit)) {
+                if (fileName == mdName) throw PhoneStoreException("Écriture impossible.")
+                phone.writeGuarded(fileName, source, replace, promote)
+            }
+        }
+        val result = rename(coordinator(repo))
+        assertEquals(SpeakerRenameResult.Refused("Le VTT est renommé, mais pas le MD : Écriture impossible."), result)
+        assertEquals("Marie", SpeakerNames.labels(phone.files.getValue(vttName)).first())
+        assertEquals(listOf(SpeakerName("Marie", 5_000L)), store.load().speakerNames)
+        assertEquals(listOf(provenanceBefore), store.load().synthesisProvenance)
+        assertEquals(listOf(folderUri), promotedFolders)
+    }
+
+    @Test fun stateWriteFailureAfterBothFilesReportsBothRenamedAndNotifies() {
+        seed(provenance = ::provenance)
+        val repo = LocalStateRepository(LocalStateStore(File(tmp.root, "state.json"), rename = { _, _ -> false }))
+        val result = rename(coordinator(repo))
+        assertEquals(SpeakerRenameResult.Refused("VTT et MD renommés, mais l'état local n'a pas pu être enregistré."), result)
+        assertEquals("Marie", SpeakerNames.labels(phone.files.getValue(vttName)).first())
+        assertEquals("# Synthèse\n\nMarie salue SPEAKER_01.\n", String(phone.files.getValue(mdName)))
+        assertEquals(listOf(folderUri), promotedFolders)
+    }
+
     @Test fun vttChangedBeforePromotionRefusesAndLeavesMdIntact() {
         val repo = seed(provenance = ::provenance)
         val changed = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n<v SPEAKER_00>Modifié\n".toByteArray()

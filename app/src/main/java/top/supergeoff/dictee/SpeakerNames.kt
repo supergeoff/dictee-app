@@ -11,12 +11,16 @@ data class SpeakerName(val name: String, val lastUsedAt: Long)
 /** Logique de texte des noms de locuteurs : étiquettes des voix d'un VTT, réécriture du VTT et du MD, carnet. */
 object SpeakerNames {
     private const val MAX_CODE_POINTS = 40
-    private val voice = Regex("""<v((?:\.[^ \t>]*)?)([ \t]+)([^>]*)>""")
+    private val voice = Regex("""^<v((?:\.[^ \t>]*)?)([ \t]+)([^>]*)>""")
+    private val lineWithEnding = Regex("""([^\r\n]*)(\r\n|\r|\n|$)""")
     private val accents = Regex("""\p{Mn}+""")
 
-    /** Étiquettes distinctes des balises `<v>`, dans l'ordre d'apparition. */
-    fun labels(vtt: ByteArray): List<String> =
-        voice.findAll(decodeUtf8(vtt)).map { it.groupValues[3].trim() }.filter { it.isNotEmpty() }.distinct().toList()
+    /** Étiquettes distinctes des balises `<v>` ouvrant le payload d'un segment, dans l'ordre d'apparition. */
+    fun labels(vtt: ByteArray): List<String> {
+        val lines = splitLines(decodeUtf8(vtt)).map { it.first }
+        return voiceLineIndexes(lines).mapNotNull { voice.find(lines[it])?.groupValues?.get(3)?.trim() }
+            .filter { it.isNotEmpty() }.distinct()
+    }
 
     /** Nom normalisé (`trim`) ou null s'il est invalide. */
     fun validate(name: String): String? {
@@ -26,13 +30,20 @@ object SpeakerNames {
         return trimmed
     }
 
-    /** Remplace la valeur des voix égales à [from] ; lève [VttFormatException] si le résultat ne se relit pas. */
+    /**
+     * Remplace la valeur des balises `<v>` égales à [from] au début du payload d'un segment, comme la lecture de [WebVtt] ;
+     * le reste du fichier garde ses octets. Lève [VttFormatException] si le résultat ne se relit pas.
+     */
     fun renameInVtt(vtt: ByteArray, from: String, to: String): ByteArray {
-        val text = decodeUtf8(vtt)
-        val renamed = voice.replace(text) { match ->
-            if (match.groupValues[3].trim() == from) "<v${match.groupValues[1]}${match.groupValues[2]}$to>" else match.value
+        val lines = splitLines(decodeUtf8(vtt)).toMutableList()
+        for (index in voiceLineIndexes(lines.map { it.first })) {
+            val (content, ending) = lines[index]
+            val renamed = voice.replace(content) { match ->
+                if (match.groupValues[3].trim() == from) "<v${match.groupValues[1]}${match.groupValues[2]}$to>" else match.value
+            }
+            lines[index] = renamed to ending
         }
-        val result = renamed.toByteArray(Charsets.UTF_8)
+        val result = lines.joinToString("") { it.first + it.second }.toByteArray(Charsets.UTF_8)
         WebVtt.parse(result)
         return result
     }
@@ -71,6 +82,32 @@ object SpeakerNames {
 
     fun remove(book: List<SpeakerName>, name: String): List<SpeakerName> =
         book.filterNot { fold(it.name) == fold(name) }
+
+    /** Lignes du texte avec leur fin de ligne d'origine (`\r\n`, `\r`, `\n` ou vide pour la dernière). */
+    private fun splitLines(text: String): List<Pair<String, String>> {
+        val lines = lineWithEnding.findAll(text).map { it.groupValues[1] to it.groupValues[2] }.toList()
+        return if (lines.size > 1 && lines.last() == ("" to "")) lines.dropLast(1) else lines
+    }
+
+    /** Indices des premières lignes de payload des segments : ni en-tête, ni NOTE, STYLE ou REGION. */
+    private fun voiceLineIndexes(lines: List<String>): List<Int> {
+        val indexes = mutableListOf<Int>()
+        var start = 1
+        while (start < lines.size) {
+            if (lines[start].isEmpty()) { start++; continue }
+            var end = start
+            while (end < lines.size && lines[end].isNotEmpty()) end++
+            val first = lines[start]
+            val isCue = !(first == "STYLE" || first == "REGION" ||
+                first.startsWith("NOTE") && (first.length == 4 || first[4] == ' ' || first[4] == '\t'))
+            if (isCue) {
+                val timing = (start until end).firstOrNull { "-->" in lines[it] }
+                if (timing != null && timing - start <= 1 && timing + 1 < end) indexes.add(timing + 1)
+            }
+            start = end
+        }
+        return indexes
+    }
 
     private fun fold(text: String): String =
         accents.replace(Normalizer.normalize(text, Normalizer.Form.NFD), "").lowercase()

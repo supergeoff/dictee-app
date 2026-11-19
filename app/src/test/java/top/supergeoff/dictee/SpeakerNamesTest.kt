@@ -36,6 +36,26 @@ class SpeakerNamesTest {
         assertEquals(listOf("Marie", "B", "Alice"), SpeakerNames.labels(renamed))
     }
 
+    private val withNonCueBlocks = "WEBVTT\n\n" +
+        "NOTE\n<v A>dans une note\n\n" +
+        "STYLE\n::cue(v[voice=\"A\"]) { color: red }\n<v A>\n\n" +
+        "REGION\n<v A>\n\n" +
+        "00:00:00.000 --> 00:00:02.000\n<v A>Bonjour <v A>milieu</v></v>\n<v A>deuxième ligne</v>\n"
+
+    @Test
+    fun `labels ignore les balises hors du debut de payload d'un segment`() {
+        val source = "WEBVTT\n\nNOTE\n<v Z>note\n\n00:00:00.000 --> 00:00:01.000\nTexte <v Y>milieu</v>\n\n00:00:01.000 --> 00:00:02.000\n<v B>Oui</v>\n"
+        assertEquals(listOf("B"), SpeakerNames.labels(vtt(source)))
+    }
+
+    @Test
+    fun `renameInVtt ne touche ni NOTE ni STYLE ni REGION ni le milieu d'un segment`() {
+        val renamed = SpeakerNames.renameInVtt(vtt(withNonCueBlocks), "A", "Marie")
+        val expected = withNonCueBlocks.replace(
+            "00:00:00.000 --> 00:00:02.000\n<v A>Bonjour", "00:00:00.000 --> 00:00:02.000\n<v Marie>Bonjour")
+        assertArrayEquals(vtt(expected), renamed)
+    }
+
     @Test
     fun `renameInVtt garde la classe de voix`() {
         val renamed = SpeakerNames.renameInVtt(vtt(sample), "B", "Marie")
