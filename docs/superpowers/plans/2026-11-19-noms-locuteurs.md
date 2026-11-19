@@ -140,3 +140,14 @@ Déroulé, sous `mutex.withLock` puis `withContext(Dispatchers.IO)` :
 - [ ] `./gradlew testDebugUnitTest`, `./gradlew assembleDebug` et `./gradlew lint` passent.
 - [ ] Recette sur téléphone si un appareil est disponible : traitement automatique, puis nommage de deux locuteurs, réutilisation d'un nom sur un second enregistrement, envoi vers Drive et lecture des fichiers distants. Relever le format réel des étiquettes de `dictee-diarize` dans le résultat. Sans appareil, le dire dans le compte rendu plutôt que d'annoncer la recette faite.
 - [ ] Revue de code (`requesting-code-review`), puis `finishing-a-development-branch`. Aucun push ni fusion sans accord explicite.
+
+## Révision après recette
+
+La recette sur téléphone a montré que `dictee-diarize` produit des étiquettes d'une lettre (A, B, C…) et que le MD ne les cite pas. Le remplacement de texte dans le MD est donc supprimé, et le renommage devient groupé. Les tâches 1, 3 et 4 ci-dessus décrivent l'état avant cette révision ; voici ce qui les remplace.
+
+- **`SpeakerNames.kt`.** `replaceInMd` et ses tests disparaissent. `renameInVtt(vtt, renames: Map<String, String>)` applique toutes les correspondances en une passe, ce qui permet les fusions et les échanges d'étiquettes.
+- **`TranscriptionCoordinator`.** `renameSpeaker(from, to)` est remplacé par `renameSpeakers(recordingName, folderUri, vttName, renames)`. Mêmes garde-fous (tâche non terminale, étiquette introuvable, VTT modifié entre lecture et promotion, revalidation WebVTT), une seule écriture du VTT, aucune écriture du MD, provenance laissée telle quelle, tous les noms utilisés dans le carnet. Une correspondance vide ou sans changement effectif est refusée avec « Aucun nom modifié. ». Le résultat est `Done` ou `Refused(reason)`.
+- **`AppModel`.** `renameSpeakers(name, renames)` lance, après `Done`, `transcribe(setOf(name), RequestedWork.REDO_MD)`. Le toast est « VTT mis à jour. Le MD est refait avec ces noms. ». Si la synthèse n'est pas configurée, `reportUnconfiguredSynthesis` affiche déjà son message ; le VTT reste renommé.
+- **UI.** Le dialogue par locuteur est remplacé par un dialogue « Locuteurs » unique (`ui/SpeakersDialog.kt`), ouvert depuis n'importe quelle puce ou étiquette de segment. Chaque ligne a un bouton lecture et un champ avec suggestions du carnet ; « Enregistrer » est désactivé sans changement ou avec un nom invalide ; une phrase annonce les fusions, sans confirmation. `SpeakerRenamePresentation.kt` porte l'état du dialogue et perd `speakerMergeNotice` et `speakerNameChoices`.
+- **Documentation.** `docs/specification.md` et la spec du chantier décrivent le nouveau parcours, les nouvelles règles et l'observation des étiquettes d'une lettre.
+- **Vérification.** `./gradlew testDebugUnitTest assembleDebug lint` et `./gradlew compileDebugAndroidTestKotlin` passent. La recette sur téléphone du renommage groupé et du MD refait reste à faire.
