@@ -64,7 +64,7 @@ private val MonthDayFormat = DateTimeFormatter.ofPattern("d MMMM", Locale.FRENCH
 /**
  * Journal de l'app, ouvert depuis les Réglages. Les lignes sont relues hors du fil principal à chaque changement de
  * [Journal.revision], filtrées, puis groupées par jour du plus récent au plus ancien. « Copier » met les lignes affichées dans le
- * presse-papiers, « Exporter » partage un fichier texte des sept jours, « Vider » efface tout après confirmation.
+ * presse-papiers, « Exporter » partage un fichier texte des huit dernières heures, « Vider » efface tout après confirmation.
  */
 @Composable
 fun JournalScreen(model: AppModel, onBack: () -> Unit) {

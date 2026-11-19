@@ -93,8 +93,8 @@ L'app garde une seule activité. Le passage d'un écran à l'autre suit une pile
 
 - Une ligne par événement : heure, source et message. Les sources sont APP, BLE, FS, STT, LLM et DRIVE. Une ligne d'erreur commence par « erreur : » et s'affiche en rouge.
 - Les filtres sont « Tout », « Erreurs », « Bluetooth », « Drive », « Transcription » et « Synthèse ».
-- Le journal garde un fichier par jour sur sept jours. Les fichiers plus anciens sont supprimés au démarrage de l'app.
-- « Copier » copie les lignes affichées avec le filtre en cours. « Exporter » partage un fichier `.txt` des sept jours par le partage d'Android. « Vider » efface le journal après confirmation.
+- Le journal garde les lignes des huit dernières heures, dans un fichier par jour. L'écran et l'export ignorent les lignes plus anciennes, et le démarrage de l'app les supprime des fichiers.
+- « Copier » copie les lignes affichées avec le filtre en cours. « Exporter » partage un fichier `.txt` des huit dernières heures par le partage d'Android. « Vider » efface le journal après confirmation.
 
 ## Données
 
@@ -272,7 +272,7 @@ Les empreintes du VTT et du MD et le modèle sont conservés en privé pour un M
 | `RecoveryJob.kt`, `SendJob.kt` | File de récupération et file d'envoi |
 | `PhoneDeletion.kt`, `PhoneDeletionOrchestrator.kt`, `PhoneDeletionPresentation.kt` | Préparation, coordination et présentation de la suppression locale |
 | `DriveClient.kt` | Dossiers, listes, téléversement, renouvellement du jeton |
-| `Journal.kt` | Journal sur sept jours et ses filtres |
+| `Journal.kt` | Journal sur huit heures et ses filtres |
 | `LocalState.kt` | Lecture, écriture et reprise de `state.json` |
 | `WebVtt.kt`, `TranscriptionState.kt`, `TranscriptionPreparation.kt` | Validation du VTT, état et préparation de la transcription |
 | `SynthesisSelection.kt`, `SynthesisPrompt.kt`, `SynthesisState.kt`, `SynthesisStorage.kt` | Sélection, prompt, état durable et stockage privé de la synthèse |
