@@ -40,6 +40,9 @@ object WebVtt {
         return cues
     }
 
+    /** Début (ms) d'une ligne d'horodatage de segment, ou null si la ligne n'en est pas une. */
+    internal fun startMs(timingLine: String): Long? = timing.matchEntire(timingLine)?.let { millis(it.groupValues[1]) }
+
     private fun cue(block: List<String>): VttCue? {
         val first = block.first()
         if (first == "STYLE" || first == "REGION" || first.startsWith("NOTE") && (first.length == 4 || first[4] == ' ' || first[4] == '\t')) return null
