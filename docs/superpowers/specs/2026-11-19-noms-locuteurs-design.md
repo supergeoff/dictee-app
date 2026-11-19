@@ -65,7 +65,7 @@ Réglages › Transcription › Locuteurs liste les noms, du plus récent au moi
 ## Règles
 
 - **Disponibilité.** Le nommage exige un VTT local lisible. Il est indisponible pendant une transcription ou une synthèse active sur cet enregistrement, avec la raison affichée. Un VTT modifié pendant qu'une tâche tourne la suspendrait ; cette règle l'évite.
-- **Nom valide.** Texte d'une ligne, 1 à 40 caractères après suppression des espaces aux bords, sans `>` ni saut de ligne. `&` et `<` sont échappés dans le VTT (`&amp;`, `&lt;`).
+- **Nom valide.** Texte d'une ligne, 1 à 40 caractères après suppression des espaces aux bords, sans `<`, `>`, `&` ni saut de ligne. Ces caractères ne sont pas échappés : un nom qui les contient est refusé.
 - **Réécriture du VTT.** Seule la valeur des balises `<v étiquette>` égale à l'étiquette visée change ; classes `<v.x …>`, horodatages, notes, styles et texte restent identiques à l'octet près. Le résultat est revalidé par `WebVtt.parse`, puis promu par le mécanisme `.part` / `.old` existant.
 - **Mise à jour du MD.** Remplacement de toutes les occurrences exactes de l'étiquette, en mot entier, puis promotion par `.part` / `.old`. Le VTT est écrit d'abord ; un échec du MD laisse le VTT renommé et le signale.
 - **Provenance.** Après promotion, les empreintes VTT et MD conservées pour la synthèse sont remplacées par celles des nouveaux fichiers, afin que la fiche ne présente pas le MD comme issu d'un ancien VTT et que le parcours Drive reste prouvé. Le modèle mémorisé ne change pas. Si le MD n'avait pas de provenance connue, il n'en reçoit pas.
