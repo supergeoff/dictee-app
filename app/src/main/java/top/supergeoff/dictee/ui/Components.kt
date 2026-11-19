@@ -417,7 +417,7 @@ internal fun Notice(text: String, tone: NoticeTone = NoticeTone.Neutral, action:
 
 /**
  * Champ de saisie sur une ligne : un aplat `field-bg` de 44 dp au moins, un fin contour `input`. Au focus, l'aplat s'éclaircit et le
- * contour passe à 2 dp en `primary` ; le contenu ne bouge pas, le padding perd ce que la bordure gagne.
+ * contour passe à 2 dp en `primary` ; le contenu ne bouge pas, le padding perd ce que la bordure gagne. [trailing] se place à droite, dans le champ.
  */
 @Composable
 internal fun DicteeTextField(
@@ -429,6 +429,7 @@ internal fun DicteeTextField(
     enabled: Boolean = true,
     visualTransformation: VisualTransformation = VisualTransformation.None,
     placeholder: String? = null,
+    trailing: (@Composable () -> Unit)? = null,
 ) {
     val colors = Dictee.colors
     val source = remember { MutableInteractionSource() }
@@ -445,8 +446,14 @@ internal fun DicteeTextField(
         visualTransformation = visualTransformation,
         interactionSource = source,
         decorationBox = { field -> DicteeFieldDecoration(source, enabled, Tokens.BUTTON_HEIGHT_DP.dp, Alignment.CenterStart) {
-            if (value.isEmpty() && placeholder != null) Text(placeholder, style = Dictee.type.body, color = colors.textSecondary)
-            field()
+            val content: @Composable () -> Unit = {
+                if (value.isEmpty() && placeholder != null) Text(placeholder, style = Dictee.type.body, color = colors.textSecondary)
+                field()
+            }
+            if (trailing == null) content() else Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(modifier = Modifier.weight(1f)) { content() }
+                trailing()
+            }
         } },
     )
 }

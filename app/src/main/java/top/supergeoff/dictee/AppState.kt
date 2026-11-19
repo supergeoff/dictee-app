@@ -100,6 +100,9 @@ sealed class UiRequest {
     data class GooglePicker(val intent: PendingIntent) : UiRequest()
 }
 
+/** Contenu lisible d'un VTT : ses segments (locuteur = nom courant) et ses locuteurs avec leur origine. */
+data class TranscriptFile(val cues: List<VttCue>, val speakers: List<SpeakerLabel>)
+
 /** Dossier du téléphone tel que lu : ses fichiers, et s'il répond. */
 internal data class PhoneSnapshot(val files: List<PhoneFile> = emptyList(), val ok: Boolean = false, val revision: Long = 0, val documentHashes: Map<String, String> = emptyMap(), val folderUri: String? = null) {
     fun hashesFor(folder: String?): Map<String, String> = if (ok && folder != null && folder == folderUri) documentHashes else emptyMap()
@@ -965,11 +968,11 @@ class AppModel(
     }
 
     /**
-     * Applique [renames] (étiquette vers nom) au VTT de l'enregistrement [name] en une écriture. Après un renommage réussi, le MD est refait
+     * Applique [renames] (locuteur vers nom, ou origine rétablie) au VTT de l'enregistrement [name] en une écriture. Après un renommage réussi, le MD est refait
      * sur le nouveau VTT : [transcribe] dit lui-même si la synthèse n'est pas configurée. Le résultat sort en message.
      * Sans VTT ou sans dossier du téléphone, rien n'est tenté.
      */
-    fun renameSpeakers(name: String, renames: Map<String, String>) {
+    fun renameSpeakers(name: String, renames: Map<SpeakerLabel, String>) {
         scope.launch {
             jobs.track {
                 try {
@@ -1298,12 +1301,13 @@ class AppModel(
         return localFlow.phoneTreeUri?.let { PhoneFolder(app, it.toUri()).uriOf(fileName) }
     }
 
-    /** Segments du VTT affichés sur la fiche. Le fichier n'est jamais modifié ; échec : message lisible. À appeler hors du fil principal. */
-    suspend fun readTranscript(fileName: String): Result<List<VttCue>> {
+    /** Segments du VTT affichés sur la fiche et leurs locuteurs (nom courant et origine). Le fichier n'est jamais modifié ; échec : message lisible. À appeler hors du fil principal. */
+    suspend fun readTranscript(fileName: String): Result<TranscriptFile> {
         localRepository.awaitInitialized()
         val tree = localFlow.phoneTreeUri ?: return Result.failure(PhoneStoreException(PHONE_FOLDER_LOST))
         return try {
-            Result.success(WebVtt.parse(PhoneFolder(app, tree.toUri()).open(fileName).use { it.readBytes() }))
+            val bytes = PhoneFolder(app, tree.toUri()).open(fileName).use { it.readBytes() }
+            Result.success(TranscriptFile(WebVtt.parse(bytes), SpeakerNames.labels(bytes)))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

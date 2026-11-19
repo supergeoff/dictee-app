@@ -10,13 +10,19 @@ internal fun speakerRenameMessage(result: SpeakerRenameResult): String = when (r
 internal fun speakerRenameUnavailableReason(taskActive: Boolean): String? =
     if (taskActive) "Un traitement est en cours sur cet enregistrement." else null
 
+/** Étiquette montrée à gauche de la ligne : l'origine du locuteur, ou son nom courant quand l'origine est inconnue. */
+internal val SpeakerLabel.shownOrigin: String get() = original ?: current
+
+/** Saisie de départ du champ : le nom courant s'il diffère de l'origine, sinon vide (le champ montre « (laisser A) »). */
+internal val SpeakerLabel.initialInput: String get() = if (original != null && current != original) current else ""
+
 /**
- * État du dialogue « Locuteurs » : les [renames] valides et effectifs (étiquette vers nom normalisé), les étiquettes dont la saisie est
- * invalide ([invalidLabels]) et une phrase par groupe d'étiquettes qui finiront sous le même nom ([mergeNotices]).
+ * État du dialogue « Locuteurs » : les [renames] valides et effectifs (locuteur vers nom normalisé ou origine rétablie), les locuteurs dont la
+ * saisie est invalide ([invalidLabels]) et une phrase par groupe de locuteurs qui finiront sous le même nom ([mergeNotices]).
  */
 internal data class SpeakerRenameDraft(
-    val renames: Map<String, String>,
-    val invalidLabels: Set<String>,
+    val renames: Map<SpeakerLabel, String>,
+    val invalidLabels: Set<SpeakerLabel>,
     val mergeNotices: List<String>,
 ) {
     /** « Enregistrer » exige au moins un changement et aucune saisie invalide. */
@@ -24,24 +30,27 @@ internal data class SpeakerRenameDraft(
 }
 
 /**
- * Calcule l'état du dialogue à partir des étiquettes du VTT et de la saisie de chacune ([inputs]). Une saisie vide laisse l'étiquette ;
- * un nom égal à l'étiquette n'est pas un changement. Les noms se comparent à l'identique, comme dans le VTT.
+ * Calcule l'état du dialogue à partir des locuteurs du VTT et de la saisie de chacun ([inputs], vide si absente). Une saisie vide vise
+ * l'origine du locuteur, ou son nom courant quand l'origine est inconnue ; un nom égal au nom courant n'est pas un changement. Les noms
+ * se comparent à l'identique, comme dans le VTT. Une fusion n'est annoncée que si elle change au moins un locuteur.
  */
-internal fun speakerRenameDraft(labels: List<String>, inputs: Map<String, String>): SpeakerRenameDraft {
-    val invalid = linkedSetOf<String>()
-    val renames = linkedMapOf<String, String>()
-    val finalNames = linkedMapOf<String, String>()
+internal fun speakerRenameDraft(labels: List<SpeakerLabel>, inputs: Map<SpeakerLabel, String>): SpeakerRenameDraft {
+    val invalid = linkedSetOf<SpeakerLabel>()
+    val renames = linkedMapOf<SpeakerLabel, String>()
+    val finalNames = linkedMapOf<SpeakerLabel, String>()
     for (label in labels) {
         val input = inputs[label].orEmpty()
-        val name = if (input.isBlank()) label else SpeakerNames.validate(input)
+        val name = if (input.isBlank()) label.original ?: label.current else SpeakerNames.validate(input)
         if (name == null) {
             invalid += label
             continue
         }
         finalNames[label] = name
-        if (name != label) renames[label] = name
+        if (name != label.current) renames[label] = name
     }
     val notices = finalNames.entries.groupBy({ it.value }, { it.key }).values
+        .filter { group -> group.size > 1 && group.any { it in renames } }
+        .map { group -> group.map { it.shownOrigin }.distinct() }
         .filter { it.size > 1 }
         .map { "${joinWithAnd(it)} seront fusionnés." }
     return SpeakerRenameDraft(renames, invalid, notices)

@@ -756,17 +756,21 @@ class TranscriptionCoordinator(
     }
 
     /**
-     * Applique [renames] (étiquette vers nom) au VTT du téléphone en une seule écriture. Refusé si un nom est invalide, si aucun nom
-     * ne change, tant qu'une tâche non terminale concerne l'enregistrement, ou si une étiquette n'est plus dans le VTT. Une étiquette
-     * absente de [renames] reste inchangée ; plusieurs étiquettes vers le même nom fusionnent. Le contenu est calculé et revalidé avant
-     * l'écriture, puis promu seulement si le VTT garde l'empreinte lue. Le MD et la provenance ne sont pas touchés : le VTT change,
-     * le MD est à refaire. Tous les noms utilisés entrent dans le carnet.
+     * Applique [renames] (locuteur vers nom) au VTT du téléphone en une seule écriture. Un nom égal à l'origine du locuteur la rétablit ;
+     * tout autre nom doit être valide. Refusé si un nom est invalide, si aucun nom ne change, tant qu'une tâche non terminale concerne
+     * l'enregistrement, ou si un locuteur n'est plus dans le VTT. Un locuteur absent de [renames] reste inchangé ; plusieurs locuteurs
+     * vers le même nom fusionnent. Le contenu est calculé et revalidé avant l'écriture, puis promu seulement si le VTT garde l'empreinte lue.
+     * Le MD et la provenance ne sont pas touchés : le VTT change, le MD est à refaire. Les noms utilisés entrent dans le carnet, mais pas
+     * les origines rétablies.
      */
     suspend fun renameSpeakers(recordingName: String, folderUri: String, vttName: String,
-                               renames: Map<String, String>): SpeakerRenameResult = mutex.withLock {
-        val names = LinkedHashMap<String, String>()
-        for ((label, to) in renames) names[label] = SpeakerNames.validate(to) ?: return@withLock SpeakerRenameResult.Refused("Nom invalide.")
-        val effective = names.filter { (label, name) -> label != name }
+                               renames: Map<SpeakerLabel, String>): SpeakerRenameResult = mutex.withLock {
+        val names = LinkedHashMap<SpeakerLabel, String>()
+        for ((label, to) in renames) {
+            names[label] = if (label.original != null && to == label.original) to
+                else SpeakerNames.validate(to) ?: return@withLock SpeakerRenameResult.Refused("Nom invalide.")
+        }
+        val effective = names.filter { (label, name) -> label.current != name }
         if (effective.isEmpty()) return@withLock SpeakerRenameResult.Refused("Aucun nom modifié.")
         val state = repository.awaitInitialized()
         if (state.transcriptionTasks.any { it.recordingName == recordingName && !it.phase.isTerminal() })
@@ -774,7 +778,7 @@ class TranscriptionCoordinator(
         withContext(Dispatchers.IO) { renameSpeakersInVtt(folderUri, vttName, effective) }
     }
 
-    private suspend fun renameSpeakersInVtt(folderUri: String, vttName: String, renames: Map<String, String>): SpeakerRenameResult {
+    private suspend fun renameSpeakersInVtt(folderUri: String, vttName: String, renames: Map<SpeakerLabel, String>): SpeakerRenameResult {
         var vttWritten = false
         try {
             val phone = phoneStore(folderUri)
@@ -784,8 +788,9 @@ class TranscriptionCoordinator(
             val newVtt = SpeakerNames.renameInVtt(oldVtt, renames)
             replaceGuarded(phone, vttName, newVtt, sha256(oldVtt), "Le VTT a changé.")
             vttWritten = true
-            repository.updateDurably { current ->
-                current.copy(speakerNames = renames.values.distinct().fold(current.speakerNames) { book, name -> SpeakerNames.use(book, name, clock()) })
+            val usedNames = renames.filter { (label, name) -> name != label.original }.values.distinct()
+            if (usedNames.isNotEmpty()) repository.updateDurably { current ->
+                current.copy(speakerNames = usedNames.fold(current.speakerNames) { book, name -> SpeakerNames.use(book, name, clock()) })
             }
             journal(Source.APP, null, "Locuteurs renommés")
             return SpeakerRenameResult.Done

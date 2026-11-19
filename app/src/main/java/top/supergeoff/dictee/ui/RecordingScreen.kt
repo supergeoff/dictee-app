@@ -36,7 +36,6 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.produceState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import top.supergeoff.dictee.VttCue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -67,6 +66,7 @@ import top.supergeoff.dictee.RecordName
 import top.supergeoff.dictee.Recording
 import top.supergeoff.dictee.RequestedWork
 import top.supergeoff.dictee.SpeakerName
+import top.supergeoff.dictee.TranscriptFile
 import top.supergeoff.dictee.SynthesisSelection
 import top.supergeoff.dictee.speakerRenameUnavailableReason
 import top.supergeoff.dictee.ProvenanceStatus
@@ -316,7 +316,7 @@ private fun Transcript(
     speakerBook: List<SpeakerName>, renameBlockedReason: String?,
 ) {
     val colors = Dictee.colors
-    val cues by produceState<Result<List<VttCue>>?>(null, vtt.fileName, vtt.size, phoneRevision) {
+    val cues by produceState<Result<TranscriptFile>?>(null, vtt.fileName, vtt.size, phoneRevision) {
         value = withContext(Dispatchers.IO) { model.readTranscript(vtt.fileName) }
     }
     var editing by remember { mutableStateOf(false) }
@@ -324,7 +324,7 @@ private fun Transcript(
     Column(modifier = Modifier.fillMaxWidth().card().padding(vertical = 4.dp)) {
         Text(text = "Transcription", style = Dictee.type.rowTitle, color = colors.text, modifier = Modifier.padding(12.dp))
         val result = cues
-        val loaded = result?.getOrNull().orEmpty()
+        val loaded = result?.getOrNull()?.cues.orEmpty()
         val labels = loaded.mapNotNull { it.speaker }.distinct()
         if (labels.isNotEmpty()) {
             Text("Locuteurs", style = Dictee.type.label, color = colors.text, modifier = Modifier.padding(horizontal = 12.dp))
@@ -340,7 +340,7 @@ private fun Transcript(
         }
         if (editing) {
             SpeakersDialog(
-                labels = labels, firstCueMs = loaded.mapNotNull { cue -> cue.speaker?.let { it to cue.startMs } }.distinctBy { it.first }.toMap(),
+                labels = result?.getOrNull()?.speakers.orEmpty(), firstCueMs = loaded.mapNotNull { cue -> cue.speaker?.let { it to cue.startMs } }.distinctBy { it.first }.toMap(),
                 book = speakerBook, playback = playback,
                 onSave = { renames -> editing = false; model.renameSpeakers(recordingName, renames) },
                 onDismiss = { editing = false },

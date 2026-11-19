@@ -8,18 +8,26 @@ import java.text.Normalizer
 /** Nom du carnet des locuteurs, avec l'instant (ms) de sa dernière utilisation. */
 data class SpeakerName(val name: String, val lastUsedAt: Long)
 
+/**
+ * Locuteur d'un VTT : [current] est la valeur de la balise `<v>` (le nom affiché), [original] l'étiquette d'origine gardée dans la classe
+ * `spk-` de la balise, ou la valeur elle-même tant qu'aucun renommage n'a eu lieu. [original] est null quand l'étiquette ne se
+ * sait pas garder (caractères hors `[A-Za-z0-9_-]`) : le retour à l'origine est alors impossible.
+ */
+data class SpeakerLabel(val current: String, val original: String?)
+
 /** Logique de texte des noms de locuteurs : étiquettes des voix d'un VTT, réécriture du VTT, carnet. */
 object SpeakerNames {
     private const val MAX_CODE_POINTS = 40
     private val voice = Regex("""^<v((?:\.[^ \t>]*)?)([ \t]+)([^>]*)>""")
+    private val originalPattern = Regex("""[A-Za-z0-9_-]+""")
+    private const val ORIGINAL_CLASS_PREFIX = "spk-"
     private val lineWithEnding = Regex("""([^\r\n]*)(\r\n|\r|\n|$)""")
     private val accents = Regex("""\p{Mn}+""")
 
-    /** Étiquettes distinctes des balises `<v>` ouvrant le payload d'un segment, dans l'ordre d'apparition. */
-    fun labels(vtt: ByteArray): List<String> {
+    /** Locuteurs distincts (nom courant et origine) des balises `<v>` ouvrant le payload d'un segment, dans l'ordre d'apparition. */
+    fun labels(vtt: ByteArray): List<SpeakerLabel> {
         val lines = splitLines(decodeUtf8(vtt)).map { it.first }
-        return voiceLineIndexes(lines).mapNotNull { voice.find(lines[it])?.groupValues?.get(3)?.trim() }
-            .filter { it.isNotEmpty() }.distinct()
+        return voiceLineIndexes(lines).mapNotNull { voice.find(lines[it])?.let(::labelOf) }.distinct()
     }
 
     /** Nom normalisé (`trim`) ou null s'il est invalide. */
@@ -31,23 +39,53 @@ object SpeakerNames {
     }
 
     /**
-     * Remplace en une passe la valeur des balises `<v>` qui figurent dans [renames] (étiquette vers nom) au début du payload d'un segment,
-     * comme la lecture de [WebVtt] ; une étiquette absente de [renames] reste inchangée, et deux étiquettes envoyées vers le même nom
-     * fusionnent. Le reste du fichier garde ses octets. Lève [VttFormatException] si le résultat ne se relit pas.
+     * Remplace en une passe la valeur des balises `<v>` dont le locuteur figure dans [renames] (locuteur vers nom) au début du payload
+     * d'un segment, comme la lecture de [WebVtt] ; un locuteur absent de [renames] reste inchangé. Une balise renommée garde l'étiquette
+     * d'origine dans une classe `spk-` (`<v.spk-A Marie>`), ajoutée au premier renommage et conservée ensuite ; les autres classes sont
+     * préservées. Un nom égal à l'origine du locuteur la rétablit : la classe `spk-` disparaît (`<v A>`). Deux locuteurs envoyés vers le
+     * même nom fusionnent par le nom, chacun gardant son origine. Le reste du fichier garde ses octets. Lève [VttFormatException] si le
+     * résultat ne se relit pas.
      */
-    fun renameInVtt(vtt: ByteArray, renames: Map<String, String>): ByteArray {
+    fun renameInVtt(vtt: ByteArray, renames: Map<SpeakerLabel, String>): ByteArray {
         val lines = splitLines(decodeUtf8(vtt)).toMutableList()
         for (index in voiceLineIndexes(lines.map { it.first })) {
             val (content, ending) = lines[index]
             val renamed = voice.replace(content) { match ->
-                val to = renames[match.groupValues[3].trim()]
-                if (to != null) "<v${match.groupValues[1]}${match.groupValues[2]}$to>" else match.value
+                val label = labelOf(match)
+                val to = label?.let { renames[it] }
+                if (label == null || to == null) match.value else renamedTag(match, label, to)
             }
             lines[index] = renamed to ending
         }
         val result = lines.joinToString("") { it.first + it.second }.toByteArray(Charsets.UTF_8)
         WebVtt.parse(result)
         return result
+    }
+
+    private fun classesOf(match: MatchResult): List<String> = match.groupValues[1].split('.').filter { it.isNotEmpty() }
+
+    private fun originalClassIndex(classes: List<String>): Int = classes.indexOfFirst {
+        it.startsWith(ORIGINAL_CLASS_PREFIX) && originalPattern.matches(it.removePrefix(ORIGINAL_CLASS_PREFIX))
+    }
+
+    private fun labelOf(match: MatchResult): SpeakerLabel? {
+        val current = match.groupValues[3].trim()
+        if (current.isEmpty()) return null
+        return SpeakerLabel(current, classesOf(match).let { classes ->
+            originalClassIndex(classes).takeIf { it >= 0 }?.let { classes[it].removePrefix(ORIGINAL_CLASS_PREFIX) }
+        } ?: current.takeIf { originalPattern.matches(it) })
+    }
+
+    private fun renamedTag(match: MatchResult, label: SpeakerLabel, to: String): String {
+        val classes = classesOf(match)
+        val originalIndex = originalClassIndex(classes)
+        val renamedClasses = when {
+            originalIndex >= 0 && to == label.original -> classes.filterIndexed { i, _ -> i != originalIndex }
+            originalIndex >= 0 || label.original == null || to == label.original -> classes
+            else -> classes + (ORIGINAL_CLASS_PREFIX + label.original)
+        }
+        val classText = if (renamedClasses == classes) match.groupValues[1] else renamedClasses.joinToString("") { ".$it" }
+        return "<v$classText${match.groupValues[2]}$to>"
     }
 
     /** Ajoute ou rafraîchit un nom (égalité sans casse ni accents), le plus récent en tête. */
