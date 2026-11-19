@@ -28,6 +28,11 @@ class PhoneFolder(context: Context, val treeUri: Uri) : PhoneStore {
     override fun writeGuarded(fileName: String, source: File, replace: Boolean, promote: ((() -> Unit) -> Unit)) =
         guarded { writeDocument(fileName, source, replace, promote) }
 
+    override fun delete(fileName: String) = guarded {
+        val child = find(fileName) ?: return@guarded
+        if (!DocumentsContract.deleteDocument(resolver, documentUri(child))) throw cannotDelete(fileName)
+    }
+
     override fun open(fileName: String): InputStream = guarded {
         val child = find(fileName) ?: throw PhoneStoreException("Fichier absent du dossier du téléphone : $fileName")
         resolver.openInputStream(documentUri(child)) ?: throw FileNotFoundException(fileName)

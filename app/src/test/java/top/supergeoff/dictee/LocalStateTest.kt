@@ -54,7 +54,7 @@ class LocalStateTest {
 
         store.save(state)
 
-        assertEquals(7, org.json.JSONObject(file().readText()).getInt("version"))
+        assertEquals(8, org.json.JSONObject(file().readText()).getInt("version"))
         assertEquals(state, store.load())
         assertEquals(DriveSendChoice.DOCUMENTS_ONLY, store.load().driveSendChoice)
         assertEquals(listOf(receipt), store.load().driveReceipts)
@@ -136,6 +136,102 @@ class LocalStateTest {
     }
 
     @Test
+    fun `box_status_round_trip_preserves_unknown_raw_values`() {
+        val status = BoxStatus(
+            batteryPercent = 77,
+            totalMb = 0xffff_ffffL,
+            freeMb = 0x0123_4567L,
+            noise = 0x07, // valeur non documentée de la réduction du bruit
+            segmentDuration = 0x02,
+            backlight = 0xfe, // valeur non documentée du rétro-éclairage
+        )
+        val store = LocalStateStore(file())
+
+        store.save(LocalState(boxStatus = status))
+
+        val json = org.json.JSONObject(file().readText())
+        assertEquals(8, json.getInt("version"))
+        val raw = json.getJSONObject("boxStatus")
+        assertEquals(77, raw.getInt("batteryPercent"))
+        assertEquals(0xffff_ffffL, raw.getLong("totalMb"))
+        assertEquals(0x0123_4567L, raw.getLong("freeMb"))
+        assertEquals(0x07, raw.getInt("noise"))
+        assertEquals(0x02, raw.getInt("segmentDuration"))
+        assertEquals(0xfe, raw.getInt("backlight"))
+        assertEquals(status, store.load().boxStatus)
+        assertEquals(LocalState(boxStatus = status), store.load())
+    }
+
+    @Test
+    fun `box_status_null_round_trip_before_first_reading`() {
+        val store = LocalStateStore(file())
+        store.save(LocalState(deviceName = "boitier"))
+
+        assertEquals(8, org.json.JSONObject(file().readText()).getInt("version"))
+        assertTrue(org.json.JSONObject(file().readText()).isNull("boxStatus"))
+        org.junit.Assert.assertNull(store.load().boxStatus)
+        assertEquals(LocalState(deviceName = "boitier"), store.load())
+    }
+
+    @Test
+    fun `versions_1_to_7_start_without_box_status`() {
+        val store = LocalStateStore(file())
+        for (version in 1..6) {
+            file().writeText(org.json.JSONObject().put("version", version).toString())
+            org.junit.Assert.assertNull("version $version", store.load().boxStatus)
+        }
+        store.save(LocalState(deviceName = "boitier"))
+        val version7 = org.json.JSONObject(file().readText()).put("version", 7)
+        version7.remove("boxStatus")
+        file().writeText(version7.toString())
+        val loaded = store.load()
+        org.junit.Assert.assertNull(loaded.boxStatus)
+        assertEquals("boitier", loaded.deviceName)
+    }
+
+    @Test
+    fun `version_8_requires_valid_box_status_without_changing_file_on_failure`() {
+        fun statusJson() = org.json.JSONObject()
+            .put("batteryPercent", 77)
+            .put("totalMb", 0xffff_ffffL)
+            .put("freeMb", 0x0123_4567L)
+            .put("noise", 0x07)
+            .put("segmentDuration", 0x02)
+            .put("backlight", 0xfe)
+        val incomplete = org.json.JSONObject()
+            .put("batteryPercent", 77).put("totalMb", 1L).put("freeMb", 1L)
+            .put("noise", 0).put("segmentDuration", 0) // rétro-éclairage manquant
+        val invalidValues = listOf<Any?>(
+            null, // champ absent ; le JSON null, lui, reste une absence de lecture légale
+            42,
+            "not-an-object",
+            incomplete,
+            statusJson().put("noise", 256), // réglage hors d'un octet
+            statusJson().put("segmentDuration", -1),
+            statusJson().put("backlight", 0x100),
+            statusJson().put("batteryPercent", 101),
+            statusJson().put("batteryPercent", -1),
+            statusJson().put("totalMb", 0x1_0000_0000L), // compteur hors de 32 bits non signé
+            statusJson().put("freeMb", -1L),
+        )
+        val store = LocalStateStore(file())
+
+        for (invalid in invalidValues) {
+            store.save(LocalState(deviceName = "boitier"))
+            val json = org.json.JSONObject(file().readText())
+            if (invalid == null) json.remove("boxStatus") else json.put("boxStatus", invalid)
+            file().writeText(json.toString())
+            val before = file().readText()
+
+            try {
+                store.load()
+                org.junit.Assert.fail("Le champ boxStatus v8 invalide $invalid doit empêcher le chargement")
+            } catch (_: org.json.JSONException) { }
+            assertEquals("Le fichier v8 doit rester intact pour boxStatus=$invalid", before, file().readText())
+        }
+    }
+
+    @Test
     fun `receipt_replaces_only_same_destination_and_name`() {
         val destination = DriveDestination("account-1", "folder-1")
         val old = DriveReceipt(destination, "Note.vtt", "old-id", "a".repeat(64))
@@ -156,7 +252,7 @@ class LocalStateTest {
         val state = LocalState(recordingSubjects = mapOf("20261030160502" to "Sujet synthétique"),
             transcriptionTasks = listOf(sampleTask().copy(subjectAttempted = true)))
         store.save(state)
-        assertEquals(7, org.json.JSONObject(file().readText()).getInt("version"))
+        assertEquals(8, org.json.JSONObject(file().readText()).getInt("version"))
         assertEquals(state, store.load())
         val old = org.json.JSONObject(file().readText()).put("version", 5)
         old.remove("autoProcessAfterRecovery")
@@ -218,7 +314,7 @@ class LocalStateTest {
             synthesisProvenance = listOf(provenance))
         val store = LocalStateStore(file())
         store.save(state)
-        assertEquals(7, org.json.JSONObject(file().readText()).getInt("version"))
+        assertEquals(8, org.json.JSONObject(file().readText()).getInt("version"))
         assertEquals(state, store.load())
         assertFalse(file().readText().contains(secret))
     }
@@ -603,7 +699,7 @@ class LocalStateTest {
         assertEquals(state, LocalStateStore(file()).load())
         assertTrue(file().readText().contains("encrypted-key-ref"))
         assertFalse(file().readText().contains("cleartext-api-key"))
-        assertTrue(file().readText().contains("\"version\": 7"))
+        assertTrue(file().readText().contains("\"version\": 8"))
     }
 
     @Test

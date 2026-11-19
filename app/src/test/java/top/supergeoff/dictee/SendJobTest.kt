@@ -331,6 +331,7 @@ class SendJobTest {
     fun `la cause technique d'un dossier illisible va au journal, pas au resultat`() {
         val log = ListLog()
         val store = object : PhoneStore {
+            override fun delete(fileName: String) { throw PhoneStoreException("Non utilisé") }
             override fun list() = emptyList<PhoneFile>()
             override fun write(fileName: String, source: File) {}
             override fun writeGuarded(fileName: String, source: File, replace: Boolean, promote: ((() -> Unit) -> Unit)) { throw PhoneStoreException("Non utilisé") }

@@ -20,6 +20,12 @@ fun sessionFrames(): List<Pair<String, ByteArray>> =
         .map { line -> line.split(" ").let { it[0] to hex(it[1]) } }
 
 class FrameTest {
+    @Test fun listItemRejectsMalformedShortPayloads() {
+        assertEquals(ListItem.End, Payloads.listItem(byteArrayOf(2)))
+        for (bad in listOf(byteArrayOf(), byteArrayOf(0), byteArrayOf(1), byteArrayOf(2, 0), ByteArray(18))) {
+            try { Payloads.listItem(bad); org.junit.Assert.fail("payload mal formé accepté") } catch (_: IllegalArgumentException) { }
+        }
+    }
 
     @Test
     fun `le CRC-16 ARC donne les vecteurs de la spec`() {
@@ -129,6 +135,18 @@ class FrameTest {
     fun `le statut est le premier octet du payload`() {
         assertEquals(0, Payloads.status(Frame.parse(hex("a00a0103010070cd"))!!.payload))
         assertEquals(-1, Payloads.status(ByteArray(0)))
+    }
+
+    @Test
+    fun deletePayloadIsExactAsciiName() {
+        assertArrayEquals("20260101010101".toByteArray(Charsets.US_ASCII), Payloads.deleteRequest("20260101010101"))
+        for (name in listOf("20260101010101.mp3", "2026010101010", "2026010101010\u0000", "2026010101010é")) {
+            try {
+                Payloads.deleteRequest(name)
+                org.junit.Assert.fail("nom invalide accepté : $name")
+            } catch (_: IllegalArgumentException) {
+            }
+        }
     }
 
     @Test

@@ -59,6 +59,7 @@ class RecoveryJobTest {
     @Test
     fun `la cause technique d'un echec d'ecriture va au journal, pas a la ligne de l'enregistrement`() = runTest {
         val store = object : PhoneStore {
+            override fun delete(fileName: String) { throw PhoneStoreException("Non utilisé") }
             override fun list() = emptyList<PhoneFile>()
             override fun write(fileName: String, source: File) {
                 throw PhoneStoreException("Dossier du téléphone inaccessible.", FileNotFoundException("dossier illisible"))

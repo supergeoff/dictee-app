@@ -33,7 +33,7 @@ data class KnownFolder(val id: String, val name: String, val origin: FolderOrigi
 /** Étape de traitement d'un enregistrement, dont l'erreur est gardée jusqu'à une réussite. */
 enum class Step { RECOVER, SEND, TRANSCRIBE }
 
-/** État local tenu dans `state.json`, version 7. */
+/** État local tenu dans `state.json`, version 8. */
 data class LocalState(
     val deviceAddress: String? = null,
     val deviceName: String? = null,
@@ -56,6 +56,8 @@ data class LocalState(
     val automaticProcessingRequests: List<AutomaticProcessingRequest> = emptyList(),
     val driveSendChoice: DriveSendChoice = DriveSendChoice.ALL_FILES,
     val driveReceipts: List<DriveReceipt> = emptyList(),
+    /** Dernière lecture du boîtier, valeurs brutes conservées ; null avant la première lecture. */
+    val boxStatus: BoxStatus? = null,
 ) {
     /** Remplace la preuve d'envoi du même nom vers la même destination. */
     fun withoutDriveReceipt(destination: DriveDestination, fileName: String): LocalState = copy(
@@ -225,6 +227,14 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
                         .put("sha256", receipt.sha256))
                 }
             })
+            .put("boxStatus", state.boxStatus?.let { status -> JSONObject()
+                .put("batteryPercent", status.batteryPercent)
+                .put("totalMb", status.totalMb)
+                .put("freeMb", status.freeMb)
+                .put("noise", status.noise)
+                .put("segmentDuration", status.segmentDuration)
+                .put("backlight", status.backlight)
+            } ?: JSONObject.NULL)
             .put("transcriptionTasks", JSONArray().apply {
                 state.transcriptionTasks.forEach { task ->
                     put(JSONObject()
@@ -305,7 +315,26 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
                         receipt.getString("fileName"), receipt.getString("driveFileId"), receipt.getString("sha256"))
                 }
             } else emptyList(),
+            boxStatus = if (version >= 8) readBoxStatus(json) else null,
         )
+    }
+
+    /** Une valeur nulle reste une absence de lecture ; un champ absent ou tout autre contenu invalide fait échouer le chargement. */
+    private fun readBoxStatus(json: JSONObject): BoxStatus? {
+        if (!json.has("boxStatus")) throw JSONException("Champ boxStatus absent en version 8")
+        if (json.isNull("boxStatus")) return null
+        val o = json.getJSONObject("boxStatus")
+        val battery = o.getInt("batteryPercent")
+        val totalMb = o.getLong("totalMb")
+        val freeMb = o.getLong("freeMb")
+        val noise = o.getInt("noise")
+        val segmentDuration = o.getInt("segmentDuration")
+        val backlight = o.getInt("backlight")
+        if (battery !in 0..100 || totalMb !in 0..0xffff_ffffL || freeMb !in 0..0xffff_ffffL ||
+            noise !in 0..0xff || segmentDuration !in 0..0xff || backlight !in 0..0xff)
+            throw JSONException("État du boîtier hors plage : batterie $battery, capacité $totalMb, libre $freeMb, " +
+                "bruit $noise, segments $segmentDuration, rétro-éclairage $backlight")
+        return BoxStatus(battery, totalMb, freeMb, noise, segmentDuration, backlight)
     }
 
     /** Reprise de la 0.1.5 : boîtier et nom gardés, dossier Drive devenu dossier connu, enregistrements abandonnés. */
@@ -440,7 +469,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
     }
 
     private companion object {
-        const val VERSION = 7
+        const val VERSION = 8
     }
 }
 

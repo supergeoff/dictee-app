@@ -17,11 +17,12 @@ internal fun DicteeDialog(
     onDismiss: () -> Unit,
     confirmEnabled: Boolean = true,
     destructive: Boolean = false,
+    dismissEnabled: Boolean = true,
     content: (@Composable () -> Unit)? = null,
 ) {
     val colors = Dictee.colors
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (dismissEnabled) onDismiss() },
         confirmButton = {
             if (destructive) {
                 DangerButton(text = confirm, enabled = confirmEnabled, onClick = onConfirm)
@@ -29,7 +30,7 @@ internal fun DicteeDialog(
                 PrimaryButton(text = confirm, enabled = confirmEnabled, onClick = onConfirm)
             }
         },
-        dismissButton = { SecondaryButton(text = "Annuler", onClick = onDismiss) },
+        dismissButton = { SecondaryButton(text = "Annuler", enabled = dismissEnabled, onClick = onDismiss) },
         title = { Text(text = title, style = Dictee.type.titleModal, color = colors.text) },
         text = content,
         shape = CardShape,

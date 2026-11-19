@@ -34,6 +34,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
@@ -49,12 +50,25 @@ import top.supergeoff.dictee.SynthesisSettings
 import top.supergeoff.dictee.SynthesisSettingsForm
 import androidx.compose.ui.unit.dp
 import top.supergeoff.dictee.AppModel
+import top.supergeoff.dictee.BOX_BACKLIGHT_CHOICES
+import top.supergeoff.dictee.BOX_DURATION_CHOICES
+import top.supergeoff.dictee.BOX_NOISE_CHOICES
+import top.supergeoff.dictee.BoxSetting
 import top.supergeoff.dictee.BuildConfig
 import top.supergeoff.dictee.DriveClient
 import top.supergeoff.dictee.LocalState
 import top.supergeoff.dictee.R
 import top.supergeoff.dictee.ThemeChoice
 import top.supergeoff.dictee.UiState
+
+import top.supergeoff.dictee.backlightChoice
+import top.supergeoff.dictee.batteryLabel
+import top.supergeoff.dictee.boxSettingsEditable
+import top.supergeoff.dictee.boxSettingsStatusText
+import top.supergeoff.dictee.noiseReductionChoice
+import top.supergeoff.dictee.segmentDurationChoice
+import top.supergeoff.dictee.storageLabel
+
 /** Une rubrique par écran, sans formulaire imbriqué sur la page principale. */
 enum class SettingsPage(val title: String) {
     HOME("Réglages"), BOX("Boîtier"), STORAGE("Stockage et Google Drive"), TRANSCRIPTION("Transcription"), SYNTHESIS("Synthèse")
@@ -93,7 +107,7 @@ fun SettingsScreen(
         ) {
             when (page) {
                 SettingsPage.HOME -> SettingsHomeSections(ui.local.theme, model::setTheme, onJournal, onPage)
-                SettingsPage.BOX -> BoxSection(ui.local, busy = ui.recovering, onAssociate = onAssociate)
+                SettingsPage.BOX -> BoxSection(ui, model, onAssociate = onAssociate)
                 SettingsPage.STORAGE -> {
                     StorageSection(ui.phoneFolder, busy = ui.recovering || ui.sending, onChange = model::choosePhoneFolder)
                     DriveSection(ui.local, model, onDriveFolders)
@@ -121,12 +135,19 @@ internal fun SettingsHomeSections(theme: ThemeChoice, onTheme: (ThemeChoice) -> 
 }
 
 /**
- * Le boîtier associé avec son adresse. Sans boîtier, le bouton devient « Associer » : les réglages s'ouvrent aussi avant l'association.
- * Pendant une récupération ([busy]), le bouton est inactif : la recherche d'un boîtier fermerait la liaison que la récupération utilise.
+ * Le boîtier associé avec son adresse, puis l'état lu (batterie, stockage) et les trois réglages segmentés.
+ * Sans boîtier, le bouton devient « Associer » : les réglages s'ouvrent aussi avant l'association. Chaque
+ * réglage s'écrit dès qu'un choix est touché, sans bouton « Enregistrer » ni mise à jour optimiste : l'affiché
+ * suit la relecture du boîtier. Hors ligne, sans lecture fraîche ou pendant un travail ([busy]), les choix sont
+ * grisés et la mention indique « Dernières valeurs lues » ; sans aucune lecture, elle affiche « Non lu ».
  */
 @Composable
-private fun BoxSection(local: LocalState, busy: Boolean, onAssociate: () -> Unit) {
+private fun BoxSection(ui: UiState, model: AppModel, onAssociate: () -> Unit) {
+    val local = ui.local
     val associated = local.deviceAddress != null
+    val status = local.boxStatus
+    val busy = ui.refreshing || ui.recovering || ui.deletingBox || ui.settingBox
+    val editable = boxSettingsEditable(ui.link, ui.boxStatusFresh, busy, hasStatus = status != null)
     Section("Boîtier") {
         GroupCard {
             ListRow(
@@ -137,7 +158,110 @@ private fun BoxSection(local: LocalState, busy: Boolean, onAssociate: () -> Unit
             ) {
                 CompactButton(text = if (associated) "Changer" else "Associer", primary = !associated, enabled = !busy, onClick = onAssociate)
             }
+            if (associated && status != null) {
+                RowDivider()
+                ListRow(title = "Batterie", weight = FontWeight.Normal) {
+                    Text(batteryLabel(status.batteryPercent), style = Dictee.type.caption, color = Dictee.colors.textSecondary)
+                }
+                RowDivider()
+                ListRow(title = "Stockage", weight = FontWeight.Normal) {
+                    Text(status.storageLabel(), style = Dictee.type.caption, color = Dictee.colors.textSecondary)
+                }
+                RowDivider()
+                BoxSettingSelector("Réduction du bruit", BOX_NOISE_CHOICES, noiseReductionChoice(status.noise), editable) { choice ->
+                    model.setBoxSetting(BoxSetting.Noise(choice))
+                }
+                RowDivider()
+                BoxSettingSelector("Durée des segments", BOX_DURATION_CHOICES, segmentDurationChoice(status.segmentDuration), editable) { choice ->
+                    model.setBoxSetting(BoxSetting.Duration(choice))
+                }
+                RowDivider()
+                BoxSettingSelector("Rétro-éclairage", BOX_BACKLIGHT_CHOICES, backlightChoice(status.backlight), editable) { choice ->
+                    model.setBoxSetting(BoxSetting.Backlight(choice))
+                }
+            }
         }
+        if (associated) {
+            boxSettingsStatusText(hasStatus = status != null, fresh = ui.boxStatusFresh)?.let { mention ->
+                Text(mention, style = Dictee.type.caption, color = Dictee.colors.textSecondary)
+            }
+        }
+    }
+}
+
+/**
+ * Un réglage du boîtier : son titre, la mention « Inconnu » quand la valeur lue n'est pas documentée (aucun
+ * choix actif alors), puis un sélecteur segmenté comme celui du thème. Quand [enabled] est faux, la rangée
+ * passe à `opacity-inactive` : les valeurs restent visibles mais aucun choix ne répond.
+ */
+@Composable
+private fun <T> BoxSettingSelector(
+    title: String,
+    choices: List<Pair<T, String>>,
+    selected: T?,
+    enabled: Boolean,
+    onSelect: (T) -> Unit,
+) {
+    val colors = Dictee.colors
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .alpha(if (enabled) 1f else Tokens.INACTIVE_ALPHA)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(text = title, style = Dictee.type.rowTitle, color = colors.text, modifier = Modifier.weight(1f))
+            if (selected == null) {
+                Text(text = "Inconnu", style = Dictee.type.caption, color = colors.textSecondary)
+            }
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(ElementShape)
+                .background(colors.muted)
+                .padding(4.dp)
+                .selectableGroup(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            choices.forEach { (choice, label) ->
+                BoxSettingSegment(label, choice == selected, enabled) { onSelect(choice) }
+            }
+        }
+    }
+}
+
+/** Un choix du sélecteur d'un réglage du boîtier : le même segment que les boutons du thème, mu quand [enabled] est faux.
+ * Toucher le choix déjà actif ne déclenche rien : seul un nouveau choix écrit le réglage. */
+@Composable
+private fun RowScope.BoxSettingSegment(label: String, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    val colors = Dictee.colors
+    val source = remember { MutableInteractionSource() }
+    Box(
+        modifier = Modifier
+            .weight(1f)
+            .height(48.dp)
+            .then(if (selected) Modifier.softShadow(SegmentShape, elevation = 2.dp, lightOnly = false) else Modifier)
+            .clip(SegmentShape)
+            .background(if (selected) colors.surface else Color.Transparent)
+            .focusRing(source, Tokens.RADIUS_INNER_DP.dp)
+            .selectable(
+                selected = selected,
+                enabled = enabled,
+                interactionSource = source,
+                indication = LocalIndication.current,
+                role = Role.RadioButton,
+                onClick = { if (!selected) onClick() },
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            style = Dictee.type.label,
+            color = if (selected) colors.text else colors.textSecondary,
+            maxLines = 1,
+        )
     }
 }
 

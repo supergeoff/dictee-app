@@ -1,12 +1,12 @@
 # Dictée : spécification du produit
 
-Statut : ce document décrit le comportement livré visé pour la version 0.6.0. La recette sur appareil, la vérification Drive réelle et celle de l'APK signé restent à faire.
+Statut : ce document décrit le comportement livré pour la version 0.9.0. La recette sur appareil, la vérification Drive réelle et celle de l'APK signé restent à faire, ainsi que la recette matérielle des réglages du boîtier.
 
 Le protocole Bluetooth du MECHEN V05 est décrit dans [`protocole-v05.md`](protocole-v05.md).
 
 ## Objectif
 
-Dictée récupère les enregistrements du MECHEN V05 par Bluetooth et les range dans un dossier du téléphone choisi par l'utilisateur. Elle peut ensuite envoyer dans un dossier Google Drive les fichiers qui n'y sont pas encore. L'app n'écrit jamais sur le boîtier.
+Dictée récupère les enregistrements du MECHEN V05 par Bluetooth et les range dans un dossier du téléphone choisi par l'utilisateur. Elle peut ensuite envoyer dans un dossier Google Drive les fichiers qui n'y sont pas encore. La suppression sur le boîtier exige une demande explicite ; la récupération ne supprime jamais automatiquement les enregistrements.
 
 ## Décisions
 
@@ -40,20 +40,21 @@ L'app garde une seule activité. Le passage d'un écran à l'autre suit une pile
 
 ### Liste des enregistrements
 
-- La liste réunit trois sources : la dernière liste lue sur le boîtier, le dossier du téléphone et les MP3 du dossier Drive, quand Drive est activé. Elle est groupée par jour (« Aujourd'hui », « Hier », puis par exemple « Jeudi 29 octobre »), du plus récent au plus ancien. Un enregistrement absent du boîtier reste listé tant qu'un de ses fichiers existe sur le téléphone ou dans Drive.
+- La liste réunit trois sources : la dernière liste lue sur le boîtier, le dossier du téléphone et les MP3, VTT et MD reconnus du dossier Drive, quand Drive est activé. Elle est groupée par jour (« Aujourd'hui », « Hier », puis par exemple « Jeudi 29 octobre »), du plus récent au plus ancien. Un enregistrement absent du boîtier reste listé tant qu'un de ses fichiers existe sur le téléphone ou dans Drive.
 - La pastille du boîtier montre un point plein quand la liaison est ouverte et un point vide sinon. Un toucher relance la connexion, et un échec affiche « Boîtier hors de portée. ». Tirer la liste vers le bas relit le dossier du téléphone, le dossier Drive et le boîtier.
 - Les filtres sont « Tous », « À relire » et « Sur le boîtier », chacun avec son compteur. « Sur le boîtier » retient les enregistrements du boîtier qui n'ont aucun fichier sur le téléphone. « À relire » ne retient aucun enregistrement et affiche toujours 0.
 - « Récupérer (N) » compte les enregistrements du boîtier qui ne sont ni sur le téléphone ni dans Drive. Il n'est actif que si la liaison est ouverte, qu'aucune récupération ne tourne et que N n'est pas nul. Il affiche « Récupération… » pendant le travail.
 - « Envoyer (N) » n'apparaît que si Drive est activé. Il compte les enregistrements sans erreur de récupération dont au moins un fichier local requis par le dernier choix confirmé est à envoyer ou en conflit : fichier absent, document sans preuve correspondant à son empreinte actuelle, ou homonymes visibles. Sans catalogue ou destination connue, tout fichier local requis rend l'enregistrement candidat ; en documents seuls, un MP3 seul ne suffit pas. Il affiche « Envoi… » pendant le travail.
 - Les boutons suivent l'ordre « Récupérer », « VTT + MD », « Envoyer ». Un compteur nul désactive son bouton, sauf « Envoyer » en sélection explicite lorsqu'un fichier local est disponible pour rouvrir le choix. « VTT + MD » compte les MP3 exploitables auxquels il manque un VTT ou un MD, hors travaux actifs ; en sélection, il se limite aux lignes cochées. Il crée les fichiers manquants sans remplacer ceux qui existent et n'envoie rien vers Drive. Les exclusions de la sélection sont signalées ; une action collective ne reprend aucune tâche suspendue exclue du compteur.
 - Un appui long passe en sélection. La barre affiche le nombre de lignes cochées, une croix pour sortir et « Tout », qui coche les lignes du filtre en cours. Les actions portent alors sur les lignes cochées : récupérer une ligne cochée la transfère de nouveau depuis le boîtier, quel que soit son état ; « VTT + MD » ne remplace aucun fichier. La sélection se vide après l'action.
+- « Supprimer du téléphone » est proposé en sélection ; après une suppression partielle, les cibles qui ont encore des fichiers locaux restent cochées. Les lignes sélectionnées hors cibles restent cochées si elles sont encore présentes.
 - Chaque ligne affiche un badge et quatre points pour les étapes Téléphone, VTT, MD et Drive. Le badge indique l'erreur, le travail en cours, l'attente ou la dernière étape faite. Une tâche en attente affiche son rang dans la file.
 - La barre d'avancement affiche le type de travail, « Transcription » ou « Synthèse » pour la file de production. Les barres de récupération et d'envoi peuvent s'afficher simultanément.
 
 ### Fiche d'un enregistrement
 
 - Le titre donne le type, la date et l'heure, par exemple « Call · 30 oct. 16:05 ». Le sous-titre donne la durée et l'état.
-- Le menu propose « Récupérer à nouveau ». L'action n'est active que si l'enregistrement est sur le boîtier, que la liaison est ouverte et qu'aucune récupération ne tourne.
+- Le menu propose « Récupérer à nouveau » et « Supprimer du téléphone », ainsi que « Supprimer du boîtier » si l'enregistrement y est encore présent. La récupération n'est active que si l'enregistrement est sur le boîtier, que la liaison est ouverte et qu'aucune récupération ne tourne. Le lecteur est libéré avant confirmation de la suppression.
 - Le lecteur lit le MP3 du téléphone avec `MediaPlayer` : lecture, pause, barre de position et temps en minutes et secondes. Sans MP3 sur le téléphone, la fiche affiche « Le MP3 n'est pas encore sur le téléphone. ». La lecture se met en pause quand l'app passe en arrière-plan.
 - La fiche affiche le nom du fichier et son dossier. Elle se ferme d'elle-même si l'enregistrement disparaît de la liste.
 - La carte du parcours affiche les quatre étapes, la première raison utile et une seule action principale. Les onglets ne portent aucune action. En attente de configuration, « Ouvrir les réglages » mène à Transcription, ou à Stockage sur le téléphone si le dossier a changé ; pour une synthèse non configurée, il mène à Synthèse.
@@ -68,6 +69,10 @@ L'app garde une seule activité. Le passage d'un écran à l'autre suit une pile
 - Le sous-écran Transcription règle l'adresse du serveur, le modèle, la langue et la clé, protégée par Android Keystore. La langue vaut `auto` par défaut pour détecter automatiquement le français et l'anglais ; une langue déjà enregistrée, comme `fr`, reste inchangée tant que l'utilisateur ne la modifie pas. Le test de connexion n'est pas encore disponible : l'écran l'annonce pour une version ultérieure.
 - « Glossaire complémentaire » possède une saisie unique : chaque ligne validée devient une bulle dont la croix retire cette occurrence locale. Le collage multiligne est accepté. Enregistrer intègre aussi la saisie en attente. Les entrées conservent leurs espaces et leurs variantes, par exemple `Terme (souvent entendu : a, b)`, sans tri ni dédoublonnage. Les limites sont 500 lignes et 20 000 caractères Unicode, sans troncature. Les avertissements sur les lignes de plus de cinq mots ou terminées par `.`, `!` ou `?` ne bloquent pas l’enregistrement.
 - Le glossaire est figé dans chaque tâche et transmis tel quel, avec un saut de ligne entre les entrées, dans le champ standard multipart `prompt`. Vide, il n’ajoute aucun champ. Il complète le glossaire distant lorsqu’un service en possède un et sert sinon d’indice de vocabulaire OpenAI ; il ne lit, ne remplace et n’efface jamais le glossaire distant. Il ne concerne pas la synthèse et son contenu n’est pas journalisé. Les limites propres à chaque fournisseur restent applicables. L’app n’implémente pas encore de client Realtime.
+- La section Boîtier affiche le boîtier associé avec « Changer », la batterie en pourcentage et le stockage dans les unités affichées par DOWAY, par exemple « 23 Mo utilisés sur 59 934 Mo ». Une capacité ou un espace libre incohérent est signalé « Stockage inconnu » plutôt que converti en valeur négative. Elle règle la réduction du bruit (Coupée, Faible, Moyenne, Élevée), la durée des segments (30 minutes, 1 heure, 2 heures, 3 heures) et le rétro-éclairage (Désactivé, Activé). Le choix d'un segment écrit le réglage immédiatement, sans bouton « Enregistrer ». Une valeur lue qui n'est pas documentée n'active aucun choix et est signalée « Inconnu » ; les choix documentés restent disponibles.
+- Les commandes du boîtier exigent un boîtier associé, une liaison ouverte et une lecture `0x05` valide enregistrée durablement sur cette liaison. Une reconnexion à la même adresse exige une nouvelle lecture ; un échec de sauvegarde invalide la fraîcheur. Elles sont grisées hors ligne, sans lecture fraîche, pendant leur propre écriture et pendant une récupération, une suppression du boîtier, une recherche ou une lecture déjà en cours. Une lecture invalide ou en échec sur une liaison encore ouverte les laisse grisées jusqu'à une nouvelle lecture réussie. Une seule écriture est admise à la fois, et « Changer » suit les mêmes protections.
+- Après l'acquittement d'un réglage, l'app envoie `0x05`, attend la sauvegarde durable avant tout message de confirmation ou divergence, et l'affichage n'est jamais optimiste : la valeur confirmée vient de cette relecture. Si la valeur relue correspond au choix, elle devient la dernière lecture enregistrée ; si elle diffère, la dernière lecture enregistrée contient la valeur réellement relue et le résultat indique « La valeur relue diffère du réglage demandé. ». Un statut d'acquittement différent de `00` est un refus, signalé par « Le boîtier a refusé ce réglage. ». Une coupure, un délai dépassé ou une réponse invalide ne provoque aucun renvoi automatique, car la commande peut avoir été appliquée : l'app signale « Réglage non vérifié. Reconnecte le boîtier avant de réessayer. », ne conserve aucune intention de rejeu et n'affiche pas de bouton « Réessayer ». Le succès concordant affiche « Réglage appliqué et vérifié par relecture. ». Si la publication de la relecture est invalidée ou remplacée avant la projection du résultat, l’app signale également le résultat non vérifié. Les messages de confirmation et de divergence décrivent la relecture durable passée, sans affirmer que le boîtier est encore connecté ni que la valeur est affichée au moment du message.
+- Hors ligne ou sans lecture fraîche sur la liaison courante, la rubrique indique « Dernières valeurs lues » : les valeurs affichées sont la dernière lecture enregistrée, pas une lecture fraîche. Sans aucune lecture, elle affiche « Non lu » plutôt qu'une valeur inventée. L'app ne change aucune valeur au démarrage ou à l'ouverture des réglages. Le support USB et le gain restent hors périmètre : l'app ne les affiche ni ne les règle.
 - « Créer le VTT et le MD après récupération » est désactivé par défaut. Son activation ne traite pas les MP3 déjà présents ; sa désactivation n'annule pas les demandes déjà programmées. La valeur est capturée au début de chaque récupération individuelle. Drive reste manuel.
 - Une clé déjà enregistrée est indiquée par des points sans être relue ; une saisie la remplace, et une saisie effacée conserve la précédente.
 - La section Synthèse règle séparément l'adresse, le modèle, la clé protégée par Android Keystore et le prompt. Une clé vide conserve la précédente ; une tâche garde sa référence et son contexte figés, même après changement des réglages. « Prompt et format » permet de modifier, enregistrer ou rétablir le prompt et d'insérer `{{type}}`, `{{date}}`, `{{duree}}`, `{{intervenants}}`. Le prompt par défaut demande une synthèse fidèle en français, sans invention, en sections Résumé, Décisions et Actions ; il traite le VTT comme source, non comme instruction.
@@ -119,9 +124,10 @@ L'état se calcule à chaque rafraîchissement à partir des trois sources, des 
 
 ### État local
 
-Le fichier `state.json`, version 7, du stockage interne ne garde que ce qui ne se déduit pas des trois sources :
+Le fichier `state.json`, version 8, du stockage interne ne garde que ce qui ne se déduit pas des trois sources :
 
 - l'adresse et le nom du boîtier associé ;
+- la dernière lecture valide du boîtier (`0x05` : batterie, capacité, espace libre, réduction du bruit, durée des segments, rétroéclairage), rattachée à l'adresse associée et remplacée à chaque nouvelle lecture ;
 - la dernière liste lue sur le boîtier (nom, taille, indicateur), remplacée à chaque lecture et utilisée quand le boîtier est hors de portée ;
 - l'adresse du dossier du téléphone (URI de l'arborescence choisie) ;
 - l'activation de Drive, le compte Google autorisé, les dossiers Drive connus (identifiant, nom, origine) et le dossier choisi ;
@@ -141,11 +147,17 @@ L'app reprend l'état de la version 0.1.5 au premier lancement : elle garde l'ad
 
 ## Récupération par Bluetooth
 
-- La liaison s'ouvre au passage au premier plan, au toucher sur la pastille, au geste de rafraîchissement et après une association. Elle se ferme quand l'app passe en arrière-plan, sauf pendant une récupération, et à la fin d'une récupération faite en arrière-plan.
-- La séquence de connexion et de lecture de la liste est celle de [`protocole-v05.md`](protocole-v05.md) : appairage rejoué, numéro de série, informations, mise à l'heure, `0x18` avec `00`, puis `0x0a`.
+- La liaison s'ouvre au passage au premier plan, au toucher sur la pastille, au geste de rafraîchissement et après une association. Elle se ferme quand l'app passe en arrière-plan, sauf pendant une récupération ou une suppression du boîtier, et à la fin de l'opération faite en arrière-plan.
+- La séquence de connexion et de lecture de la liste est celle de [`protocole-v05.md`](protocole-v05.md) : appairage rejoué, numéro de série, informations, mise à l'heure, `0x18` avec `00`, puis `0x0a`. La réponse à `0x05` est décodée à chaque ouverture de liaison — y compris lorsqu'elle sert une récupération, une suppression ou un réglage — et publiée avec l'adresse du boîtier avant les opérations qui utilisent la session. Une lecture reçue pour une adresse qui n'est plus associée est ignorée, et une coupure ou un échec de lecture conserve la dernière valeur valide sans la présenter comme fraîche.
 - Le transfert utilise `0x0b`. Le flux est écrit dans `<nom>.mp3.part`, dans le cache de l'app, puis contrôlé (taille annoncée et en-tête MP3). Le fichier valide est copié dans le dossier du téléphone sous `<Type>-<nom>.mp3`, en remplaçant un fichier du même nom en cas de nouvelle récupération, puis le fichier du cache est supprimé.
 - Les récupérations passent l'une après l'autre, de la plus ancienne à la plus récente. Pour une récupération dont l'option capturée est active, une intention est persistée avant transfert puis rendue programmable seulement après validation durable du MP3. Sa consommation est idempotente ; au redémarrage, les intentions validées sont réconciliées sans parcourir les anciens MP3. Une récupération interrompue ne lance ni transcription ni reprise Bluetooth automatique. Une erreur de programmation ne transforme pas une récupération réussie en échec et ne bloque pas les suivantes.
-- Le boîtier n'est jamais modifié : l'app n'envoie aucune commande de suppression ni d'écriture d'enregistrement.
+- Aucune écriture d'enregistrement ni suppression automatique ne modifie le boîtier. Seule la suppression manuelle confirmée ci-dessous envoie une commande de suppression.
+
+## Suppression du boîtier
+
+- Depuis la fiche ou la sélection, « Supprimer du boîtier » ne cible que les enregistrements présents sur le boîtier. Un dialogue indique leur nombre, la conservation des copies du téléphone et de Drive et le nombre d'audios sans autre copie confirmée. Cet avertissement ne bloque pas ; annuler n'émet aucune commande. Avant toute commande, les copies connues sont revérifiées sous réservation : si une cible supplémentaire n'a plus de copie audio confirmée, la demande est annulée et doit être redemandée pour afficher un avertissement à jour.
+- Une cible occupée ou en attente bloque toute la sélection. Une demande de traitement admise protège ses cibles dès sa réception et jusqu'à la fin du parcours interactif ; sans sélection explicite, la suppression est bloquée pendant ce parcours. Une demande de traitement chevauchant une suppression réservée est refusée.
+- Après confirmation, chaque nom est envoyé par `0x0d` avec ses 14 octets ASCII ; une relecture complète par `0x18 00` puis `0x0a` confirme sa disparition. Une coupure, un délai dépassé ou une liste incomplète arrête le lot sans renvoi automatique. Le bilan distingue les cibles confirmées, refusées, non vérifiées et non traitées. Les copies du téléphone et de Drive restent intactes ; aucune récupération ni aucun traitement n'est lancé. La fiche d'un enregistrement sans copie connue revient à la liste.
 
 ## Stockage sur le téléphone
 
@@ -155,12 +167,19 @@ L'app reprend l'état de la version 0.1.5 au premier lancement : elle garde l'ad
 - Une écriture passe par un fichier `.part`. L'ancien fichier du même nom est mis de côté en `.old`, le nouveau prend le nom définitif, puis les restes sont nettoyés. Le dossier doit accepter le renommage.
 - Si la permission est perdue ou si le dossier a disparu, l'app affiche « Dossier du téléphone inaccessible. Choisis-le de nouveau dans Réglages. ».
 
+## Suppression du téléphone
+
+- Depuis le menu de la fiche ou la sélection, un dialogue confirme le nombre d'enregistrements ayant des fichiers locaux. Seuls leurs MP3, VTT et MD reconnus dans le dossier choisi sont supprimés ; ni Drive ni le boîtier ne sont modifiés. Annuler ne fait rien et une confirmation ne sert qu'une fois.
+- Le dialogue avertit si la sauvegarde des documents sur Drive ne peut pas être vérifiée, ou si aucune autre copie de l'audio n'est connue sur Drive ou le boîtier. Ces avertissements ne bloquent pas. Un nom distant seul ne prouve pas la version courante d'un document : les reçus et la destination comptent, et `drive.file` ne révèle pas tous les fichiers Drive.
+- Une cible occupée ou en attente bloque toute la sélection. Le dossier et les travaux sont revalidés avant suppression. Une récupération visant une cible en cours de suppression est refusée ; une cible d'une récupération déjà préparée est revalidée avant son transfert si une suppression est intervenue entre-temps. Une erreur sur un fichier n'annule pas les succès précédents : les autres fichiers sont tentés, les refus sont nommés et le dossier est relu ; une relecture impossible est signalée.
+- Après suppression, un fichier local reste « Fait », sinon une copie distante confirmée affiche « Sur Drive » et une copie inconnue « Absent ». L'étape Drive dépend du choix d'envoi et des reçus de la destination courante. La ligne demeure si le boîtier ou Drive contient encore un fichier reconnu, même uniquement VTT ou MD ; sinon elle disparaît et la fiche revient à la liste. Un audio encore sur le boîtier reste récupérable. Rien n'est automatiquement récupéré ni produit ; les documents uniquement distants ne sont pas téléchargeables dans la fiche.
+
 ## Envoi vers Google Drive
 
 - Le droit est `drive.file`. L'app demande un jeton avant chaque requête Drive. Sur une erreur 401, elle efface le jeton en cache (`clearToken`), en redemande un et refait l'appel une seule fois. Les délais sont de 30 secondes pour la connexion et de 120 secondes pour la lecture.
 - Dossier par défaut : quand Drive est activé sans dossier choisi, l'app cherche « Dictée » parmi les dossiers connus, puis dans Drive (requête sur le nom, limitée par Google aux dossiers accessibles à l'app). Sans résultat, elle crée « Dictée » à la racine. Ce choix se fait au premier envoi.
 - Liste et fiche ouvrent le même dialogue : « MP3 + VTT + MD » ou « VTT + MD », avec le compte, le dossier, le nombre d'enregistrements et les documents manquants. Le dernier choix confirmé est conservé dans `state.json` ; annuler ne change pas ce choix et ne lance aucun envoi. Les anciens états migrent avec le choix « MP3 + VTT + MD » et sans preuve d'envoi. La sélection explicite et l'action secondaire d'une fiche terminée permettent de changer de choix. Les reprises repassent par le dialogue.
-- Les entrées Drive accessibles à l'application sont lues page par page avec leur identifiant. Le droit `drive.file` ne donne pas une vue générale du Drive : un fichier existant mais non visible à l'application peut ne pas être détecté. Un MP3 existant n'est jamais remplacé ; son ancien nom sans préfixe (`<nom>.mp3`) compte aussi. Un MP3 présent seulement dans Drive crée une ligne dans la liste.
+- Les entrées Drive accessibles à l'application sont lues page par page avec leur identifiant. Le droit `drive.file` ne donne pas une vue générale du Drive : un fichier existant mais non visible à l'application peut ne pas être détecté. Un MP3 existant n'est jamais remplacé ; son ancien nom sans préfixe (`<nom>.mp3`) compte aussi. Un MP3, VTT ou MD reconnu présent seulement dans Drive crée une ligne dans la liste.
 - Les VTT et MD sont comparés par empreinte SHA-256 et preuve d'envoi, propre au compte, au dossier et à l'identifiant Drive. Un document sans preuve ou modifié est créé ou remplacé par téléversement reprenable, y compris un VTT DOWAY visible du même nom : il n'y a pas de règle « ne jamais remplacer » pour les VTT/MD envoyés. Les homonymes visibles sont signalés comme conflit plutôt que de choisir arbitrairement. La preuve est enregistrée après contrôle de taille et une erreur d'écriture arrête le lot ; une erreur d'envoi ne crée pas de preuve et les succès précédents restent acquis.
 - Les fichiers locaux restent en place. Les documents absents ne sont pas créés par l'envoi. Le parcours Drive exige les VTT et MD courants prouvés et, selon le choix, le MP3 distant ; une synthèse issue d'un ancien VTT ne termine pas le parcours.
 
@@ -246,9 +265,11 @@ Les empreintes du VTT et du MD et le modèle sont conservés en privé pour un M
 | Fichier | Rôle |
 |---|---|
 | `Frame.kt`, `V05Session.kt` | Trames du protocole, session et transfert |
+| `BoxStatus.kt`, `BoxSettingsFlow.kt`, `BoxReadingPublisher.kt`, `BoxSettingsPresentation.kt` | État lu par `0x05`, enregistrement et écriture des réglages du boîtier, règles de la section Boîtier |
 | `RecordName.kt` | Lecture et écriture des noms, type, durée, types MIME |
 | `RecordingState.kt` | Liste réunie, compteurs et état affiché à partir des sources, des travaux et des erreurs |
 | `RecoveryJob.kt`, `SendJob.kt` | File de récupération et file d'envoi |
+| `PhoneDeletion.kt`, `PhoneDeletionOrchestrator.kt`, `PhoneDeletionPresentation.kt` | Préparation, coordination et présentation de la suppression locale |
 | `DriveClient.kt` | Dossiers, listes, téléversement, renouvellement du jeton |
 | `Journal.kt` | Journal sur sept jours et ses filtres |
 | `LocalState.kt` | Lecture, écriture et reprise de `state.json` |
@@ -305,10 +326,15 @@ La police d'interface est Figtree (graisses 400, 500, 600 et 700, en police vari
 3. Le calcul de l'état affiché donne la valeur attendue pour chaque ligne du tableau « État affiché ».
 4. La détection des fichiers déjà présents dans Drive tient compte des noms préfixés et des noms de la version 0.1.5. Une erreur 401 déclenche un seul nouvel essai avec un jeton neuf.
 5. Les tokens de `Tokens.kt` correspondent à la copie de `tokens.json`.
-6. L'APK se compile et le lint passe.
+6. Le décodage de `0x05` rejette les longueurs invalides, les valeurs inconnues restent identifiables, les commandes des trois réglages sont relues avant confirmation et aucun rejeu n'est conservé après une coupure.
+7. L'APK se compile et le lint passe.
 
 ### Sur un téléphone
 
 L'association se fait une fois, et l'app s'ouvre ensuite sur la liste. La liste montre les mêmes enregistrements que DOWAY, avec le bon type. « Récupérer » écrit les MP3 préfixés dans le dossier choisi. « Envoyer » les dépose dans « Dictée » sans créer de doublon avec les fichiers de la version 0.1.5 ni avec les exports de DOWAY. Une récupération continue écran éteint, et un boîtier éteint pendant un transfert ne laisse aucun fichier partiel.
+
+Pour la 0.9.0, la recette matérielle des réglages du boîtier reste à faire, avec un accord explicite avant toute modification réelle du boîtier : comparer la batterie et le stockage avec DOWAY, régler puis relire chaque niveau de bruit, chaque durée de segment et les deux états du rétro-éclairage, vérifier les valeurs après reconnexion, puis mettre le boîtier hors de portée pour contrôler les choix grisés et l'affichage des dernières valeurs. La compilation ne prouve pas l'effet réel des réglages.
+
+Pour la 0.7.0, la recette physique reste à faire avec des fichiers d'essai sauvegardés : suppression simple et multiple, avertissements sans sauvegarde, refus d'une cible occupée, maintien des documents distants et disparition des fichiers locaux. Les tests Android doivent aussi être exécutés sur appareil ; la compilation ne les exécute pas.
 
 Pour la 0.4.0, restent à vérifier sur appareil le retrait des récents pendant l'appel et l'écriture, la reprise après redémarrage, les interruptions répétées jusqu'à suspension, la relance manuelle, l'annulation, le maintien des anciens fichiers et les thèmes clair et sombre. Un essai explicitement autorisé d'un VTT synthétique représentatif de deux heures doit vérifier la réception et une réponse non tronquée, et relever les limites et tokens lorsqu'ils sont exposés. Un essai distinct autorisé sur une réunion réelle doit confirmer VTT puis MD en un appui. Sans ces essais et la vérification d'une construction signée, DIC-19 reste ouverte et la 0.4.0 n'est pas annoncée comme livrée.

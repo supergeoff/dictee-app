@@ -121,6 +121,42 @@ private class Selection {
 fun RecordingsScreen(ui: UiState, model: AppModel, onOpen: (name: String) -> Unit, onSettings: () -> Unit) {
     var filter by rememberSaveable { mutableStateOf(Filter.ALL) }
     val selection = remember { Selection() }
+    var boxDeletionTargets by remember { mutableStateOf<Set<String>?>(null) }
+    LaunchedEffect(ui.deletingBox, ui.boxDeletionResult) {
+        val targets = boxDeletionTargets
+        val result = ui.boxDeletionResult
+        if (targets != null && !ui.deletingBox && result != null) {
+            selection.retain(top.supergeoff.dictee.selectionAfterBoxDeletion(selection.names.orEmpty(), targets intersect result.confirmed, ui.recordings))
+            boxDeletionTargets = null
+        }
+    }
+    ui.boxDeletionRequest?.let { plan ->
+        BoxDeletionDialog(plan, ui.deletingBox, onConfirm = {
+            boxDeletionTargets = plan.names.toSet()
+            model.confirmBoxDeletion()
+        }, onDismiss = model::cancelBoxDeletion)
+    }
+    var deletionTargets by remember { mutableStateOf<Set<String>?>(null) }
+    var deletionRevision by remember { mutableStateOf(0L) }
+    var deletionStarted by remember { mutableStateOf(false) }
+    LaunchedEffect(ui.phoneRevision, ui.deletingPhone) {
+        val targets = deletionTargets
+        if (targets != null && ui.deletingPhone) deletionStarted = true
+        if (targets != null && !ui.deletingPhone && (deletionStarted || ui.phoneRevision != deletionRevision)) {
+            if (ui.phoneRevision != deletionRevision) {
+                selection.retain(top.supergeoff.dictee.selectionAfterPhoneDeletion(selection.names.orEmpty(), targets, ui.recordings))
+            }
+            deletionTargets = null
+        }
+    }
+    ui.phoneDeletionRequest?.let { plan ->
+        PhoneDeletionDialog(plan, ui.deletingPhone, onConfirm = {
+            deletionTargets = plan.recordings.mapTo(HashSet()) { it.name }
+            deletionRevision = ui.phoneRevision
+            deletionStarted = false
+            model.confirmPhoneDeletion()
+        }, onDismiss = model::cancelPhoneDeletion)
+    }
     val shown = remember(ui.recordings, filter) { ui.recordings.filter { filter.matches(it) } }
     val present = remember(ui.recordings) { ui.recordings.mapTo(HashSet()) { it.name } }
     // Une ligne cochée qui disparaît de la liste est oubliée, pour ne pas être recochée si elle revient.
@@ -150,6 +186,11 @@ fun RecordingsScreen(ui: UiState, model: AppModel, onOpen: (name: String) -> Uni
                     onLongClick = { name -> if (checked == null) selection.start(name) },
                 )
             }
+        }
+        if (checked != null) {
+            val boxNames = ui.recordings.filter { it.onBox && it.name in checked }.mapTo(HashSet()) { it.name }
+            if (boxNames.isNotEmpty()) SecondaryButton("Supprimer du boîtier", modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), onClick = { model.requestBoxDeletion(boxNames) })
+            SelectionDeletionButton { model.requestPhoneDeletion(checked) }
         }
         ActionBar(ui, model, checked, onDone = selection::clear)
     }
@@ -391,4 +432,9 @@ internal fun ActionBarButtons(
             }
         }
     }
+}
+
+@Composable
+internal fun SelectionDeletionButton(onDelete: () -> Unit) {
+    SecondaryButton("Supprimer du téléphone", modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), onClick = onDelete)
 }

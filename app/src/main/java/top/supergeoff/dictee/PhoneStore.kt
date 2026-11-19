@@ -19,6 +19,9 @@ interface PhoneStore {
      */
     fun writeGuarded(fileName: String, source: File, replace: Boolean, promote: ((() -> Unit) -> Unit))
 
+    /** Supprime le fichier s’il existe ; une erreur d’accès lève [PhoneStoreException]. */
+    fun delete(fileName: String)
+
     /** Contenu du fichier [fileName]. Ne lève que des [PhoneStoreException], dont une s'il est absent. */
     fun open(fileName: String): InputStream
 }
