@@ -1148,6 +1148,23 @@ class AppModel(
         }
     }
 
+    /** Retire le dossier de la liste sans toucher à Drive. Retirer le dossier de dépôt revient au dossier par défaut « Dictée ». */
+    fun forgetFolder(id: String) {
+        val wasChosen = localFlow.chosenFolderId == id
+        val name = localFlow.knownFolders.firstOrNull { it.id == id }?.name ?: id
+        val saved = update { state ->
+            state.copy(
+                knownFolders = state.knownFolders.filter { it.id != id },
+                chosenFolderId = state.chosenFolderId.takeIf { it != id },
+            )
+        }
+        scope.launch {
+            if (saved.await().isFailure) return@launch
+            note("Dossier Drive retiré de la liste : $name")
+            if (wasChosen) folderChanged()
+        }
+    }
+
     fun useDefaultFolder() {
         driveFolderAction({ useDefaultFolder() }, ::folderMessage) { drive ->
             resolveFolder(localFlow.copy(chosenFolderId = null), drive).second

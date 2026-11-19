@@ -52,6 +52,7 @@ private class FolderLine(
     val selected: Boolean,
     val accessible: Boolean,
     val onClick: () -> Unit,
+    val onForget: (() -> Unit)? = null,
 )
 
 /**
@@ -91,6 +92,7 @@ fun DriveFolderScreen(ui: UiState, model: AppModel, onBack: () -> Unit) {
                         model.useDefaultFolder()
                         onBack()
                     },
+                    onForget = model::forgetFolder,
                 ),
             )
             Actions(onNew = { creating = true }, onOther = model::openPicker)
@@ -111,7 +113,7 @@ fun DriveFolderScreen(ui: UiState, model: AppModel, onBack: () -> Unit) {
  * Les lignes de la liste : « Dictée » d'abord s'il n'est pas parmi les dossiers connus, puis les dossiers connus. Le dossier de dépôt porte
  * la coche : le dossier choisi, ou « Dictée » tant qu'aucun n'est choisi.
  */
-private fun folderLines(local: LocalState, access: Map<String, Boolean>?, onChoose: (String) -> Unit, onDefault: () -> Unit): List<FolderLine> {
+private fun folderLines(local: LocalState, access: Map<String, Boolean>?, onChoose: (String) -> Unit, onDefault: () -> Unit, onForget: (String) -> Unit): List<FolderLine> {
     val chosen = local.chosenFolderId
     val defaultKnown = local.knownFolders.any { it.name == DriveClient.DEFAULT_FOLDER }
     val known = local.knownFolders.map { folder ->
@@ -127,6 +129,7 @@ private fun folderLines(local: LocalState, access: Map<String, Boolean>?, onChoo
             selected = if (chosen == null) folder.name == DriveClient.DEFAULT_FOLDER else folder.id == chosen,
             accessible = accessible,
             onClick = { onChoose(folder.id) },
+            onForget = { onForget(folder.id) },
         )
     }
     if (defaultKnown) return known
@@ -155,6 +158,7 @@ private fun KnownFolders(lines: List<FolderLine>) {
                     onClick = line.onClick,
                 ) {
                     if (line.selected) RowIcon(R.drawable.ic_check, size = 20.dp, tint = Dictee.colors.text)
+                    line.onForget?.let { IconAction(R.drawable.ic_close, "Retirer ${line.name} de la liste", it) }
                 }
             }
         }

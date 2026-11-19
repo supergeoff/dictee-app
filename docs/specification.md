@@ -86,6 +86,7 @@ L'app garde une seule activité. Le passage d'un écran à l'autre suit une pile
 
 - La liste « Dossiers connus » montre les dossiers que l'app a créés et ceux ouverts une fois avec le sélecteur Google. « Dictée » apparaît en tête tant qu'il n'est pas connu, comme dossier par défaut créé au premier envoi. Un dossier devenu inaccessible (supprimé, dans la corbeille ou sans droit d'ajout) s'affiche grisé avec la mention « Inaccessible ».
 - Un toucher choisit le dossier et revient aux réglages. « Nouveau dossier » demande un nom et crée le dossier à la racine du Drive.
+- L'icône ✕ en bout de ligne retire un dossier connu de la liste, sans confirmation et sans toucher au dossier dans Drive. Si c'était le dossier de dépôt, l'app revient au dossier par défaut « Dictée ». Le dossier retiré peut revenir par « Autre dossier… ».
 - « Autre dossier… » ouvre le sélecteur Google, réglé pour les dossiers. Le dossier retenu est contrôlé (`capabilities.canAddChildren`, hors corbeille, type dossier), puis ajouté aux dossiers connus.
 
 ### Journal
