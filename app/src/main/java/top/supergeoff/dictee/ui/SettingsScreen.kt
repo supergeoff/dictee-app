@@ -4,6 +4,7 @@ package top.supergeoff.dictee.ui
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -42,9 +43,12 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
 import top.supergeoff.dictee.transcriptionTaskSettingsMessages
+import top.supergeoff.dictee.SpeakerName
+import top.supergeoff.dictee.SpeakerNames
 import top.supergeoff.dictee.TranscriptionSettingsForm
 import top.supergeoff.dictee.SynthesisSettings
 import top.supergeoff.dictee.SynthesisSettingsForm
@@ -112,7 +116,9 @@ fun SettingsScreen(
                     StorageSection(ui.phoneFolder, busy = ui.recovering || ui.sending, onChange = model::choosePhoneFolder)
                     DriveSection(ui.local, model, onDriveFolders)
                 }
-                SettingsPage.TRANSCRIPTION -> TranscriptionSection(ui.local, model.transcriptionForm, model::setAutoProcessAfterRecovery)
+                SettingsPage.TRANSCRIPTION -> TranscriptionSection(
+                    ui.local, model.transcriptionForm, model::setAutoProcessAfterRecovery, model::renameSpeakerName, model::removeSpeakerName,
+                )
                 SettingsPage.SYNTHESIS -> SynthesisSection(ui.local.synthesisSettings, model.synthesisForm, onPrompt)
             }
         }
@@ -366,7 +372,10 @@ internal fun AutomaticProcessingSetting(enabled: Boolean, onEnabledChange: (Bool
 
 /** Le formulaire reste dans le modèle pendant la sauvegarde et ne préremplit jamais la clé. */
 @Composable
-internal fun TranscriptionSection(local: LocalState, form: TranscriptionSettingsForm, onAutoProcessChange: (Boolean) -> Unit = {}) {
+internal fun TranscriptionSection(
+    local: LocalState, form: TranscriptionSettingsForm, onAutoProcessChange: (Boolean) -> Unit = {},
+    onRenameSpeaker: (String, String) -> Unit = { _, _ -> }, onRemoveSpeaker: (String) -> Unit = {},
+) {
     LaunchedEffect(form) { form.initialize(local.transcriptionSettings) }
     val draft by form.state.collectAsState()
     val settings = local.transcriptionSettings
@@ -387,12 +396,75 @@ internal fun TranscriptionSection(local: LocalState, form: TranscriptionSettings
             Text("Modèle", style = Dictee.type.label, color = Dictee.colors.text)
             DicteeTextField(draft.model, form::setModel, enabled = draft.initialized && !draft.saving, modifier = Modifier.fillMaxWidth().testTag("transcription-model").semantics { contentDescription = "Modèle" })
             GlossaryEditor(form)
+            SpeakerBook(local.speakerNames, onRenameSpeaker, onRemoveSpeaker)
             PrimaryButton(if (draft.saving) "Enregistrement…" else "Enregistrer", enabled = draft.initialized && !draft.saving, modifier = Modifier.fillMaxWidth().testTag("transcription-save")) { form.submit() }
             draft.message?.let { Text(it, style = Dictee.type.bodySm, color = Dictee.colors.text) }
             transcriptionTaskSettingsMessages(local.transcriptionTasks).forEach { message ->
                 Text(message, style = Dictee.type.caption, color = Dictee.colors.textSecondary)
             }
             Text("Le test de connexion sera disponible ultérieurement.", style = Dictee.type.caption, color = Dictee.colors.textSecondary)
+        }
+    }
+}
+
+/**
+ * Le carnet des noms de locuteurs, du plus récent au moins récent. « Renommer » ouvre [SpeakerNameDialog] ; « Supprimer » demande
+ * confirmation. Retirer un nom du carnet ne change aucun VTT ni MD déjà nommé.
+ */
+@Composable
+private fun SpeakerBook(book: List<SpeakerName>, onRename: (String, String) -> Unit, onRemove: (String) -> Unit) {
+    var renaming by remember { mutableStateOf<SpeakerName?>(null) }
+    var removing by remember { mutableStateOf<SpeakerName?>(null) }
+    val sorted = book.sortedByDescending { it.lastUsedAt }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Locuteurs", style = Dictee.type.label, color = Dictee.colors.text)
+        if (sorted.isEmpty()) {
+            Text("Aucun nom enregistré. Nomme un locuteur depuis l'onglet Transcription d'un enregistrement.",
+                style = Dictee.type.caption, color = Dictee.colors.textSecondary)
+        } else {
+            GroupCard {
+                sorted.forEachIndexed { index, speaker ->
+                    if (index > 0) RowDivider()
+                    ListRow(title = speaker.name, weight = FontWeight.Normal) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            TextAction("Renommer") { renaming = speaker }
+                            TextAction("Supprimer") { removing = speaker }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    renaming?.let { speaker ->
+        SpeakerNameDialog(speaker.name, onConfirm = { to -> renaming = null; onRename(speaker.name, to) }, onDismiss = { renaming = null })
+    }
+    removing?.let { speaker ->
+        DicteeDialog(
+            title = "Supprimer « ${speaker.name} » ?", confirm = "Supprimer", destructive = true,
+            onConfirm = { removing = null; onRemove(speaker.name) }, onDismiss = { removing = null },
+        ) {
+            Text("Le nom disparaît du carnet. Les VTT et MD déjà nommés ne changent pas.", style = Dictee.type.caption, color = Dictee.colors.textSecondary)
+        }
+    }
+}
+
+/** Dialogue « Renommer » : le champ part du nom actuel. « Valider » reste désactivé tant que la saisie n'est pas un nom valide. */
+@Composable
+private fun SpeakerNameDialog(current: String, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
+    var query by remember { mutableStateOf(current) }
+    val valid = SpeakerNames.validate(query)
+    DicteeDialog(
+        title = "Renommer le locuteur", confirm = "Valider", confirmEnabled = valid != null,
+        onConfirm = { valid?.let(onConfirm) }, onDismiss = onDismiss,
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            DicteeTextField(
+                query, { query = it },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { valid?.let(onConfirm) }),
+                modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Nouveau nom du locuteur" },
+            )
+            Text("40 caractères au plus, sans « < », « > », « & » ni saut de ligne.", style = Dictee.type.caption, color = Dictee.colors.textSecondary)
         }
     }
 }

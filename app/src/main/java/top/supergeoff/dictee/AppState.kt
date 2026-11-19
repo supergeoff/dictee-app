@@ -1267,6 +1267,14 @@ class AppModel(
 
     fun setAutoProcessAfterRecovery(enabled: Boolean) { update { it.copy(autoProcessAfterRecovery = enabled) } }
 
+    /** Renomme [old] dans le carnet des locuteurs ; un [new] invalide n'est pas écrit. */
+    fun renameSpeakerName(old: String, new: String) {
+        val name = SpeakerNames.validate(new) ?: return
+        update { it.copy(speakerNames = SpeakerNames.rename(it.speakerNames, old, name)) }
+    }
+
+    fun removeSpeakerName(name: String) { update { it.copy(speakerNames = SpeakerNames.remove(it.speakerNames, name)) } }
+
     val transcriptionForm = TranscriptionSettingsForm(scope) { settings, secret ->
         withContext(Dispatchers.IO) { transcriptionSettings.save(settings, secret) }
         reconcileAutomaticProcessing()
