@@ -434,7 +434,8 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
     private fun readSynthesisSettings(o: JSONObject): SynthesisSettings {
         val defaults = SynthesisSettings()
         return SynthesisSettings(o.stringOrNull("baseUrl") ?: defaults.baseUrl, o.stringOrNull("model") ?: defaults.model,
-            o.stringOrNull("credentialRef"), o.stringOrNull("prompt") ?: defaults.prompt)
+            o.stringOrNull("credentialRef"),
+            o.stringOrNull("prompt")?.takeUnless { it == PREVIOUS_DEFAULT_SYNTHESIS_PROMPT } ?: defaults.prompt)
     }
 
     private fun readSynthesisProvenance(array: JSONArray): List<SynthesisProvenance> = List(array.length()) { i ->
