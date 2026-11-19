@@ -964,6 +964,36 @@ class AppModel(
         }
     }
 
+    /**
+     * Renomme l'étiquette [from] du VTT de l'enregistrement [name] en [to], et la cite dans son MD. Le résultat sort en message.
+     * Sans VTT ou sans dossier du téléphone, rien n'est tenté.
+     */
+    fun renameSpeaker(name: String, from: String, to: String) {
+        scope.launch {
+            jobs.track {
+                try {
+                    val state = localRepository.awaitInitialized()
+                    val recording = ui.value.recordings.firstOrNull { it.name == name }
+                    val folderUri = state.phoneTreeUri
+                    val vtt = recording?.phoneFiles?.get(FileKind.VTT)
+                    if (recording == null || folderUri == null || vtt == null) {
+                        say("Le VTT n'est pas disponible sur le téléphone.")
+                        return@track
+                    }
+                    val md = recording.phoneFiles[FileKind.MD]
+                    val mdName = md?.fileName ?: RecordName.fileName(recording.type, recording.name, FileKind.MD)
+                    val result = transcriptionCoordinator.renameSpeaker(name, folderUri, vtt.fileName, mdName, from, to)
+                    say(speakerRenameMessage(result, from, md != null))
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    journal.error(Source.APP, "nommage de locuteur : ${reasonOf(e)}")
+                    say(reasonOf(e))
+                }
+            }
+        }
+    }
+
     /** Cesse le suivi interactif (timeout du service) ; le travail périodique déjà programmé prend le relais. */
     fun stopInteractiveTranscription() {
         transcriptionLifecycle.stop()

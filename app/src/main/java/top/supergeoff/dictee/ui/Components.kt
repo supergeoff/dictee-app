@@ -494,17 +494,18 @@ private fun DicteeFieldDecoration(source: MutableInteractionSource, enabled: Boo
 
 /**
  * Filtre en pilule de 36 dp : l'aplat gris du bouton secondaire, ou `primary` quand il est choisi. [count] montre le nombre d'éléments
- * que le filtre garde, ou rien s'il est nul.
+ * que le filtre garde, ou rien s'il est nul. Inactive ([enabled] faux), elle passe à `opacity-disabled`.
  */
 @Composable
-internal fun FilterPill(label: String, selected: Boolean, count: Int? = null, onClick: () -> Unit) {
+internal fun FilterPill(label: String, selected: Boolean, count: Int? = null, enabled: Boolean = true, onClick: () -> Unit) {
     val colors = Dictee.colors
     Row(
         modifier = Modifier
             .height(Tokens.BUTTON_HEIGHT_COMPACT_DP.dp)
+            .graphicsLayer { alpha = if (enabled) 1f else Tokens.DISABLED_ALPHA }
             .clip(CircleShape)
             .background(if (selected) colors.primary else colors.secondary)
-            .pressable(Tokens.RADIUS_PILL_DP.dp, onClick = onClick)
+            .pressable(Tokens.RADIUS_PILL_DP.dp, enabled = enabled, onClick = onClick)
             .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
