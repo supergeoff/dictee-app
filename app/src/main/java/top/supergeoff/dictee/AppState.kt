@@ -965,10 +965,11 @@ class AppModel(
     }
 
     /**
-     * Renomme l'étiquette [from] du VTT de l'enregistrement [name] en [to], et la cite dans son MD. Le résultat sort en message.
+     * Applique [renames] (étiquette vers nom) au VTT de l'enregistrement [name] en une écriture. Après un renommage réussi, le MD est refait
+     * sur le nouveau VTT : [transcribe] dit lui-même si la synthèse n'est pas configurée. Le résultat sort en message.
      * Sans VTT ou sans dossier du téléphone, rien n'est tenté.
      */
-    fun renameSpeaker(name: String, from: String, to: String) {
+    fun renameSpeakers(name: String, renames: Map<String, String>) {
         scope.launch {
             jobs.track {
                 try {
@@ -980,10 +981,9 @@ class AppModel(
                         say("Le VTT n'est pas disponible sur le téléphone.")
                         return@track
                     }
-                    val md = recording.phoneFiles[FileKind.MD]
-                    val mdName = md?.fileName ?: RecordName.fileName(recording.type, recording.name, FileKind.MD)
-                    val result = transcriptionCoordinator.renameSpeaker(name, folderUri, vtt.fileName, mdName, from, to)
-                    say(speakerRenameMessage(result, from, md != null))
+                    val result = transcriptionCoordinator.renameSpeakers(name, folderUri, vtt.fileName, renames)
+                    say(speakerRenameMessage(result))
+                    if (result == SpeakerRenameResult.Done) transcribe(setOf(name), RequestedWork.REDO_MD)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {

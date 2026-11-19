@@ -8,7 +8,7 @@ import java.text.Normalizer
 /** Nom du carnet des locuteurs, avec l'instant (ms) de sa dernière utilisation. */
 data class SpeakerName(val name: String, val lastUsedAt: Long)
 
-/** Logique de texte des noms de locuteurs : étiquettes des voix d'un VTT, réécriture du VTT et du MD, carnet. */
+/** Logique de texte des noms de locuteurs : étiquettes des voix d'un VTT, réécriture du VTT, carnet. */
 object SpeakerNames {
     private const val MAX_CODE_POINTS = 40
     private val voice = Regex("""^<v((?:\.[^ \t>]*)?)([ \t]+)([^>]*)>""")
@@ -31,29 +31,23 @@ object SpeakerNames {
     }
 
     /**
-     * Remplace la valeur des balises `<v>` égales à [from] au début du payload d'un segment, comme la lecture de [WebVtt] ;
-     * le reste du fichier garde ses octets. Lève [VttFormatException] si le résultat ne se relit pas.
+     * Remplace en une passe la valeur des balises `<v>` qui figurent dans [renames] (étiquette vers nom) au début du payload d'un segment,
+     * comme la lecture de [WebVtt] ; une étiquette absente de [renames] reste inchangée, et deux étiquettes envoyées vers le même nom
+     * fusionnent. Le reste du fichier garde ses octets. Lève [VttFormatException] si le résultat ne se relit pas.
      */
-    fun renameInVtt(vtt: ByteArray, from: String, to: String): ByteArray {
+    fun renameInVtt(vtt: ByteArray, renames: Map<String, String>): ByteArray {
         val lines = splitLines(decodeUtf8(vtt)).toMutableList()
         for (index in voiceLineIndexes(lines.map { it.first })) {
             val (content, ending) = lines[index]
             val renamed = voice.replace(content) { match ->
-                if (match.groupValues[3].trim() == from) "<v${match.groupValues[1]}${match.groupValues[2]}$to>" else match.value
+                val to = renames[match.groupValues[3].trim()]
+                if (to != null) "<v${match.groupValues[1]}${match.groupValues[2]}$to>" else match.value
             }
             lines[index] = renamed to ending
         }
         val result = lines.joinToString("") { it.first + it.second }.toByteArray(Charsets.UTF_8)
         WebVtt.parse(result)
         return result
-    }
-
-    /** Remplacement en mot entier ; renvoie null si [from] n'apparaît pas. */
-    fun replaceInMd(md: ByteArray, from: String, to: String): ByteArray? {
-        val word = Regex("""(?<![\p{L}\p{N}_])${Regex.escape(from)}(?![\p{L}\p{N}_])""")
-        val text = decodeUtf8(md)
-        if (!word.containsMatchIn(text)) return null
-        return word.replace(text, Regex.escapeReplacement(to)).toByteArray(Charsets.UTF_8)
     }
 
     /** Ajoute ou rafraîchit un nom (égalité sans casse ni accents), le plus récent en tête. */

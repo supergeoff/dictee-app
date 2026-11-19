@@ -15,6 +15,7 @@ class SpeakerRenamingTest {
     private val mdName = "Note-$recording.md"
     private val vtt = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n<v SPEAKER_00>Bonjour\n\n00:00:01.000 --> 00:00:02.000\n<v SPEAKER_01>Salut\n".toByteArray()
     private val md = "# Synthèse\n\nSPEAKER_00 salue SPEAKER_01.\n".toByteArray()
+    private val vtt3 = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n<v SPEAKER_00>Bonjour\n\n00:00:01.000 --> 00:00:02.000\n<v SPEAKER_01>Salut\n\n00:00:02.000 --> 00:00:03.000\n<v SPEAKER_02>Oui\n".toByteArray()
     private val phone = MemoryStore()
     private var folder: PhoneStore = phone
     private val log = ListLog()
@@ -48,50 +49,87 @@ class SpeakerRenamingTest {
         return LocalStateRepository(store)
     }
 
-    private fun rename(coordinator: TranscriptionCoordinator, from: String = "SPEAKER_00", to: String = "Marie") = runBlocking {
-        coordinator.renameSpeaker(recording, folderUri, vttName, mdName, from, to)
+    private fun rename(coordinator: TranscriptionCoordinator, renames: Map<String, String> = mapOf("SPEAKER_00" to "Marie")) = runBlocking {
+        coordinator.renameSpeakers(recording, folderUri, vttName, renames)
     }
 
-    @Test fun fullRenameKeepsProvenanceCurrentAndUpdatesBook() {
+    private fun assertNothingWritten(vttBefore: ByteArray = vtt) {
+        assertArrayEquals(vttBefore, phone.files.getValue(vttName))
+        assertArrayEquals(md, phone.files.getValue(mdName))
+        assertTrue(store.load().speakerNames.isEmpty())
+        assertTrue(promotedFolders.isEmpty())
+    }
+
+    @Test fun renameWritesVttOnlyAndLeavesMdAndProvenanceUntouched() {
         val repo = seed(provenance = ::provenance)
-        val before = SynthesisProvenance(folderUri, mdName, "model", TranscriptionAudio.sha256(vtt), TranscriptionAudio.sha256(md))
+        val provenanceBefore = provenance()
+        assertEquals(SpeakerRenameResult.Done, rename(coordinator(repo)))
+        assertEquals(listOf("Marie", "SPEAKER_01"), SpeakerNames.labels(phone.files.getValue(vttName)))
+        assertArrayEquals(md, phone.files.getValue(mdName))
+        assertEquals(listOf(provenanceBefore), store.load().synthesisProvenance)
+        assertEquals(listOf(SpeakerName("Marie", 5_000L)), store.load().speakerNames)
+        assertEquals(listOf(folderUri), promotedFolders)
+        assertTrue(log.lines.any { it.startsWith("APP ") && it.contains("Locuteurs renommés") && !it.contains("Marie") })
+    }
+
+    @Test fun renameWorksWithoutMd() {
+        val repo = seed(md = null)
         assertEquals(SpeakerRenameResult.Done, rename(coordinator(repo)))
         assertEquals("Marie", SpeakerNames.labels(phone.files.getValue(vttName)).first())
-        assertEquals("# Synthèse\n\nMarie salue SPEAKER_01.\n", String(phone.files.getValue(mdName)))
-        val state = store.load()
-        val entry = state.synthesisProvenance.single()
-        assertEquals(sha(vttName), entry.vttSha256)
-        assertEquals(sha(mdName), entry.mdSha256)
-        assertEquals(before.model, entry.model)
-        assertNotEquals(before.mdSha256, entry.mdSha256)
-        assertNotEquals(before.vttSha256, entry.vttSha256)
-        assertEquals(ProvenanceStatus.CURRENT, provenanceStatus(entry, folderUri, sha(vttName), sha(mdName)))
-        assertEquals(listOf(SpeakerName("Marie", 5_000L)), state.speakerNames)
-        assertEquals(listOf(folderUri), promotedFolders)
-        assertTrue(log.lines.any { it.startsWith("APP ") && it.contains("Locuteur renommé") && !it.contains("Marie") })
-    }
-
-    @Test fun mdWithoutLabelRenamesVttOnlyAndKeepsProvenanceCurrent() {
-        val plain = "# Synthèse\n\nPersonne n'est cité.\n".toByteArray()
-        seed(md = plain)
-        store.save(store.load().copy(synthesisProvenance = listOf(provenance())))
-        val mdBefore = sha(mdName)
-        assertEquals(SpeakerRenameResult.VttOnly, rename(coordinator(LocalStateRepository(store))))
-        assertEquals("Marie", SpeakerNames.labels(phone.files.getValue(vttName)).first())
-        assertArrayEquals(plain, phone.files.getValue(mdName))
-        val entry = store.load().synthesisProvenance.single()
-        assertEquals(mdBefore, entry.mdSha256)
-        assertEquals(sha(vttName), entry.vttSha256)
-        assertEquals(ProvenanceStatus.CURRENT, provenanceStatus(entry, folderUri, sha(vttName), sha(mdName)))
-        assertEquals("Marie", store.load().speakerNames.single().name)
-    }
-
-    @Test fun missingMdRenamesVttOnly() {
-        val repo = seed(md = null)
-        assertEquals(SpeakerRenameResult.VttOnly, rename(coordinator(repo)))
-        assertEquals("Marie", SpeakerNames.labels(phone.files.getValue(vttName)).first())
         assertFalse(mdName in phone.files)
-        assertTrue(store.load().synthesisProvenance.isEmpty())
+    }
+
+    @Test fun severalRenamesAreOneVttWriteAndAllNamesEnterBook() {
+        val repo = seed().also { phone.files[vttName] = vtt3 }
+        val writes = mutableListOf<String>()
+        folder = object : PhoneStore by phone {
+            override fun writeGuarded(fileName: String, source: File, replace: Boolean, promote: ((() -> Unit) -> Unit)) {
+                writes += fileName
+                phone.writeGuarded(fileName, source, replace, promote)
+            }
+        }
+        val result = rename(coordinator(repo), mapOf("SPEAKER_00" to " Marie ", "SPEAKER_01" to "Paul D."))
+        assertEquals(SpeakerRenameResult.Done, result)
+        assertEquals(listOf(vttName), writes)
+        assertEquals(listOf("Marie", "Paul D.", "SPEAKER_02"), SpeakerNames.labels(phone.files.getValue(vttName)))
+        assertEquals(setOf("Marie", "Paul D."), store.load().speakerNames.map { it.name }.toSet())
+        assertTrue(store.load().speakerNames.all { it.lastUsedAt == 5_000L })
+        assertEquals(listOf(folderUri), promotedFolders)
+    }
+
+    @Test fun labelsAbsentFromTheMapStayUnchanged() {
+        val repo = seed().also { phone.files[vttName] = vtt3 }
+        assertEquals(SpeakerRenameResult.Done, rename(coordinator(repo), mapOf("SPEAKER_01" to "Paul")))
+        assertEquals(listOf("SPEAKER_00", "Paul", "SPEAKER_02"), SpeakerNames.labels(phone.files.getValue(vttName)))
+    }
+
+    @Test fun severalLabelsToTheSameNameMerge() {
+        val repo = seed()
+        val result = rename(coordinator(repo), mapOf("SPEAKER_00" to "Marie", "SPEAKER_01" to "Marie"))
+        assertEquals(SpeakerRenameResult.Done, result)
+        assertEquals(listOf("Marie"), SpeakerNames.labels(phone.files.getValue(vttName)))
+        assertEquals(listOf(SpeakerName("Marie", 5_000L)), store.load().speakerNames)
+    }
+
+    @Test fun renamingToAnExistingLabelMergesSpeakers() {
+        val repo = seed()
+        assertEquals(SpeakerRenameResult.Done, rename(coordinator(repo), mapOf("SPEAKER_01" to "SPEAKER_00")))
+        assertEquals(listOf("SPEAKER_00"), SpeakerNames.labels(phone.files.getValue(vttName)))
+    }
+
+    @Test fun swappingTwoLabelsIsApplied() {
+        val repo = seed()
+        assertEquals(SpeakerRenameResult.Done, rename(coordinator(repo), mapOf("SPEAKER_00" to "SPEAKER_01", "SPEAKER_01" to "SPEAKER_00")))
+        assertEquals(listOf("SPEAKER_01", "SPEAKER_00"), SpeakerNames.labels(phone.files.getValue(vttName)))
+    }
+
+    @Test fun emptyOrUnchangedMapRefusesWithoutWriting() {
+        val repo = seed()
+        val coordinator = coordinator(repo)
+        for (renames in listOf(emptyMap(), mapOf("SPEAKER_00" to "SPEAKER_00"), mapOf("SPEAKER_00" to " SPEAKER_00 "))) {
+            assertEquals(SpeakerRenameResult.Refused("Aucun nom modifié."), rename(coordinator, renames))
+            assertNothingWritten()
+        }
     }
 
     @Test fun activeOrSuspendedTaskRefusesWithoutWriting() {
@@ -99,9 +137,7 @@ class SpeakerRenamingTest {
             val repo = seed(tasks = listOf(task))
             val result = rename(coordinator(repo))
             assertEquals(SpeakerRenameResult.Refused("Un traitement est en cours sur cet enregistrement."), result)
-            assertArrayEquals(vtt, phone.files.getValue(vttName))
-            assertArrayEquals(md, phone.files.getValue(mdName))
-            assertTrue(store.load().speakerNames.isEmpty())
+            assertNothingWritten()
         }
     }
 
@@ -110,69 +146,33 @@ class SpeakerRenamingTest {
         assertEquals(SpeakerRenameResult.Done, rename(coordinator(repo)))
     }
 
-    @Test fun invalidNameRefusesWithoutWriting() {
+    @Test fun invalidNameRefusesWholeRenameWithoutWriting() {
         val repo = seed()
-        assertEquals(SpeakerRenameResult.Refused("Nom invalide."), rename(coordinator(repo), to = "a<b"))
-        assertArrayEquals(vtt, phone.files.getValue(vttName))
-        assertArrayEquals(md, phone.files.getValue(mdName))
+        assertEquals(SpeakerRenameResult.Refused("Nom invalide."),
+            rename(coordinator(repo), mapOf("SPEAKER_00" to "Marie", "SPEAKER_01" to "a<b")))
+        assertNothingWritten()
     }
 
-    private fun assertNothingWritten(vttBefore: ByteArray = vtt, mdBefore: ByteArray? = md) {
-        assertArrayEquals(vttBefore, phone.files.getValue(vttName))
-        if (mdBefore != null) assertArrayEquals(mdBefore, phone.files.getValue(mdName))
-        assertTrue(store.load().speakerNames.isEmpty())
-        assertTrue(promotedFolders.isEmpty())
-    }
-
-    @Test fun unknownLabelRefusesWithoutWriting() {
+    @Test fun unknownLabelRefusesWholeRenameWithoutWriting() {
         val repo = seed(provenance = ::provenance)
-        assertEquals(SpeakerRenameResult.Refused("Locuteur introuvable."), rename(coordinator(repo), from = "SPEAKER_09"))
+        assertEquals(SpeakerRenameResult.Refused("Locuteur introuvable."),
+            rename(coordinator(repo), mapOf("SPEAKER_00" to "Marie", "SPEAKER_09" to "Paul")))
         assertNothingWritten()
         assertEquals(provenance(), store.load().synthesisProvenance.single())
     }
 
-    @Test fun sameNameRefusesWithoutWriting() {
+    @Test fun writeFailureRefusesAndLeavesBookUntouched() {
         val repo = seed()
-        assertEquals(SpeakerRenameResult.Refused("Le locuteur porte déjà ce nom."), rename(coordinator(repo), to = " SPEAKER_00 "))
+        folder = object : PhoneStore by phone {
+            override fun writeGuarded(fileName: String, source: File, replace: Boolean, promote: ((() -> Unit) -> Unit)) {
+                throw PhoneStoreException("Écriture impossible.")
+            }
+        }
+        assertEquals(SpeakerRenameResult.Refused("Écriture impossible."), rename(coordinator(repo)))
         assertNothingWritten()
     }
 
-    @Test fun nonUtf8MdRefusesBeforeAnyWrite() {
-        val invalid = byteArrayOf(0xC3.toByte(), 0x28)
-        val repo = seed(md = invalid)
-        val result = rename(coordinator(repo))
-        assertEquals(SpeakerRenameResult.Refused("Le MD n'est pas de l'UTF-8 valide."), result)
-        assertNothingWritten(mdBefore = invalid)
-    }
-
-    @Test fun mdFailureAfterVttStillRecordsNameInBook() {
-        val repo = seed(provenance = ::provenance)
-        val provenanceBefore = provenance()
-        folder = object : PhoneStore by phone {
-            override fun writeGuarded(fileName: String, source: File, replace: Boolean, promote: ((() -> Unit) -> Unit)) {
-                if (fileName == mdName) throw PhoneStoreException("Écriture impossible.")
-                phone.writeGuarded(fileName, source, replace, promote)
-            }
-        }
-        val result = rename(coordinator(repo))
-        assertEquals(SpeakerRenameResult.Refused("Le VTT est renommé, mais pas le MD : Écriture impossible."), result)
-        assertEquals("Marie", SpeakerNames.labels(phone.files.getValue(vttName)).first())
-        assertEquals(listOf(SpeakerName("Marie", 5_000L)), store.load().speakerNames)
-        assertEquals(listOf(provenanceBefore), store.load().synthesisProvenance)
-        assertEquals(listOf(folderUri), promotedFolders)
-    }
-
-    @Test fun stateWriteFailureAfterBothFilesReportsBothRenamedAndNotifies() {
-        seed(provenance = ::provenance)
-        val repo = LocalStateRepository(LocalStateStore(File(tmp.root, "state.json"), rename = { _, _ -> false }))
-        val result = rename(coordinator(repo))
-        assertEquals(SpeakerRenameResult.Refused("VTT et MD renommés, mais l'état local n'a pas pu être enregistré."), result)
-        assertEquals("Marie", SpeakerNames.labels(phone.files.getValue(vttName)).first())
-        assertEquals("# Synthèse\n\nMarie salue SPEAKER_01.\n", String(phone.files.getValue(mdName)))
-        assertEquals(listOf(folderUri), promotedFolders)
-    }
-
-    @Test fun vttChangedBeforePromotionRefusesAndLeavesMdIntact() {
+    @Test fun vttChangedBeforePromotionRefusesAndKeepsTheOtherWriter() {
         val repo = seed(provenance = ::provenance)
         val changed = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n<v SPEAKER_00>Modifié\n".toByteArray()
         folder = object : PhoneStore by phone {
@@ -181,46 +181,29 @@ class SpeakerRenamingTest {
                 phone.writeGuarded(fileName, source, replace, promote)
             }
         }
-        val result = rename(coordinator(repo))
-        assertTrue(result is SpeakerRenameResult.Refused)
+        assertEquals(SpeakerRenameResult.Refused("Le VTT a changé."), rename(coordinator(repo)))
         assertArrayEquals(changed, phone.files.getValue(vttName))
         assertArrayEquals(md, phone.files.getValue(mdName))
         assertTrue(store.load().speakerNames.isEmpty())
+        assertTrue(promotedFolders.isEmpty())
     }
 
-    @Test fun mdChangedBeforePromotionRefusesAfterVttRenamed() {
-        val repo = seed(provenance = ::provenance)
-        val changed = "# Modifié par ailleurs : SPEAKER_00\n".toByteArray()
-        folder = object : PhoneStore by phone {
-            override fun writeGuarded(fileName: String, source: File, replace: Boolean, promote: ((() -> Unit) -> Unit)) {
-                if (fileName == mdName) phone.files[mdName] = changed
-                phone.writeGuarded(fileName, source, replace, promote)
-            }
-        }
+    @Test fun unreadableVttRefusesWithoutWriting() {
+        val invalid = byteArrayOf(0xC3.toByte(), 0x28)
+        val repo = seed()
+        phone.files[vttName] = invalid
         val result = rename(coordinator(repo))
         assertTrue(result is SpeakerRenameResult.Refused)
+        assertNothingWritten(vttBefore = invalid)
+    }
+
+    @Test fun stateWriteFailureAfterVttReportsRenamedAndNotifies() {
+        seed(provenance = ::provenance)
+        val repo = LocalStateRepository(LocalStateStore(File(tmp.root, "state.json"), rename = { _, _ -> false }))
+        val result = rename(coordinator(repo))
+        assertEquals(SpeakerRenameResult.Refused("VTT renommé, mais l'état local n'a pas pu être enregistré."), result)
         assertEquals("Marie", SpeakerNames.labels(phone.files.getValue(vttName)).first())
-        assertArrayEquals(changed, phone.files.getValue(mdName))
-    }
-
-    @Test fun unknownProvenanceStaysUnknown() {
-        val repo = seed()
-        assertEquals(SpeakerRenameResult.Done, rename(coordinator(repo)))
-        assertTrue(store.load().synthesisProvenance.isEmpty())
-        assertEquals("Marie", store.load().speakerNames.single().name)
-    }
-
-    @Test fun staleProvenanceIsLeftUntouched() {
-        val stale = SynthesisProvenance(folderUri, mdName, "model", "ancien", TranscriptionAudio.sha256(md))
-        val repo = seed(provenance = { stale })
-        assertEquals(SpeakerRenameResult.Done, rename(coordinator(repo)))
-        assertEquals(listOf(stale), store.load().synthesisProvenance)
-    }
-
-    @Test fun renamingToExistingLabelMergesSpeakers() {
-        val repo = seed()
-        assertEquals(SpeakerRenameResult.Done, rename(coordinator(repo), from = "SPEAKER_01", to = "SPEAKER_00"))
-        assertEquals(listOf("SPEAKER_00"), SpeakerNames.labels(phone.files.getValue(vttName)))
+        assertEquals(listOf(folderUri), promotedFolders)
     }
 
     @Test fun bookRefreshesExistingNameWithoutDuplicate() {

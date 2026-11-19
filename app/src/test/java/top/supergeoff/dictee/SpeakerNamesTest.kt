@@ -30,7 +30,7 @@ class SpeakerNamesTest {
 
     @Test
     fun `renameInVtt ne change que la valeur des voix visees`() {
-        val renamed = SpeakerNames.renameInVtt(vtt(sample), "A", "Marie")
+        val renamed = SpeakerNames.renameInVtt(vtt(sample), mapOf("A" to "Marie"))
         val expected = sample.replace("<v A>", "<v Marie>")
         assertArrayEquals(vtt(expected), renamed)
         assertEquals(listOf("Marie", "B", "Alice"), SpeakerNames.labels(renamed))
@@ -50,7 +50,7 @@ class SpeakerNamesTest {
 
     @Test
     fun `renameInVtt ne touche ni NOTE ni STYLE ni REGION ni le milieu d'un segment`() {
-        val renamed = SpeakerNames.renameInVtt(vtt(withNonCueBlocks), "A", "Marie")
+        val renamed = SpeakerNames.renameInVtt(vtt(withNonCueBlocks), mapOf("A" to "Marie"))
         val expected = withNonCueBlocks.replace(
             "00:00:00.000 --> 00:00:02.000\n<v A>Bonjour", "00:00:00.000 --> 00:00:02.000\n<v Marie>Bonjour")
         assertArrayEquals(vtt(expected), renamed)
@@ -58,61 +58,63 @@ class SpeakerNamesTest {
 
     @Test
     fun `renameInVtt garde la classe de voix`() {
-        val renamed = SpeakerNames.renameInVtt(vtt(sample), "B", "Marie")
+        val renamed = SpeakerNames.renameInVtt(vtt(sample), mapOf("B" to "Marie"))
         assertEquals(true, String(renamed, Charsets.UTF_8).contains("<v.loud Marie>Salut</v>"))
     }
 
     @Test
     fun `renameInVtt garde CRLF et BOM`() {
         val source = "\uFEFF" + sample.replace("\n", "\r\n")
-        val renamed = SpeakerNames.renameInVtt(vtt(source), "A", "Marie")
+        val renamed = SpeakerNames.renameInVtt(vtt(source), mapOf("A" to "Marie"))
         assertArrayEquals(vtt(source.replace("<v A>", "<v Marie>")), renamed)
     }
 
     @Test
     fun `renameInVtt fusionne deux etiquettes`() {
-        val renamed = SpeakerNames.renameInVtt(vtt(sample), "B", "A")
+        val renamed = SpeakerNames.renameInVtt(vtt(sample), mapOf("B" to "A"))
         assertEquals(listOf("A", "Alice"), SpeakerNames.labels(renamed))
     }
 
     @Test
     fun `renameInVtt garde le nom tel quel avec un dollar`() {
-        val renamed = SpeakerNames.renameInVtt(vtt(sample), "A", "Jo\$1\\")
+        val renamed = SpeakerNames.renameInVtt(vtt(sample), mapOf("A" to "Jo\$1\\"))
         assertEquals(true, String(renamed, Charsets.UTF_8).contains("<v Jo\$1\\>Bonjour</v>"))
+    }
+
+    @Test
+    fun `renameInVtt applique plusieurs correspondances en une passe et laisse les autres etiquettes`() {
+        val renamed = SpeakerNames.renameInVtt(vtt(sample), mapOf("A" to "Marie", "B" to "Paul D."))
+        val expected = sample.replace("<v A>", "<v Marie>").replace("<v.loud B>", "<v.loud Paul D.>")
+        assertArrayEquals(vtt(expected), renamed)
+        assertEquals(listOf("Marie", "Paul D.", "Alice"), SpeakerNames.labels(renamed))
+    }
+
+    @Test
+    fun `renameInVtt echange deux etiquettes sans enchainer les remplacements`() {
+        val renamed = SpeakerNames.renameInVtt(vtt(sample), mapOf("A" to "B", "B" to "A"))
+        assertEquals(listOf("B", "A", "Alice"), SpeakerNames.labels(renamed))
+        assertEquals(true, String(renamed, Charsets.UTF_8).contains("<v.loud A>Salut</v>"))
+    }
+
+    @Test
+    fun `renameInVtt fusionne plusieurs etiquettes vers le meme nom`() {
+        val renamed = SpeakerNames.renameInVtt(vtt(sample), mapOf("A" to "Marie", "B" to "Marie"))
+        assertEquals(listOf("Marie", "Alice"), SpeakerNames.labels(renamed))
+    }
+
+    @Test
+    fun `renameInVtt sans correspondance rend le fichier identique`() {
+        assertArrayEquals(vtt(sample), SpeakerNames.renameInVtt(vtt(sample), emptyMap()))
     }
 
     @Test
     fun `renameInVtt refuse un VTT invalide`() {
         assertThrows(VttFormatException::class.java) {
-            SpeakerNames.renameInVtt(byteArrayOf(0xC3.toByte(), 0x28), "A", "B")
+            SpeakerNames.renameInVtt(byteArrayOf(0xC3.toByte(), 0x28), mapOf("A" to "B"))
         }
         assertThrows(VttFormatException::class.java) {
-            SpeakerNames.renameInVtt(vtt("pas un vtt <v A>"), "A", "B")
+            SpeakerNames.renameInVtt(vtt("pas un vtt <v A>"), mapOf("A" to "B"))
         }
-    }
-
-    @Test
-    fun `replaceInMd remplace en mot entier`() {
-        val md = vtt("SPEAKER_00 parle. SPEAKER_000 non. xSPEAKER_00 non. (SPEAKER_00), SPEAKER_00_b non.")
-        val result = SpeakerNames.replaceInMd(md, "SPEAKER_00", "Marie")
-        assertEquals("Marie parle. SPEAKER_000 non. xSPEAKER_00 non. (Marie), SPEAKER_00_b non.", String(result!!, Charsets.UTF_8))
-    }
-
-    @Test
-    fun `replaceInMd ne touche pas un prefixe de mot`() {
-        val result = SpeakerNames.replaceInMd(vtt("Alice et A"), "A", "Marie")
-        assertEquals("Alice et Marie", String(result!!, Charsets.UTF_8))
-    }
-
-    @Test
-    fun `replaceInMd rend null quand l'etiquette est absente`() {
-        assertNull(SpeakerNames.replaceInMd(vtt("Rien ici"), "SPEAKER_00", "Marie"))
-    }
-
-    @Test
-    fun `replaceInMd garde le dollar du remplacement`() {
-        val result = SpeakerNames.replaceInMd(vtt("SPEAKER_00 dit"), "SPEAKER_00", "A\$1\\b")
-        assertEquals("A\$1\\b dit", String(result!!, Charsets.UTF_8))
     }
 
     @Test

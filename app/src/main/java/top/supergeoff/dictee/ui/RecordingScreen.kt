@@ -307,7 +307,7 @@ private fun MissingMp3() {
 
 /**
  * Rangée « Locuteurs » puis segments du VTT : un toucher place la lecture du MP3 au début du segment et la lance. Toucher une puce ou
- * l'étiquette d'un segment ouvre le dialogue de nommage, sauf si [renameBlockedReason] en donne la raison. Un fichier illisible n'affecte que cette carte.
+ * l'étiquette d'un segment ouvre le dialogue « Locuteurs », sauf si [renameBlockedReason] en donne la raison. Un fichier illisible n'affecte que cette carte.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -319,7 +319,7 @@ private fun Transcript(
     val cues by produceState<Result<List<VttCue>>?>(null, vtt.fileName, vtt.size, phoneRevision) {
         value = withContext(Dispatchers.IO) { model.readTranscript(vtt.fileName) }
     }
-    var naming by remember { mutableStateOf<String?>(null) }
+    var editing by remember { mutableStateOf(false) }
     val renameEnabled = renameBlockedReason == null
     Column(modifier = Modifier.fillMaxWidth().card().padding(vertical = 4.dp)) {
         Text(text = "Transcription", style = Dictee.type.rowTitle, color = colors.text, modifier = Modifier.padding(12.dp))
@@ -332,18 +332,18 @@ private fun Transcript(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                labels.forEach { FilterPill("$it ✎", selected = false, enabled = renameEnabled, onClick = { naming = it }) }
+                labels.forEach { FilterPill("$it ✎", selected = false, enabled = renameEnabled, onClick = { editing = true }) }
             }
             renameBlockedReason?.let {
                 Text(it, style = Dictee.type.caption, color = colors.textSecondary, modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp))
             }
         }
-        naming?.let { label ->
-            SpeakerDialog(
-                label = label, firstCueMs = loaded.firstOrNull { it.speaker == label }?.startMs ?: 0L, labels = labels,
+        if (editing) {
+            SpeakersDialog(
+                labels = labels, firstCueMs = loaded.mapNotNull { cue -> cue.speaker?.let { it to cue.startMs } }.distinctBy { it.first }.toMap(),
                 book = speakerBook, playback = playback,
-                onConfirm = { name -> naming = null; model.renameSpeaker(recordingName, label, name) },
-                onDismiss = { naming = null },
+                onSave = { renames -> editing = false; model.renameSpeakers(recordingName, renames) },
+                onDismiss = { editing = false },
             )
         }
         when {
@@ -364,7 +364,7 @@ private fun Transcript(
                             Text(
                                 text = speaker, style = meta.copy(textDecoration = if (renameEnabled) TextDecoration.Underline else null),
                                 color = colors.textSecondary,
-                                modifier = Modifier.pressable(enabled = renameEnabled, onClick = { naming = speaker }),
+                                modifier = Modifier.pressable(enabled = renameEnabled, onClick = { editing = true }),
                             )
                         }
                     }

@@ -23,12 +23,10 @@ sealed interface RunOutcome {
     data object Failed : RunOutcome
 }
 
-/** Résultat d'un renommage de locuteur dans les fichiers du téléphone. */
+/** Résultat d'un renommage groupé de locuteurs dans le VTT du téléphone. */
 sealed interface SpeakerRenameResult {
-    /** VTT et MD mis à jour. */
+    /** VTT mis à jour et noms entrés dans le carnet. */
     data object Done : SpeakerRenameResult
-    /** VTT mis à jour ; le MD est absent ou ne cite pas l'étiquette. */
-    data object VttOnly : SpeakerRenameResult
     data class Refused(val reason: String) : SpeakerRenameResult
 }
 
@@ -758,78 +756,55 @@ class TranscriptionCoordinator(
     }
 
     /**
-     * Remplace l'étiquette [from] par [to] dans le VTT puis dans le MD du téléphone. Refusé tant qu'une tâche non terminale
-     * concerne l'enregistrement, si [from] n'est plus une étiquette du VTT ou si [to] lui est égal. Les deux contenus sont
-     * calculés avant toute écriture. Le VTT est promu avant le MD : un échec du MD laisse le VTT renommé et le nom entre dans
-     * le carnet. La provenance du MD n'est réécrite que si elle était [ProvenanceStatus.CURRENT] avant le renommage.
+     * Applique [renames] (étiquette vers nom) au VTT du téléphone en une seule écriture. Refusé si un nom est invalide, si aucun nom
+     * ne change, tant qu'une tâche non terminale concerne l'enregistrement, ou si une étiquette n'est plus dans le VTT. Une étiquette
+     * absente de [renames] reste inchangée ; plusieurs étiquettes vers le même nom fusionnent. Le contenu est calculé et revalidé avant
+     * l'écriture, puis promu seulement si le VTT garde l'empreinte lue. Le MD et la provenance ne sont pas touchés : le VTT change,
+     * le MD est à refaire. Tous les noms utilisés entrent dans le carnet.
      */
-    suspend fun renameSpeaker(recordingName: String, folderUri: String, vttName: String, mdName: String,
-                              from: String, to: String): SpeakerRenameResult = mutex.withLock {
-        val name = SpeakerNames.validate(to) ?: return@withLock SpeakerRenameResult.Refused("Nom invalide.")
-        if (name == from) return@withLock SpeakerRenameResult.Refused("Le locuteur porte déjà ce nom.")
+    suspend fun renameSpeakers(recordingName: String, folderUri: String, vttName: String,
+                               renames: Map<String, String>): SpeakerRenameResult = mutex.withLock {
+        val names = LinkedHashMap<String, String>()
+        for ((label, to) in renames) names[label] = SpeakerNames.validate(to) ?: return@withLock SpeakerRenameResult.Refused("Nom invalide.")
+        val effective = names.filter { (label, name) -> label != name }
+        if (effective.isEmpty()) return@withLock SpeakerRenameResult.Refused("Aucun nom modifié.")
         val state = repository.awaitInitialized()
         if (state.transcriptionTasks.any { it.recordingName == recordingName && !it.phase.isTerminal() })
             return@withLock SpeakerRenameResult.Refused("Un traitement est en cours sur cet enregistrement.")
-        withContext(Dispatchers.IO) { renameSpeakerFiles(state, folderUri, vttName, mdName, from, name) }
+        withContext(Dispatchers.IO) { renameSpeakersInVtt(folderUri, vttName, effective) }
     }
 
-    private suspend fun renameSpeakerFiles(state: LocalState, folderUri: String, vttName: String, mdName: String,
-                                           from: String, to: String): SpeakerRenameResult {
+    private suspend fun renameSpeakersInVtt(folderUri: String, vttName: String, renames: Map<String, String>): SpeakerRenameResult {
         var vttWritten = false
-        var mdWritten = false
         try {
             val phone = phoneStore(folderUri)
             val oldVtt = phone.open(vttName).use { it.readBytes() }
-            if (from !in SpeakerNames.labels(oldVtt)) return SpeakerRenameResult.Refused("Locuteur introuvable.")
-            val oldMd = if (phone.list().any { it.fileName == mdName }) phone.open(mdName).use { it.readBytes() } else null
-            val oldVttSha = sha256(oldVtt)
-            val oldMdSha = oldMd?.let(::sha256)
-            val wasCurrent = provenanceStatus(state.synthesisProvenance.firstOrNull { it.folderUri == folderUri && it.mdName == mdName },
-                folderUri, oldVttSha, oldMdSha) == ProvenanceStatus.CURRENT
-            val newVtt = SpeakerNames.renameInVtt(oldVtt, from, to)
-            val newMd = oldMd?.let {
-                try { SpeakerNames.replaceInMd(it, from, to) }
-                catch (_: VttFormatException) { throw PhoneStoreException("Le MD n'est pas de l'UTF-8 valide.") }
-            }
-            replaceGuarded(phone, vttName, newVtt, oldVttSha, "Le VTT a changé.")
+            val labels = SpeakerNames.labels(oldVtt)
+            if (renames.keys.any { it !in labels }) return SpeakerRenameResult.Refused("Locuteur introuvable.")
+            val newVtt = SpeakerNames.renameInVtt(oldVtt, renames)
+            replaceGuarded(phone, vttName, newVtt, sha256(oldVtt), "Le VTT a changé.")
             vttWritten = true
-            if (newMd != null) replaceGuarded(phone, mdName, newMd, checkNotNull(oldMdSha), "Le MD a changé.")
-            mdWritten = true
-            val newVttSha = sha256(newVtt)
-            val newMdSha = if (newMd != null) sha256(newMd) else oldMdSha
-            repository.updateDurably { current -> current.copy(
-                speakerNames = SpeakerNames.use(current.speakerNames, to, clock()),
-                synthesisProvenance = if (!wasCurrent) current.synthesisProvenance else current.synthesisProvenance.map {
-                    if (it.folderUri == folderUri && it.mdName == mdName) it.copy(vttSha256 = newVttSha, mdSha256 = checkNotNull(newMdSha)) else it
-                }) }
-            journal(Source.APP, null, "Locuteur renommé")
-            return if (newMd != null) SpeakerRenameResult.Done else SpeakerRenameResult.VttOnly
+            repository.updateDurably { current ->
+                current.copy(speakerNames = renames.values.distinct().fold(current.speakerNames) { book, name -> SpeakerNames.use(book, name, clock()) })
+            }
+            journal(Source.APP, null, "Locuteurs renommés")
+            return SpeakerRenameResult.Done
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            if (mdWritten) {
-                journalError(Source.APP, null, "Locuteur renommé dans les fichiers, état local non enregistré")
-                return SpeakerRenameResult.Refused("VTT et MD renommés, mais l'état local n'a pas pu être enregistré.")
+            if (vttWritten) {
+                journalError(Source.APP, null, "Locuteurs renommés dans le VTT, état local non enregistré")
+                return SpeakerRenameResult.Refused("VTT renommé, mais l'état local n'a pas pu être enregistré.")
             }
             val reason = when (e) {
                 is PhoneStoreException, is VttFormatException -> e.message
                 is java.io.IOException -> "Dossier ou fichier inaccessible."
-                else -> if (vttWritten) null else throw e
+                else -> throw e
             } ?: "Renommage impossible."
-            if (!vttWritten) return SpeakerRenameResult.Refused(reason)
-            rememberSpeakerName(to)
-            journalError(Source.APP, null, "Locuteur renommé dans le VTT seulement, $reason")
-            return SpeakerRenameResult.Refused("Le VTT est renommé, mais pas le MD : $reason")
+            return SpeakerRenameResult.Refused(reason)
         } finally {
             if (vttWritten) notifyFilesPromoted(folderUri)
         }
-    }
-
-    /** Le VTT est déjà renommé : le nom entre dans le carnet même si le MD n'a pas suivi. Un échec d'écriture est ignoré. */
-    private suspend fun rememberSpeakerName(name: String) {
-        try { repository.updateDurably { current -> current.copy(speakerNames = SpeakerNames.use(current.speakerNames, name, clock())) } }
-        catch (e: CancellationException) { throw e }
-        catch (_: Exception) { /* Le résultat à afficher reste l'échec du MD. */ }
     }
 
     /** Écrit [bytes] à la place de [fileName] si son contenu a toujours l'empreinte [expectedSha256] au moment de la promotion. */
