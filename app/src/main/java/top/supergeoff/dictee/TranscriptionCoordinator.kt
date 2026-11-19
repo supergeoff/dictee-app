@@ -23,6 +23,15 @@ sealed interface RunOutcome {
     data object Failed : RunOutcome
 }
 
+/** Résultat d'un renommage de locuteur dans les fichiers du téléphone. */
+sealed interface SpeakerRenameResult {
+    /** VTT et MD mis à jour. */
+    data object Done : SpeakerRenameResult
+    /** VTT mis à jour ; le MD est absent ou ne cite pas l'étiquette. */
+    data object VttOnly : SpeakerRenameResult
+    data class Refused(val reason: String) : SpeakerRenameResult
+}
+
 /** Une instance partagée par le service et le worker sérialise leurs interventions. */
 class TranscriptionCoordinator(
     private val repository: LocalStateRepository,
@@ -746,6 +755,75 @@ class TranscriptionCoordinator(
           catch (_: Exception) { return suspendSynthesis(task.localId, "Écriture de la synthèse impossible ou fichier modifié. Vérifie le dossier.") }
         journal(Source.LLM, task, "MD enregistré")
         return RunOutcome.Finished
+    }
+
+    /**
+     * Remplace l'étiquette [from] par [to] dans le VTT puis dans le MD du téléphone. Refusé tant qu'une tâche non terminale
+     * concerne l'enregistrement. Le VTT est promu avant le MD : un échec du MD laisse le VTT renommé. La provenance du MD
+     * n'est réécrite que si elle était [ProvenanceStatus.CURRENT] avant le renommage.
+     */
+    suspend fun renameSpeaker(recordingName: String, folderUri: String, vttName: String, mdName: String,
+                              from: String, to: String): SpeakerRenameResult = mutex.withLock {
+        val name = SpeakerNames.validate(to) ?: return@withLock SpeakerRenameResult.Refused("Nom invalide.")
+        val state = repository.awaitInitialized()
+        if (state.transcriptionTasks.any { it.recordingName == recordingName && !it.phase.isTerminal() })
+            return@withLock SpeakerRenameResult.Refused("Un traitement est en cours sur cet enregistrement.")
+        withContext(Dispatchers.IO) { renameSpeakerFiles(state, folderUri, vttName, mdName, from, name) }
+    }
+
+    private suspend fun renameSpeakerFiles(state: LocalState, folderUri: String, vttName: String, mdName: String,
+                                           from: String, to: String): SpeakerRenameResult {
+        var vttWritten = false
+        try {
+            val phone = phoneStore(folderUri)
+            val oldVtt = phone.open(vttName).use { it.readBytes() }
+            val oldMd = if (phone.list().any { it.fileName == mdName }) phone.open(mdName).use { it.readBytes() } else null
+            val oldVttSha = sha256(oldVtt)
+            val oldMdSha = oldMd?.let(::sha256)
+            val wasCurrent = provenanceStatus(state.synthesisProvenance.firstOrNull { it.folderUri == folderUri && it.mdName == mdName },
+                folderUri, oldVttSha, oldMdSha) == ProvenanceStatus.CURRENT
+            val newVtt = SpeakerNames.renameInVtt(oldVtt, from, to)
+            replaceGuarded(phone, vttName, newVtt, oldVttSha, "Le VTT a changé.")
+            vttWritten = true
+            val newMd = oldMd?.let { SpeakerNames.replaceInMd(it, from, to) }
+            if (newMd != null) replaceGuarded(phone, mdName, newMd, checkNotNull(oldMdSha), "Le MD a changé.")
+            val newVttSha = sha256(newVtt)
+            val newMdSha = if (newMd != null) sha256(newMd) else oldMdSha
+            repository.updateDurably { current -> current.copy(
+                speakerNames = SpeakerNames.use(current.speakerNames, to, clock()),
+                synthesisProvenance = if (!wasCurrent) current.synthesisProvenance else current.synthesisProvenance.map {
+                    if (it.folderUri == folderUri && it.mdName == mdName) it.copy(vttSha256 = newVttSha, mdSha256 = checkNotNull(newMdSha)) else it
+                }) }
+            notifyFilesPromoted(folderUri)
+            journal(Source.APP, null, "Locuteur renommé")
+            return if (newMd != null) SpeakerRenameResult.Done else SpeakerRenameResult.VttOnly
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val reason = when (e) {
+                is PhoneStoreException, is VttFormatException -> e.message
+                is java.io.IOException -> "Dossier ou fichier inaccessible."
+                else -> throw e
+            } ?: "Renommage impossible."
+            if (!vttWritten) return SpeakerRenameResult.Refused(reason)
+            notifyFilesPromoted(folderUri)
+            journalError(Source.APP, null, "Locuteur renommé dans le VTT seulement, $reason")
+            return SpeakerRenameResult.Refused("Le VTT est renommé, mais pas le MD : $reason")
+        }
+    }
+
+    /** Écrit [bytes] à la place de [fileName] si son contenu a toujours l'empreinte [expectedSha256] au moment de la promotion. */
+    private fun replaceGuarded(phone: PhoneStore, fileName: String, bytes: ByteArray, expectedSha256: String, changedMessage: String) {
+        val temp = java.io.File.createTempFile("speaker-", ".tmp")
+        try {
+            temp.writeBytes(bytes)
+            phone.writeGuarded(fileName, temp, true) { promote -> promotionGuard.withLock {
+                if (TranscriptionAudio.sha256(phone, fileName) != expectedSha256) throw PhoneStoreException(changedMessage)
+                promote()
+            } }
+        } finally {
+            temp.delete()
+        }
     }
 
     private suspend fun notifyFilesPromoted(folder: String) {
