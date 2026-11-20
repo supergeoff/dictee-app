@@ -15,6 +15,8 @@ data class TranscriptionSettingsDraft(
     val initialized: Boolean = false,
     val saving: Boolean = false,
     val message: String? = null,
+    val glossary: String = "",
+    val glossaryInput: String = "",
 ) {
     override fun toString(): String = "TranscriptionSettingsDraft(saving=$saving)"
 }
@@ -30,7 +32,7 @@ class TranscriptionSettingsForm(
 
     fun initialize(settings: TranscriptionSettings) = synchronized(lock) {
         if (!mutableState.value.initialized) {
-            mutableState.value = TranscriptionSettingsDraft(settings.baseUrl, settings.language, settings.model, initialized = true)
+            mutableState.value = TranscriptionSettingsDraft(settings.baseUrl, settings.language, settings.model, initialized = true, glossary = settings.glossary)
         }
     }
 
@@ -43,10 +45,30 @@ class TranscriptionSettingsForm(
     fun setModel(value: String) = edit { it.copy(model = value) }
     fun setSecret(value: String) = edit { it.copy(secret = value) }
 
+    fun setGlossaryInput(value: String) = edit { it.copy(glossaryInput = value) }
+
+    fun addGlossaryEntry(): Boolean = synchronized(lock) {
+        val draft = mutableState.value
+        if (!draft.initialized || draft.saving) return@synchronized false
+        val candidate = ComplementaryGlossary.append(draft.glossary, draft.glossaryInput)
+        val error = ComplementaryGlossary.validationError(candidate)
+        mutableState.value = if (error == null) draft.copy(glossary = candidate, glossaryInput = "", message = null)
+            else draft.copy(message = error)
+        error == null
+    }
+
+    fun removeGlossaryEntry(index: Int) = edit { it.copy(glossary = ComplementaryGlossary.remove(it.glossary, index)) }
+
     fun submit(): Boolean = synchronized(lock) {
         val draft = mutableState.value
         if (!draft.initialized || draft.saving) return@synchronized false
-        val settings = TranscriptionSettings(draft.baseUrl.trim(), draft.language.trim(), draft.model.trim())
+        val glossary = ComplementaryGlossary.append(draft.glossary, draft.glossaryInput)
+        val glossaryError = ComplementaryGlossary.validationError(glossary)
+        if (glossaryError != null) {
+            mutableState.value = draft.copy(message = glossaryError)
+            return@synchronized false
+        }
+        val settings = TranscriptionSettings(draft.baseUrl.trim(), draft.language.trim(), draft.model.trim(), glossary = glossary)
         if (!isValidTranscriptionBaseUrl(settings.baseUrl)) {
             mutableState.value = draft.copy(message = InvalidTranscriptionAddressException().message)
             return@synchronized false
@@ -56,7 +78,7 @@ class TranscriptionSettingsForm(
             try {
                 save(settings, draft.secret)
                 synchronized(lock) {
-                    mutableState.value = mutableState.value.copy(secret = "", saving = false, message = "Réglages de transcription enregistrés")
+                    mutableState.value = mutableState.value.copy(secret = "", saving = false, glossary = glossary, glossaryInput = "", message = "Réglages de transcription enregistrés")
                 }
             } catch (e: CancellationException) {
                 synchronized(lock) { mutableState.value = mutableState.value.copy(saving = false, message = "Enregistrement interrompu. Réessaie.") }

@@ -33,7 +33,7 @@ data class KnownFolder(val id: String, val name: String, val origin: FolderOrigi
 /** Étape de traitement d'un enregistrement, dont l'erreur est gardée jusqu'à une réussite. */
 enum class Step { RECOVER, SEND, TRANSCRIBE }
 
-/** État local tenu dans `state.json`, version 7. */
+/** État local tenu dans `state.json`, version 9. */
 data class LocalState(
     val deviceAddress: String? = null,
     val deviceName: String? = null,
@@ -56,6 +56,10 @@ data class LocalState(
     val automaticProcessingRequests: List<AutomaticProcessingRequest> = emptyList(),
     val driveSendChoice: DriveSendChoice = DriveSendChoice.ALL_FILES,
     val driveReceipts: List<DriveReceipt> = emptyList(),
+    /** Dernière lecture du boîtier, valeurs brutes conservées ; null avant la première lecture. */
+    val boxStatus: BoxStatus? = null,
+    /** Carnet des noms de locuteurs, le plus récent en tête ; absent d'une version antérieure, il est vide. */
+    val speakerNames: List<SpeakerName> = emptyList(),
 ) {
     /** Remplace la preuve d'envoi du même nom vers la même destination. */
     fun withoutDriveReceipt(destination: DriveDestination, fileName: String): LocalState = copy(
@@ -201,7 +205,8 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
                 .put("baseUrl", state.transcriptionSettings.baseUrl)
                 .put("language", state.transcriptionSettings.language)
                 .put("model", state.transcriptionSettings.model)
-                .put("credentialRef", state.transcriptionSettings.credentialRef ?: JSONObject.NULL))
+                .put("credentialRef", state.transcriptionSettings.credentialRef ?: JSONObject.NULL)
+                .put("glossary", state.transcriptionSettings.glossary))
             .put("synthesisSettings", JSONObject()
                 .put("baseUrl", state.synthesisSettings.baseUrl)
                 .put("model", state.synthesisSettings.model)
@@ -232,6 +237,17 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
                         .put("sha256", receipt.sha256))
                 }
             })
+            .put("boxStatus", state.boxStatus?.let { status -> JSONObject()
+                .put("batteryPercent", status.batteryPercent)
+                .put("totalMb", status.totalMb)
+                .put("freeMb", status.freeMb)
+                .put("noise", status.noise)
+                .put("segmentDuration", status.segmentDuration)
+                .put("backlight", status.backlight)
+            } ?: JSONObject.NULL)
+            .put("speakerNames", JSONArray().apply {
+                state.speakerNames.forEach { put(JSONObject().put("name", it.name).put("lastUsedAt", it.lastUsedAt)) }
+            })
             .put("transcriptionTasks", JSONArray().apply {
                 state.transcriptionTasks.forEach { task ->
                     put(JSONObject()
@@ -255,6 +271,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
                         .put("submitAttempts", task.submitAttempts)
                         .put("nextAttemptAtMillis", task.nextAttemptAtMillis ?: JSONObject.NULL)
                         .put("subjectAttempted", task.subjectAttempted)
+                        .put("glossary", task.glossary)
                         .put("synthesis", task.synthesis?.let { writeSynthesis(it) } ?: JSONObject.NULL))
                 }
             })
@@ -311,7 +328,33 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
                         receipt.getString("fileName"), receipt.getString("driveFileId"), receipt.getString("sha256"))
                 }
             } else emptyList(),
+            boxStatus = if (version >= 8) readBoxStatus(json) else null,
+            speakerNames = if (version >= 9) json.arrayOrNull("speakerNames")?.let { readSpeakerNames(it) }.orEmpty()
+            else emptyList(),
         )
+    }
+
+    private fun readSpeakerNames(array: JSONArray): List<SpeakerName> = List(array.length()) { i ->
+        val o = array.getJSONObject(i)
+        SpeakerName(o.getString("name"), o.getLong("lastUsedAt"))
+    }
+
+    /** Une valeur nulle reste une absence de lecture ; un champ absent ou tout autre contenu invalide fait échouer le chargement. */
+    private fun readBoxStatus(json: JSONObject): BoxStatus? {
+        if (!json.has("boxStatus")) throw JSONException("Champ boxStatus absent en version 8")
+        if (json.isNull("boxStatus")) return null
+        val o = json.getJSONObject("boxStatus")
+        val battery = o.getInt("batteryPercent")
+        val totalMb = o.getLong("totalMb")
+        val freeMb = o.getLong("freeMb")
+        val noise = o.getInt("noise")
+        val segmentDuration = o.getInt("segmentDuration")
+        val backlight = o.getInt("backlight")
+        if (battery !in 0..100 || totalMb !in 0..0xffff_ffffL || freeMb !in 0..0xffff_ffffL ||
+            noise !in 0..0xff || segmentDuration !in 0..0xff || backlight !in 0..0xff)
+            throw JSONException("État du boîtier hors plage : batterie $battery, capacité $totalMb, libre $freeMb, " +
+                "bruit $noise, segments $segmentDuration, rétro-éclairage $backlight")
+        return BoxStatus(battery, totalMb, freeMb, noise, segmentDuration, backlight)
     }
 
     /** Reprise de la 0.1.5 : boîtier et nom gardés, dossier Drive devenu dossier connu, enregistrements abandonnés. */
@@ -346,6 +389,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
             language = o.stringOrNull("language") ?: defaults.language,
             model = o.stringOrNull("model") ?: defaults.model,
             credentialRef = o.stringOrNull("credentialRef"),
+            glossary = o.stringOrNull("glossary") ?: "",
         )
     }
 
@@ -368,6 +412,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
             submitAttempts = o.intOr("submitAttempts", 0),
             nextAttemptAtMillis = if (o.isNull("nextAttemptAtMillis")) null else o.getLong("nextAttemptAtMillis"),
             subjectAttempted = version >= 5 && o.booleanOr("subjectAttempted", false),
+            glossary = o.stringOrNull("glossary") ?: "",
         )
         val addressSafeTask = when {
             // Corrige les suspensions terminales enregistrées par la migration précédente.
@@ -397,7 +442,8 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
     private fun readSynthesisSettings(o: JSONObject): SynthesisSettings {
         val defaults = SynthesisSettings()
         return SynthesisSettings(o.stringOrNull("baseUrl") ?: defaults.baseUrl, o.stringOrNull("model") ?: defaults.model,
-            o.stringOrNull("credentialRef"), o.stringOrNull("prompt") ?: defaults.prompt)
+            o.stringOrNull("credentialRef"),
+            o.stringOrNull("prompt")?.takeUnless { it == PREVIOUS_DEFAULT_SYNTHESIS_PROMPT } ?: defaults.prompt)
     }
 
     private fun readSynthesisProvenance(array: JSONArray): List<SynthesisProvenance> = List(array.length()) { i ->
@@ -444,7 +490,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
     }
 
     private companion object {
-        const val VERSION = 7
+        const val VERSION = 9
     }
 }
 

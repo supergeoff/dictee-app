@@ -36,6 +36,7 @@ data class TranscriptionTask(
     /** Prochaine tentative d'envoi différée, ou null sans attente. */
     val nextAttemptAtMillis: Long? = null,
     val subjectAttempted: Boolean = false,
+    val glossary: String = "",
 )
 
 enum class TranscriptionExclusion { MISSING_MP3, RECOVERY_FAILED, ALREADY_ACTIVE, MISSING_VTT }

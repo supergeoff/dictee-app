@@ -34,6 +34,23 @@ class SynthesisRecordingPresentationTest {
         assertTrue(message.contains(running.name))
     }
 
+    @Test fun redoMdExplainsExcludedRecordingAndNeverSaysAlreadyPresent() {
+        val failed = recording("20261102000000", FileKind.MP3, FileKind.VTT, FileKind.MD)
+        val active = recording("20261103000000", FileKind.MP3, FileKind.VTT, FileKind.MD)
+        val failedMessage = synthesisSelectionMessage(listOf(failed), setOf(failed.name),
+            mapOf(failed.name to mapOf(Step.RECOVER to "erreur")), emptySet(), RequestedWork.REDO_MD)!!
+        assertTrue(failedMessage.contains(failed.name))
+        val activeMessage = synthesisSelectionMessage(listOf(active), setOf(active.name), emptyMap(), setOf(active.name), RequestedWork.REDO_MD)!!
+        assertTrue(activeMessage.contains("Déjà en cours"))
+        assertTrue(activeMessage.contains(active.name))
+        assertFalse(activeMessage.contains("déjà présents"))
+    }
+
+    @Test fun redoMdWithoutExclusionSaysNothing() {
+        val complete = recording("20261101000000", FileKind.MP3, FileKind.VTT, FileKind.MD)
+        assertNull(synthesisSelectionMessage(listOf(complete), setOf(complete.name), emptyMap(), emptySet(), RequestedWork.REDO_MD))
+    }
+
     @Test fun promotionChangesSnapshotRevisionEvenWhenNamesAndSizesMatch() {
         val snapshot = PhoneSnapshot(listOf(PhoneFile("Note-20261101000000.vtt", 42)), ok = true)
         val promoted = snapshot.afterPromotion()

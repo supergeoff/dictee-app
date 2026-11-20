@@ -60,6 +60,7 @@ sealed class Screen {
     data object Home : Screen()
     data class Detail(val name: String) : Screen()
     data object Settings : Screen()
+    data object BoxSettings : Screen()
     data object SynthesisSettings : Screen()
     data object TranscriptionSettings : Screen()
     data object StorageSettings : Screen()
@@ -230,12 +231,9 @@ private fun InitializationScreen(error: String?, onRetry: () -> Unit) {
 private fun Navigation(ui: UiState, model: AppModel, stack: SnapshotStateList<Screen>, onSearch: () -> Unit) {
     val saveable = rememberSaveableStateHolder()
     val screen = stack.last()
-    val push: (Screen) -> Unit = { next -> if (stack.last() == screen && screen != next) stack += next }
+    val push: (Screen) -> Unit = { next -> pushScreen(stack, screen, next) }
     val back: () -> Unit = {
-        if (stack.size > 1 && stack.last() == screen) {
-            val closed = stack.removeAt(stack.lastIndex)
-            saveable.removeState(closed.toString())
-        }
+        popScreen(stack, screen)?.let { closed -> saveable.removeState(closed.toString()) }
     }
     BackHandler(enabled = stack.size > 1, onBack = back)
     saveable.SaveableStateProvider(screen.toString()) {
@@ -247,13 +245,9 @@ private fun Navigation(ui: UiState, model: AppModel, stack: SnapshotStateList<Sc
                     RecordingsScreen(ui, model, onOpen = { push(Screen.Detail(it)) }, onSettings = { push(Screen.Settings) })
                 }
             is Screen.Detail -> RecordingScreen(ui, screen.name, model, back, onSettings = { destination ->
-                push(when (destination) {
-                    SettingsDestination.STORAGE -> Screen.StorageSettings
-                    SettingsDestination.TRANSCRIPTION -> Screen.TranscriptionSettings
-                    SettingsDestination.SYNTHESIS -> Screen.SynthesisSettings
-                })
+                push(SettingsRoutes.screen(destination))
             })
-            Screen.Settings, Screen.SynthesisSettings, Screen.TranscriptionSettings, Screen.StorageSettings -> SettingsScreen(
+            Screen.Settings, Screen.BoxSettings, Screen.SynthesisSettings, Screen.TranscriptionSettings, Screen.StorageSettings -> SettingsScreen(
                 ui = ui,
                 model = model,
                 onBack = back,
@@ -261,12 +255,8 @@ private fun Navigation(ui: UiState, model: AppModel, stack: SnapshotStateList<Sc
                 onDriveFolders = { push(Screen.DriveFolders) },
                 onJournal = { push(Screen.Journal) },
                 onPrompt = { push(Screen.Prompt) },
-                destination = when (screen) {
-                    Screen.SynthesisSettings -> SettingsDestination.SYNTHESIS
-                    Screen.TranscriptionSettings -> SettingsDestination.TRANSCRIPTION
-                    Screen.StorageSettings -> SettingsDestination.STORAGE
-                    else -> null
-                },
+                page = checkNotNull(SettingsRoutes.page(screen)),
+                onPage = { page -> push(SettingsRoutes.screen(page)) },
             )
             Screen.Prompt -> PromptScreen(model.synthesisForm, back)
             Screen.DriveFolders -> DriveFolderScreen(ui, model, back)

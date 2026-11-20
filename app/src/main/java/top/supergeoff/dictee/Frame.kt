@@ -15,6 +15,15 @@ object Cmd {
     const val DELETE = 0x0d
     const val LIVE_START = 0x15
 
+    /** Durée des segments (payload : l'octet brut de `SegmentDuration`). */
+    const val SEGMENT_DURATION = 0x16
+
+    /** Réduction du bruit (payload : l'octet brut de `NoiseReduction`). */
+    const val NOISE_REDUCTION = 0x17
+
+    /** Rétroéclairage (payload : 00 éteint, 01 allumé). */
+    const val BACKLIGHT = 0x1a
+
     /** L'application demande un enregistrement en mémoire avec cette commande : le boîtier répond par le statut et la taille, envoie l'audio sur la caractéristique des fichiers, puis termine par une trame 02. */
     const val FILE = 0x0b
 

@@ -36,10 +36,35 @@ class JournalTest {
     }
 
     @Test
-    fun `la purge garde sept jours`() {
+    fun `la purge supprime les fichiers d'avant hier`() {
         for (d in 23..31) File(tmp.root, "journal-2026-10-%02d.txt".format(d)).writeText("10:00:00 APP x\n")
         journal().purge()
-        assertEquals((25..31).map { "journal-2026-10-%02d.txt".format(it) }, tmp.root.list()!!.sorted())
+        assertEquals(listOf("journal-2026-10-31.txt"), tmp.root.list()!!.sorted())
+    }
+
+    @Test
+    fun `la purge retire les lignes de plus de huit heures`() {
+        now = LocalDateTime.of(2026, 10, 31, 4, 0, 0)
+        File(tmp.root, "journal-2026-10-30.txt").writeText("19:59:59 APP vieille\n20:00:00 APP gardee\n")
+        File(tmp.root, "journal-2026-10-31.txt").writeText("03:00:00 APP recente\n")
+        journal().purge()
+        assertEquals("20:00:00 APP gardee\n", File(tmp.root, "journal-2026-10-30.txt").readText())
+        assertEquals("03:00:00 APP recente\n", File(tmp.root, "journal-2026-10-31.txt").readText())
+    }
+
+    @Test
+    fun `un fichier sans ligne recente est supprime`() {
+        File(tmp.root, "journal-2026-10-31.txt").writeText("01:00:00 APP vieille\n")
+        journal().purge()
+        assertTrue(tmp.root.list()!!.isEmpty())
+    }
+
+    @Test
+    fun `la lecture et l'export ignorent les lignes de plus de huit heures`() {
+        File(tmp.root, "journal-2026-10-31.txt").writeText("01:00:00 APP vieille\n09:00:00 APP recente\n")
+        val j = journal()
+        assertEquals(listOf("recente"), j.lines().map { it.message })
+        assertEquals("== 2026-10-31 ==\n09:00:00 APP recente\n", j.exportText())
     }
 
     @Test
