@@ -236,7 +236,6 @@ private fun Navigation(ui: UiState, model: AppModel, stack: SnapshotStateList<Sc
         popScreen(stack, screen)?.let { closed -> saveable.removeState(closed.toString()) }
     }
     BackHandler(enabled = stack.size > 1, onBack = back)
-    top.supergeoff.dictee.ui.BoxDeletionStatus(ui.deletingBox, ui.boxDeletionResult, model::dismissBoxDeletionResult)
     saveable.SaveableStateProvider(screen.toString()) {
         when (screen) {
             Screen.Home ->

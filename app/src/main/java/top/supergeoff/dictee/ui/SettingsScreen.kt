@@ -152,7 +152,7 @@ private fun BoxSection(ui: UiState, model: AppModel, onAssociate: () -> Unit) {
     val local = ui.local
     val associated = local.deviceAddress != null
     val status = local.boxStatus
-    val busy = ui.refreshing || ui.recovering || ui.deletingBox || ui.settingBox
+    val busy = ui.refreshing || ui.recovering || ui.deleting || ui.settingBox
     val editable = boxSettingsEditable(ui.link, ui.boxStatusFresh, busy, hasStatus = status != null)
     Section("Boîtier") {
         GroupCard {

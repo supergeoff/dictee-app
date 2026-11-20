@@ -267,6 +267,27 @@ class LocalStateTest {
         assertEquals(old, LocalState(driveReceipts = listOf(old)).driveReceipts.single())
     }
 
+    @Test
+    fun withoutDriveReceiptsRemovesOnlyGivenIds() {
+        val kept = DriveReceipt(DriveDestination("account-1", "folder-1"), "Note.vtt", "kept-id", "a".repeat(64))
+        val removed = kept.copy(fileName = "Note.md", driveFileId = "removed-id")
+        val other = kept.copy(fileName = "Other.vtt", driveFileId = "other-id")
+
+        val updated = LocalState(driveReceipts = listOf(kept, removed, other))
+            .withoutDriveReceipts(setOf("removed-id", "absent-id"))
+
+        assertEquals(listOf(kept, other), updated.driveReceipts)
+    }
+
+    @Test fun forcedRecoveryCreatesIntentWhenAutoOff() {
+        val folder = "content://synthetic/tree-a"
+        val began = LocalState(autoProcessAfterRecovery = false).beginAutomaticRecovery("recording", folder, "request", force = true)
+        assertEquals(listOf(AutomaticProcessingRequest("request", "recording", folder, AutomaticProcessingPhase.RECOVERING)),
+            began.automaticProcessingRequests)
+        assertTrue(LocalState(autoProcessAfterRecovery = false).beginAutomaticRecovery("recording", folder, "request")
+            .automaticProcessingRequests.isEmpty())
+    }
+
     @Test fun version6PersistsSubjectsAndAttemptMarkerAndReadsVersion5() {
         val store = LocalStateStore(file())
         val state = LocalState(recordingSubjects = mapOf("20261030160502" to "Sujet synthétique"),

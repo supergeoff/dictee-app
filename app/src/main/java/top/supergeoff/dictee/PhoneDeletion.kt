@@ -6,8 +6,6 @@ data class PhoneDeletionPlan(
     val folderUri: String,
     val recordings: List<Recording>,
     val blockedNames: Set<String>,
-    val documentsUnverified: Boolean,
-    val audioAtRisk: Boolean,
 )
 
 data class PhoneDeletionResult(val deleted: Set<String>, val failures: Map<String, String>)
@@ -15,26 +13,9 @@ data class PhoneDeletionResult(val deleted: Set<String>, val failures: Map<Strin
 object PhoneDeletion {
     fun plan(
         folderUri: String, recordings: List<Recording>, selected: Set<String>, protectedNames: Set<String>,
-        drive: DriveListing?, local: LocalState, hashes: Map<String, String>,
     ): PhoneDeletionPlan {
         val targets = recordings.filter { it.name in selected && it.phoneFiles.isNotEmpty() }.distinctBy { it.name }
-        val destination = local.driveAccount?.let { account -> local.chosenFolderId?.let { DriveDestination(account, it) } }
-        val documentsUnverified = targets.any { recording ->
-            listOf(FileKind.VTT, FileKind.MD).any { kind ->
-                val fileName = recording.phoneFiles[kind]?.fileName ?: RecordName.fileName(recording.type, recording.name, kind)
-                drive == null || destination == null || DriveSync.action(
-                    fileName, kind, hashes[fileName], destination, drive.entries, local.driveReceipts,
-                ) != DriveWriteAction.SKIP
-            }
-        }
-        val audioAtRisk = targets.any { recording ->
-            FileKind.MP3 in recording.phoneFiles && !recording.onBox &&
-                (drive == null || destination == null || DriveSync.action(
-                    recording.phoneFiles.getValue(FileKind.MP3).fileName, FileKind.MP3, null,
-                    destination, drive.entries, local.driveReceipts,
-                ) != DriveWriteAction.SKIP)
-        }
-        return PhoneDeletionPlan(folderUri, targets, targets.map { it.name }.toSet() intersect protectedNames, documentsUnverified, audioAtRisk)
+        return PhoneDeletionPlan(folderUri, targets, targets.map { it.name }.toSet() intersect protectedNames)
     }
 
     fun execute(plan: PhoneDeletionPlan, store: PhoneStore): PhoneDeletionResult {

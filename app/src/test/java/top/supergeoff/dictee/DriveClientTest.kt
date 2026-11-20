@@ -250,4 +250,30 @@ class DriveClientTest {
         assertEquals(listOf("Bearer t1", "Bearer t2"), http.requests.map { it.headers["Authorization"] })
         assertEquals(listOf("t1"), tokens.invalidated)
     }
+
+    @Test
+    fun `trash envoie un PATCH avec trashed true sur le fichier`() {
+        val http = FakeHttp(json(200, "{}"))
+        DriveClient(http, FakeTokens("t")).trash("FILE1")
+        val request = http.requests.single()
+        assertEquals("PATCH", request.method)
+        assertTrue(request.url.startsWith("https://www.googleapis.com/drive/v3/files/FILE1?"))
+        assertTrue(request.url.contains("supportsAllDrives=true"))
+        assertTrue(request.jsonBody().getBoolean("trashed"))
+    }
+
+    @Test
+    fun `trash compte un fichier deja supprime (404) comme un succes`() {
+        val http = FakeHttp(json(404, """{"error":{"message":"File not found"}}"""))
+        DriveClient(http, FakeTokens("t")).trash("FILE1")
+        assertEquals(1, http.requests.size)
+    }
+
+    @Test
+    fun `trash leve une exception avec le code HTTP sur un refus 403`() {
+        val http = FakeHttp(json(403, """{"error":{"message":"Insufficient Permission"}}"""))
+        val e = assertThrows(DriveException::class.java) { DriveClient(http, FakeTokens("t")).trash("FILE1") }
+        assertEquals(403, e.code)
+        assertTrue(e.message!!.contains("Insufficient Permission"))
+    }
 }
