@@ -127,8 +127,7 @@ fun RecordingsScreen(ui: UiState, model: AppModel, onOpen: (name: String) -> Uni
     }
     ui.deletionRequest?.let { plan ->
         UnifiedDeletionDialog(plan, ui.deleting, onConfirm = {
-            model.confirmDeletion()
-            selection.clear()
+            if (model.confirmDeletion()) selection.clear()
         }, onDismiss = model::cancelDeletion)
     }
     val shown = remember(ui.recordings, ui.drive, filter) { ui.recordings.filter { filter.matches(it, ui.drive) } }
@@ -413,7 +412,7 @@ private fun SelectionMark(checked: Boolean) {
 @Composable
 private fun ActionBar(ui: UiState, model: AppModel, checked: Set<String>?, onDone: () -> Unit) {
     if (checked == null) {
-        val cloudCount = cloudSendCount(ui.recordings, ui.drive, ui.local.driveEnabled)
+        val cloudCount = cloudSendCount(ui.recordings, ui.drive, ui.local, ui.documentHashes)
         if (cloudCount > 0) {
             BottomBar {
                 ActionBarButton(if (ui.sending) "Envoi…" else "Envoyer dans le cloud ($cloudCount)", primary = true,
@@ -469,9 +468,9 @@ private fun BottomBar(deletion: (@Composable RowScope.() -> Unit)? = null, butto
 @Composable
 private fun RowScope.SelectionDeletionButtons(ui: UiState, checked: Set<String>, model: AppModel) {
     fun hasTargets(mode: DeletionMode) =
-        UnifiedDeletion.plan(mode, ui.recordings, checked, emptySet(), ui.drive, ui.local, null, null).targets.isNotEmpty()
-    val everywhere = remember(ui.recordings, ui.drive, ui.local, checked) { hasTargets(DeletionMode.EVERYWHERE) }
-    val freeSpace = remember(ui.recordings, ui.drive, ui.local, checked) { hasTargets(DeletionMode.FREE_SPACE) }
+        UnifiedDeletion.plan(mode, ui.recordings, checked, emptySet(), ui.drive, ui.local, null, null, ui.documentHashes).targets.isNotEmpty()
+    val everywhere = remember(ui.recordings, ui.drive, ui.local, ui.documentHashes, checked) { hasTargets(DeletionMode.EVERYWHERE) }
+    val freeSpace = remember(ui.recordings, ui.drive, ui.local, ui.documentHashes, checked) { hasTargets(DeletionMode.FREE_SPACE) }
     SecondaryButton("Supprimer partout", enabled = everywhere && !ui.deleting, modifier = Modifier.weight(1f),
         onClick = { model.requestDeletion(DeletionMode.EVERYWHERE, checked) })
     SecondaryButton("Libérer l'espace", enabled = freeSpace && !ui.deleting, modifier = Modifier.weight(1f),

@@ -19,6 +19,8 @@ class UnifiedDeletionOrchestrator(
         val failures = mutableListOf<String>()
         if (plan.blockedNames.isNotEmpty()) return UnifiedDeletionOutcome(failures)
 
+        if (plan.driveUnreadable) failures += "Drive : liste illisible, ses copies n'ont pas été touchées"
+
         val trashedIds = linkedSetOf<String>()
         for (file in plan.targets.flatMap { it.driveFiles }.distinctBy { it.id }) {
             try {

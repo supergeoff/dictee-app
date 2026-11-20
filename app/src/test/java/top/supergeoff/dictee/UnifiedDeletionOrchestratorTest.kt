@@ -116,4 +116,19 @@ class UnifiedDeletionOrchestratorTest {
         } catch (_: CancellationException) {
         }
     }
+
+    @Test fun unreadableDriveIsReportedAsDriveFailure() = runBlocking {
+        val calls = mutableListOf<String>()
+        val unreadable = everywhere.copy(
+            targets = listOf(DeletionTarget(b, box = true, phone = false, driveFiles = emptyList())), driveUnreadable = true,
+        )
+        val outcome = UnifiedDeletionOrchestrator(
+            trashDrive = { calls += "drive" },
+            deletePhone = { null },
+            deleteBox = { names -> calls += "box:$names"; boxResult(names.toSet()) },
+            onDriveTrashed = { },
+        ).execute(unreadable)
+        assertEquals(listOf("box:[$b]"), calls)
+        assertEquals(listOf("Drive : liste illisible, ses copies n'ont pas été touchées"), outcome.failures)
+    }
 }

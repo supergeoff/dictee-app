@@ -667,6 +667,20 @@ class AppModel(
     // --- Suppression unifiée
 
     /**
+     * Plan de [mode] pour [names] avec l'état courant : dossier du téléphone lu (sinon vu comme vide et signalé illisible),
+     * empreintes actuelles des documents, liste Drive brute pour « Supprimer partout » (qui doit voir une liste absente).
+     */
+    private fun deletionPlan(mode: DeletionMode, names: Set<String>, local: LocalState, protectedNames: Set<String>): UnifiedDeletionPlan {
+        val phone = phoneFlow.value
+        val phoneReadable = phone.ok && local.phoneTreeUri != null && phone.folderUri == local.phoneTreeUri
+        val knownPhone = if (phoneReadable) phone else phone.copy(files = emptyList())
+        val current = buildUi(local, knownPhone, driveFlow.value, box.status.value, liveFlow.value)
+        val drive = if (mode == DeletionMode.EVERYWHERE) driveFlow.value else driveFlow.value.takeIf { local.driveEnabled }
+        return UnifiedDeletion.plan(mode, current.recordings, names, protectedNames, drive, local,
+            local.deviceAddress, local.phoneTreeUri, current.documentHashes, phoneReadable || local.phoneTreeUri == null)
+    }
+
+    /**
      * Prépare la confirmation de « Supprimer partout » ou « Libérer l'espace » pour [names].
      * Aucune fenêtre sans cible. Le Bluetooth n'est demandé que si un niveau boîtier est visé.
      */
@@ -676,13 +690,7 @@ class AppModel(
             liveFlow.update { it.copy(notice = "Suppression en cours.") }
             return
         }
-        val phone = phoneFlow.value
-        val knownPhone = if (phone.ok && local.phoneTreeUri != null && phone.folderUri == local.phoneTreeUri) phone else phone.copy(files = emptyList())
-        val current = buildUi(local, knownPhone, driveFlow.value, box.status.value, liveFlow.value)
-        // En « Supprimer partout », la liste Drive brute dit si Drive désactivé laisse des copies intactes.
-        val drive = if (mode == DeletionMode.EVERYWHERE) driveFlow.value else driveFlow.value.takeIf { local.driveEnabled }
-        val plan = UnifiedDeletion.plan(mode, current.recordings, names, deletionProtectedNames(local), drive, local,
-            local.deviceAddress, local.phoneTreeUri)
+        val plan = deletionPlan(mode, names, local, deletionProtectedNames(local))
         if (plan.targets.isEmpty()) {
             liveFlow.update { it.copy(notice = "Rien à supprimer.") }
             return
@@ -723,11 +731,12 @@ class AppModel(
 
     fun dismissNotice() = liveFlow.update { it.copy(notice = null) }
 
-    fun confirmDeletion() {
+    /** Vrai quand la suppression est lancée ; faux si la demande a disparu, est bloquée ou une suppression est déjà en cours. */
+    fun confirmDeletion(): Boolean {
         val plan = synchronized(deletionRequestLock) {
             val live = liveFlow.value
-            val request = live.deletionRequest ?: return
-            if (live.deleting || !unifiedDeletionCanConfirm(request, false)) return
+            val request = live.deletionRequest ?: return false
+            if (live.deleting || !unifiedDeletionCanConfirm(request, false)) return false
             liveFlow.update { it.copy(deletionRequest = null, deleting = true, notice = null) }
             request
         }
@@ -747,6 +756,7 @@ class AppModel(
                 jobs.end()
             }
         }
+        return true
     }
 
     /**
@@ -755,24 +765,43 @@ class AppModel(
      */
     private suspend fun runUnifiedDeletion(plan: UnifiedDeletionPlan) {
         val names = plan.targets.map { it.name }.toSet()
+        var executed = plan
+        var dropped = emptyList<String>()
         var outcome: UnifiedDeletionOutcome? = null
         var busyNames = emptySet<String>()
         recoverySafety.withTransferLock {
             recoveryDeletionGuard.withDeletionSnapshot(names) { admittedSends ->
                 val local = localRepository.awaitInitialized()
                 busyNames = unifiedDeletionBusyNames(names, deletionProtectedNames(local), admittedSends)
-                if (busyNames.isEmpty()) outcome = unifiedDeletionOrchestrator(plan).execute(plan)
+                if (busyNames.isEmpty()) {
+                    // Le plan confirmé peut dater : le dossier, les empreintes et les erreurs sont relus, et seule l'intersection part.
+                    val revalidated = UnifiedDeletion.restrict(plan, freshDeletionPlan(plan))
+                    executed = revalidated.plan
+                    dropped = revalidated.dropped
+                    if (executed.targets.isNotEmpty()) outcome = unifiedDeletionOrchestrator(executed).execute(executed)
+                }
             }
         }
         if (busyNames.isNotEmpty()) {
             liveFlow.update { it.copy(notice = "Enregistrements occupés : ${busyNames.sorted().joinToString()}") }
             return
         }
-        val result = outcome ?: return
-        if (plan.targets.any { it.phone }) readPhone()
-        if (plan.targets.any { it.driveFiles.isNotEmpty() }) readDrive()
-        result.failures.forEach { failure -> journal.error(failureSource(failure), failure) }
-        liveFlow.update { it.copy(notice = unifiedDeletionFailureText(result.failures)) }
+        if (dropped.isNotEmpty()) journal.add(Source.APP, "Suppression réduite, l'état a changé depuis la confirmation : ${dropped.joinToString(", ")}")
+        val failures = outcome?.failures.orEmpty()
+        if (executed.targets.any { it.phone }) readPhone()
+        if (executed.targets.any { it.driveFiles.isNotEmpty() }) readDrive()
+        failures.forEach { failure -> journal.error(failureSource(failure), failure) }
+        liveFlow.update { it.copy(notice = unifiedDeletionNotice(failures, dropped)) }
+    }
+
+    /** Relit le dossier du téléphone, puis recalcule le plan du même mode pour les mêmes enregistrements. Appelé sous le verrou de transfert. */
+    private suspend fun freshDeletionPlan(plan: UnifiedDeletionPlan): UnifiedDeletionPlan {
+        val local = localRepository.awaitInitialized()
+        val folder = local.phoneTreeUri
+        if (folder != null) phoneMutex.withLock {
+            phoneFlow.value = withContext(Dispatchers.IO) { readFolder(folder.toUri(), phoneFlow.value) }
+        }
+        return deletionPlan(plan.mode, plan.targets.map { it.name }.toSet(), local, emptySet())
     }
 
     private fun failureSource(failure: String): Source = when {

@@ -10,8 +10,9 @@ class UnifiedDeletionPresentationTest {
 
     private fun plan(
         mode: DeletionMode = DeletionMode.EVERYWHERE, targets: List<DeletionTarget>, blocked: Set<String> = emptySet(),
-        driveSkipped: Boolean = false,
-    ) = UnifiedDeletionPlan(mode, targets, blocked, driveSkipped, "address", "folder-uri")
+        driveSkipped: Boolean = false, driveUnreadable: Boolean = false, phoneUnreadable: Boolean = false,
+        labels: Map<String, String> = emptyMap(),
+    ) = UnifiedDeletionPlan(mode, targets, blocked, driveSkipped, "address", "folder-uri", driveUnreadable, phoneUnreadable, labels)
 
     @Test fun titles() {
         assertEquals("Supprimer partout ?", unifiedDeletionTitle(plan(targets = emptyList())))
@@ -71,6 +72,50 @@ class UnifiedDeletionPresentationTest {
         assertEquals(
             "Suppression incomplète : boîtier hors de portée (voir le journal)",
             unifiedDeletionFailureText(listOf("boîtier hors de portée", "autre")),
+        )
+    }
+
+    @Test fun confirmationMentionsUnreadableDrive() {
+        val p = plan(targets = listOf(DeletionTarget(a, true, false, emptyList())), driveUnreadable = true)
+        assertEquals(
+            listOf("1 enregistrement sera effacé : 1 du boîtier.", "Drive illisible : ses copies ne seront pas touchées."),
+            unifiedDeletionBody(p),
+        )
+    }
+
+    @Test fun confirmationMentionsUnreadablePhoneFolder() {
+        val p = plan(targets = listOf(DeletionTarget(a, true, false, emptyList())), phoneUnreadable = true)
+        assertEquals(
+            listOf("1 enregistrement sera effacé : 1 du boîtier.", "Dossier du téléphone illisible : ses fichiers ne seront pas touchés."),
+            unifiedDeletionBody(p),
+        )
+    }
+
+    @Test fun singleTargetNamesTheRecording() {
+        val p = plan(targets = listOf(DeletionTarget(a, true, false, emptyList())), labels = mapOf(a to "Réunion budget"))
+        assertEquals(
+            listOf("Enregistrement : Réunion budget.", "1 enregistrement sera effacé : 1 du boîtier."),
+            unifiedDeletionBody(p),
+        )
+    }
+
+    @Test fun severalTargetsDoNotNameRecordings() {
+        val p = plan(
+            targets = listOf(DeletionTarget(a, true, false, emptyList()), DeletionTarget(b, true, false, emptyList())),
+            labels = mapOf(a to "Réunion budget", b to "Autre"),
+        )
+        assertEquals(listOf("2 enregistrements seront effacés : 2 du boîtier."), unifiedDeletionBody(p))
+    }
+
+    @Test fun noticePrefersFailureThenReducedPlan() {
+        assertNull(unifiedDeletionNotice(emptyList(), emptyList()))
+        assertEquals(
+            "Suppression incomplète : Drive : liste illisible (voir le journal)",
+            unifiedDeletionNotice(listOf("Drive : liste illisible"), listOf("$a : boîtier")),
+        )
+        assertEquals(
+            "Suppression réduite : l'état a changé depuis la confirmation (voir le journal)",
+            unifiedDeletionNotice(emptyList(), listOf("$a : boîtier")),
         )
     }
 }
