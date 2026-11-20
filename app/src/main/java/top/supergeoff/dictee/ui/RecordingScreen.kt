@@ -167,7 +167,7 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
                 .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            PipelineCard(presentation) { action ->
+            PipelineCard(presentation, onSendLong = { model.send(listOf(name), customizeFormats = true) }) { action ->
                 when (action) {
                     PipelineAction.CANCEL_VTT, PipelineAction.CANCEL_MD -> confirmCancel = true
                     PipelineAction.REMOVE_FROM_QUEUE -> model.cancelTranscription(name)
@@ -181,8 +181,13 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
                     PipelineAction.OPEN_SETTINGS -> onSettings(presentation.settingsDestination(input))
                 }
             }
-            if (ui.local.driveEnabled && presentation.steps.any { it.stage == PipelineStage.DRIVE && it.status == PipelineStatus.DONE }) {
-                SecondaryButton("Envoyer sur Drive…", enabled = !ui.sending, onClick = { model.send(listOf(name)) })
+            val canChooseFormats = ui.local.driveEnabled && top.supergeoff.dictee.Recordings.toSendCurrent(listOf(recording), ui.drive,
+                ui.local.copy(driveSendFormats = FileKind.entries.toSet()), ui.documentHashes).isNotEmpty()
+            val pipelineSends = presentation.button?.action in setOf(PipelineAction.SEND, PipelineAction.RETRY_SEND)
+            if (canChooseFormats && !pipelineSends) {
+                SecondaryButton("Envoyer sur Drive", enabled = !ui.sending,
+                    onLongClick = { model.send(listOf(name), customizeFormats = true) }, onClick = { model.send(listOf(name)) })
+                Text("Appui long : choisir les formats", style = Dictee.type.caption, color = Dictee.colors.textSecondary)
             }
             if (mp3 == null) MissingMp3() else if (playback != null) {
                 Player(playback)

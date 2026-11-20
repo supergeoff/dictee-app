@@ -125,7 +125,7 @@ object Recordings {
         val destination = local.driveAccount?.let { account -> local.chosenFolderId?.let { DriveDestination(account, it) } }
         return sendable(list, local.errors).filter { recording ->
             recording.phoneFiles.any { (kind, file) ->
-                kind in DriveSync.requiredKinds(local.driveSendChoice) &&
+                kind in local.driveSendFormats &&
                     (drive == null || destination == null || DriveSync.action(file.fileName, kind, hashes[file.fileName], destination, drive.entries, local.driveReceipts) in
                         setOf(DriveWriteAction.CREATE, DriveWriteAction.UPDATE, DriveWriteAction.CONFLICT))
             }

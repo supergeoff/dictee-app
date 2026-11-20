@@ -5,6 +5,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -234,18 +236,18 @@ private enum class ButtonTone { Primary, Secondary, Danger }
 
 /** Bouton principal : fond `primary`, texte `primary-foreground`. [icon] est un pictogramme de 18 dp devant le texte. */
 @Composable
-fun PrimaryButton(text: String, enabled: Boolean = true, modifier: Modifier = Modifier, icon: Int? = null, onClick: () -> Unit) =
-    ButtonBox(text, ButtonTone.Primary, enabled, modifier, icon, compact = false, onClick)
+fun PrimaryButton(text: String, enabled: Boolean = true, modifier: Modifier = Modifier, icon: Int? = null, onLongClick: (() -> Unit)? = null, onClick: () -> Unit) =
+    ButtonBox(text, ButtonTone.Primary, enabled, modifier, icon, compact = false, onClick, onLongClick = onLongClick)
 
 /** Bouton secondaire : un aplat gris sans bordure. [icon] est un pictogramme de 18 dp devant le texte. */
 @Composable
-fun SecondaryButton(text: String, enabled: Boolean = true, modifier: Modifier = Modifier, icon: Int? = null, mono: Boolean = false, onClick: () -> Unit) =
-    ButtonBox(text, ButtonTone.Secondary, enabled, modifier, icon, compact = false, onClick, mono)
+fun SecondaryButton(text: String, enabled: Boolean = true, modifier: Modifier = Modifier, icon: Int? = null, mono: Boolean = false, onLongClick: (() -> Unit)? = null, onClick: () -> Unit) =
+    ButtonBox(text, ButtonTone.Secondary, enabled, modifier, icon, compact = false, onClick, mono, onLongClick = onLongClick)
 
 /** Bouton de barre collective : dimensions et typographie compactes de la maquette. */
 @Composable
-internal fun ActionBarButton(text: String, primary: Boolean, enabled: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) =
-    ButtonBox(text, if (primary) ButtonTone.Primary else ButtonTone.Secondary, enabled, modifier, icon = null, compact = false, onClick, actionBar = true)
+internal fun ActionBarButton(text: String, primary: Boolean, enabled: Boolean, modifier: Modifier = Modifier, onLongClick: (() -> Unit)? = null, onClick: () -> Unit) =
+    ButtonBox(text, if (primary) ButtonTone.Primary else ButtonTone.Secondary, enabled, modifier, icon = null, compact = false, onClick, actionBar = true, onLongClick = onLongClick)
 
 /** Bouton d'une action qui supprime : texte `destructive` sur `destructive-surface`. */
 @Composable
@@ -261,6 +263,7 @@ internal fun CompactButton(text: String, primary: Boolean = false, enabled: Bool
  * Un aplat sans bordure de 44 dp (36 en [compact], en `control-sm`). Un bouton pressé prend la teinte du survol du design system et se réduit
  * à 98 % ; désactivé, il garde son aspect à `opacity-disabled`. Un bouton compact garde une zone tactile de `touch-target` (48 dp).
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ButtonBox(
     text: String,
@@ -272,6 +275,7 @@ private fun ButtonBox(
     onClick: () -> Unit,
     mono: Boolean = false,
     actionBar: Boolean = false,
+    onLongClick: (() -> Unit)? = null,
 ) {
     val colors = Dictee.colors
     val (rest, pressedFill, content) = when (tone) {
@@ -294,7 +298,7 @@ private fun ButtonBox(
             .clip(ControlShape)
             .background(if (pressed) pressedFill else rest)
             .focusRing(source, Tokens.RADIUS_DP.dp)
-            .clickable(interactionSource = source, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)
+            .combinedClickable(interactionSource = source, indication = null, enabled = enabled, role = Role.Button, onClick = onClick, onLongClick = onLongClick, onLongClickLabel = if (onLongClick != null) "Choisir les formats" else null)
             .padding(horizontal = if (actionBar) 4.dp else if (compact) 14.dp else 18.dp, vertical = if (actionBar) 8.dp else if (compact) 6.dp else 10.dp),
         contentAlignment = Alignment.Center,
     ) {

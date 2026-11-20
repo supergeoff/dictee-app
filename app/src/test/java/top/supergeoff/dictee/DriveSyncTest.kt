@@ -21,21 +21,28 @@ class DriveSyncTest {
         val r = Recording(name, RecordType.NOTE, 0, false, emptyMap(), DisplayState.OnBox)
         val docs = listOf(DriveFile("v", "Call-$name.vtt", 1), DriveFile("m", "Call-$name.md", 1))
         val receipts = docs.map { DriveReceipt(destination, it.name, it.id, "hash") }
-        fun complete(remote: List<DriveFile> = docs, proof: List<DriveReceipt> = receipts, choice: DriveSendChoice = DriveSendChoice.DOCUMENTS_ONLY, dest: DriveDestination = destination) =
+        fun complete(remote: List<DriveFile> = docs, proof: List<DriveReceipt> = receipts, choice: Set<FileKind> = setOf(FileKind.VTT, FileKind.MD), dest: DriveDestination = destination) =
             DriveSync.isComplete(r, choice, dest, remote, emptyMap(), proof)
         assertEquals(true, complete())
         assertEquals(false, complete(proof = emptyList()))
         assertEquals(false, complete(dest = DriveDestination("other", "folder")))
         assertEquals(false, complete(remote = docs.map { it.copy(id = "different") }))
         assertEquals(false, complete(remote = docs + docs.first().copy(id = "duplicate")))
-        assertEquals(false, complete(choice = DriveSendChoice.ALL_FILES))
-        assertEquals(true, complete(remote = docs + DriveFile("audio", "$name.mp3", 1), choice = DriveSendChoice.ALL_FILES))
+        assertEquals(false, complete(choice = FileKind.entries.toSet()))
+        assertEquals(true, complete(remote = docs + DriveFile("audio", "$name.mp3", 1), choice = FileKind.entries.toSet()))
         val local = r.copy(phoneFiles = mapOf(FileKind.VTT to PhoneFile(docs.first().name, 1)))
-        assertEquals(false, DriveSync.isComplete(local, DriveSendChoice.DOCUMENTS_ONLY, destination, docs, emptyMap(), receipts))
+        assertEquals(false, DriveSync.isComplete(local, setOf(FileKind.VTT, FileKind.MD), destination, docs, emptyMap(), receipts))
     }
 
-    @Test fun `documents only selects VTT and MD`() {
-        assertEquals(setOf(FileKind.VTT, FileKind.MD), DriveSync.requiredKinds(DriveSendChoice.DOCUMENTS_ONLY))
+    @Test fun `empty formats are never complete and VTT ignores MD`() {
+        val name = "20261030160502"
+        val vtt = "Call-$name.vtt"
+        val recording = Recording(name, RecordType.CALL, 0, false,
+            mapOf(FileKind.VTT to PhoneFile(vtt, 1), FileKind.MD to PhoneFile("Call-$name.md", 1)), DisplayState.OnBox)
+        val remote = listOf(DriveFile("v", vtt, 1))
+        val receipts = listOf(DriveReceipt(destination, vtt, "v", "hash"))
+        assertEquals(true, DriveSync.isComplete(recording, setOf(FileKind.VTT), destination, remote, mapOf(vtt to "hash"), receipts))
+        assertEquals(false, DriveSync.isComplete(recording, emptySet(), destination, remote, mapOf(vtt to "hash"), receipts))
     }
 
     @Test fun `absent document is created`() {

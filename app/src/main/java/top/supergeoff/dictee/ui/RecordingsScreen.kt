@@ -56,7 +56,6 @@ import androidx.compose.ui.unit.dp
 import top.supergeoff.dictee.AppModel
 import top.supergeoff.dictee.DeletionMode
 import top.supergeoff.dictee.DriveListing
-import top.supergeoff.dictee.DriveSendChoice
 import top.supergeoff.dictee.LocationFilter
 import top.supergeoff.dictee.UnifiedDeletion
 import top.supergeoff.dictee.cloudSendCount
@@ -413,10 +412,11 @@ private fun SelectionMark(checked: Boolean) {
 private fun ActionBar(ui: UiState, model: AppModel, checked: Set<String>?, onDone: () -> Unit) {
     if (checked == null) {
         val cloudCount = cloudSendCount(ui.recordings, ui.drive, ui.local, ui.documentHashes)
-        if (cloudCount > 0) {
+        val customCount = cloudSendCount(ui.recordings, ui.drive, ui.local.copy(driveSendFormats = FileKind.entries.toSet()), ui.documentHashes)
+        if (customCount > 0) {
             BottomBar {
                 ActionBarButton(if (ui.sending) "Envoi…" else "Envoyer dans le cloud ($cloudCount)", primary = true,
-                    enabled = !ui.sending, modifier = Modifier.weight(1f), onClick = { model.send(null, choice = DriveSendChoice.DOCUMENTS_ONLY) })
+                    enabled = !ui.sending, modifier = Modifier.weight(1f), onLongClick = { model.send(null, customizeFormats = true) }, onClick = { model.send(null) })
             }
         }
         return
@@ -427,16 +427,18 @@ private fun ActionBar(ui: UiState, model: AppModel, checked: Set<String>?, onDon
     val transcribe = Recordings.toTranscribe(ui.recordings, checked, ui.local.errors, active).candidates.map { it.name }
     val recoverCount = recoverNames.size
     val sendCount = ui.toSend.count { it.name in checked }
+    val customSendCount = Recordings.toSendCurrent(ui.recordings, ui.drive, ui.local.copy(driveSendFormats = FileKind.entries.toSet()), ui.documentHashes).count { it.name in checked }
     ActionBarButtons(
         recoverText = if (ui.recovering) "Récupération…" else "Récupérer ($recoverCount)",
         recoverEnabled = ui.link == LinkStatus.CONNECTED && !ui.recovering && recoverCount > 0,
         transcribeCount = transcribe.size,
         sendText = if (ui.sending) "Envoi…" else "Envoyer ($sendCount)",
-        sendEnabled = !ui.sending && sendNames.isNotEmpty(),
+        sendEnabled = !ui.sending && customSendCount > 0,
         driveEnabled = ui.local.driveEnabled,
         onRecover = { model.recover(recoverNames); onDone() },
         onTranscribe = { model.transcribe(checked); onDone() },
         onSend = { model.send(sendNames, onDone) },
+        onSendLong = { model.send(sendNames, onDone, customizeFormats = true) },
         deletion = { SelectionDeletionButtons(ui, checked, model) },
     )
 }
@@ -446,6 +448,7 @@ private fun ActionBar(ui: UiState, model: AppModel, checked: Set<String>?, onDon
 private fun BottomBar(deletion: (@Composable RowScope.() -> Unit)? = null, buttons: @Composable RowScope.() -> Unit) {
     Column(modifier = Modifier.fillMaxWidth().background(Dictee.colors.surface).navigationBarsPadding()) {
         HorizontalDivider(color = Dictee.colors.border)
+        Text("Appui long sur Envoyer : choisir les formats", modifier = Modifier.padding(start = 16.dp, top = 4.dp), style = Dictee.type.caption, color = Dictee.colors.textSecondary)
         Row(
             modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = if (deletion == null) 12.dp else 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -481,14 +484,14 @@ private fun RowScope.SelectionDeletionButtons(ui: UiState, checked: Set<String>,
 internal fun ActionBarButtons(
     recoverText: String, recoverEnabled: Boolean, transcribeCount: Int,
     sendText: String, sendEnabled: Boolean, driveEnabled: Boolean,
-    onRecover: () -> Unit, onTranscribe: () -> Unit, onSend: () -> Unit,
+    onRecover: () -> Unit, onTranscribe: () -> Unit, onSend: () -> Unit, onSendLong: () -> Unit,
     deletion: (@Composable RowScope.() -> Unit)? = null,
 ) {
     BottomBar(deletion) {
         ActionBarButton(recoverText, primary = true, enabled = recoverEnabled, modifier = Modifier.weight(1f), onClick = onRecover)
         ActionBarButton("VTT + MD ($transcribeCount)", primary = false, enabled = transcribeCount > 0, modifier = Modifier.weight(1f), onClick = onTranscribe)
         if (driveEnabled) {
-            ActionBarButton(sendText, primary = false, enabled = sendEnabled, modifier = Modifier.weight(1f), onClick = onSend)
+            ActionBarButton(sendText, primary = false, enabled = sendEnabled, modifier = Modifier.weight(1f), onLongClick = onSendLong, onClick = onSend)
         }
     }
 }

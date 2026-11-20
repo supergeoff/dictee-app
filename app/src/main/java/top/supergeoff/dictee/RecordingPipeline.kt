@@ -121,7 +121,7 @@ object RecordingPipeline {
         val drive = when {
             input.busy.sending == r.name -> step(PipelineStage.DRIVE, PipelineStatus.RUNNING, "Envoi")
             errors[Step.SEND] != null -> step(PipelineStage.DRIVE, PipelineStatus.ERROR, "Erreur", errors[Step.SEND])
-            input.local.driveEnabled && input.drive != null && destination != null && DriveSync.isComplete(r, input.local.driveSendChoice, destination, input.drive.entries, input.documentHashes, input.local.driveReceipts) ->
+            input.local.driveEnabled && input.drive != null && destination != null && DriveSync.isComplete(r, input.local.driveSendFormats, destination, input.drive.entries, input.documentHashes, input.local.driveReceipts) ->
                 step(PipelineStage.DRIVE, PipelineStatus.DONE, "Sur Drive")
             !input.local.driveEnabled -> step(PipelineStage.DRIVE, PipelineStatus.TODO, "Désactivé")
             else -> step(PipelineStage.DRIVE, PipelineStatus.TODO, "À faire")

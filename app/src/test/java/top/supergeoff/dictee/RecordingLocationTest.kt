@@ -33,7 +33,7 @@ class RecordingLocationTest {
         assertFalse(LocationFilter.DRIVE.matches(recording(onBox = true, kinds = setOf(FileKind.MP3)), null))
     }
 
-    private val configured = LocalState(driveAccount = "account", chosenFolderId = "folder", driveEnabled = true)
+    private val configured = LocalState(driveAccount = "account", chosenFolderId = "folder", driveEnabled = true, driveSendFormats = setOf(FileKind.VTT, FileKind.MD))
     private val destination = DriveDestination("account", "folder")
     private fun hashes(r: Recording, sha: String = "sha") = r.phoneFiles.filterKeys { it != FileKind.MP3 }.values.associate { it.fileName to sha }
     private fun receipts(vararg files: DriveFile, sha: String = "sha") = files.map { DriveReceipt(destination, it.name, it.id, sha) }
@@ -71,8 +71,8 @@ class RecordingLocationTest {
         assertEquals(0, cloudSendCount(listOf(r), listing(), configured.copy(driveEnabled = false), hashes(r)))
     }
 
-    @Test fun cloudCountZeroWithoutListing() {
+    @Test fun cloudCountUsesFormatsWithoutListing() {
         val r = recording(kinds = setOf(FileKind.VTT))
-        assertEquals(0, cloudSendCount(listOf(r), null, configured, hashes(r)))
+        assertEquals(1, cloudSendCount(listOf(r), null, configured, hashes(r)))
     }
 }

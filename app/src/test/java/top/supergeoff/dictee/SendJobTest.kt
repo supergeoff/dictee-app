@@ -25,7 +25,7 @@ class SendJobTest {
     }
     private fun run(
         http: Http, store: MemoryStore, rs: List<Recording>, log: ListLog = ListLog(), labels: MutableList<String> = mutableListOf(),
-        explicit: Boolean = false, choice: DriveSendChoice = DriveSendChoice.ALL_FILES,
+        explicit: Boolean = false, choice: Set<FileKind> = FileKind.entries.toSet(),
         receipts: List<DriveReceipt> = listOf(DriveReceipt(destination, "Call-$n.vtt", "A2", hash)),
     ) = runBlocking { SendJob(DriveClient(http, FakeTokens("t1", "t2")), store, log, tmp.root).run(defaultFolder, rs, choice, destination, receipts, { _, p -> labels += p.label() }, {}, explicitSelection = explicit, beforeUpdate = { _, _ -> }) }
 
@@ -42,7 +42,7 @@ class SendJobTest {
                 json(200, "", mapOf("Location" to "https://upload.example/s1")),
                 json(200, """{"id":"A2","name":"$file","size":"${if (wrongSize) 2 else 3}"}"""))
             val out = SendJob(DriveClient(http, FakeTokens("t1", "t2")), store, ListLog(), tmp.root)
-                .run(defaultFolder, listOf(rec), DriveSendChoice.DOCUMENTS_ONLY, destination, listOf(old), { _, _ -> },
+                .run(defaultFolder, listOf(rec), setOf(FileKind.VTT, FileKind.MD), destination, listOf(old), { _, _ -> },
                     { result -> if (result is SendResult.Sent) throw java.io.IOException("receipt failure") },
                     beforeUpdate = { dest, name -> repository.updateDurably { it.withoutDriveReceipt(dest, name) } })
             assertTrue(if (wrongSize) out.results.single() is SendResult.Failed else out is SendOutcome.Stopped)
@@ -57,7 +57,7 @@ class SendJobTest {
         val file = "Call-$n.vtt"; val store = MemoryStore(); val rec = recording(store, file)
         val http = FakeHttp(json(200, """{"files":[{"id":"A2","name":"$file","size":"3"}]}"""))
         val out = SendJob(DriveClient(http, FakeTokens("t1", "t2")), store, ListLog(), tmp.root)
-            .run(defaultFolder, listOf(rec), DriveSendChoice.DOCUMENTS_ONLY, destination, emptyList(), { _, _ -> }, {},
+            .run(defaultFolder, listOf(rec), setOf(FileKind.VTT, FileKind.MD), destination, emptyList(), { _, _ -> }, {},
                 beforeUpdate = { _, _ -> throw java.io.IOException("disk failure") })
         assertTrue(out is SendOutcome.Stopped)
         assertEquals(1, http.requests.size)
@@ -71,7 +71,7 @@ class SendJobTest {
             json(200, """{"id":"V1","name":"$vtt","size":"3"}"""))
         val initial = LocalState().withError(n, Step.SEND, "ancienne erreur")
         val out = SendJob(DriveClient(http, FakeTokens("t1", "t2")), store, ListLog(), tmp.root)
-            .run(defaultFolder, listOf(rec), DriveSendChoice.ALL_FILES, destination, emptyList(), { _, _ -> }, { result ->
+            .run(defaultFolder, listOf(rec), FileKind.entries.toSet(), destination, emptyList(), { _, _ -> }, { result ->
                 if (result is SendResult.Sent) throw java.io.IOException("disque indisponible")
             })
         assertTrue(out is SendOutcome.Stopped)
@@ -93,7 +93,7 @@ class SendJobTest {
         val http = FakeHttp(json(200, """{"files":[]}"""), json(200, "", mapOf("Location" to "https://upload.example/s1")),
             json(200, """{"id":"V1","name":"$vtt","size":"3"}"""))
         val out = SendJob(DriveClient(http, FakeTokens("t1", "t2")), store, ListLog(), tmp.root)
-            .run(defaultFolder, listOf(rec), DriveSendChoice.DOCUMENTS_ONLY, destination, emptyList(), { _, _ -> },
+            .run(defaultFolder, listOf(rec), setOf(FileKind.VTT, FileKind.MD), destination, emptyList(), { _, _ -> },
                 { throw java.io.IOException("disque indisponible") })
         assertTrue(out is SendOutcome.Stopped)
         assertTrue(out.results.isEmpty())
@@ -108,7 +108,7 @@ class SendJobTest {
         val http = FakeHttp(json(200, """{"files":[]}"""), json(200, "", mapOf("Location" to "https://upload.example/s1")),
             json(200, """{"id":"V1","name":"$vtt","size":"3"}"""))
         val out = SendJob(DriveClient(http, FakeTokens("t1", "t2")), store, ListLog(), tmp.root)
-            .run(defaultFolder, listOf(rec), DriveSendChoice.DOCUMENTS_ONLY, destination, emptyList(), { _, _ -> }, { result ->
+            .run(defaultFolder, listOf(rec), setOf(FileKind.VTT, FileKind.MD), destination, emptyList(), { _, _ -> }, { result ->
                 repository.updateDurably { it.copy(driveAccount = "other@example.invalid", chosenFolderId = "other") }
                 if (result is SendResult.Sent && result.receipt != null) repository.updateDurably { it.withDriveReceipt(result.receipt) }
             })
@@ -125,7 +125,7 @@ class SendJobTest {
         val http = FakeHttp(json(200, """{"files":[]}"""), json(200, "", mapOf("Location" to "https://upload.example/s1")),
             json(200, """{"id":"V1","name":"$vtt","size":"3"}"""))
         val out = SendJob(DriveClient(http, FakeTokens("t1", "t2")), store, ListLog(), tmp.root)
-            .run(defaultFolder, listOf(rec), DriveSendChoice.DOCUMENTS_ONLY, destination, emptyList(), { _, _ -> }, { result ->
+            .run(defaultFolder, listOf(rec), setOf(FileKind.VTT, FileKind.MD), destination, emptyList(), { _, _ -> }, { result ->
                 if (result is SendResult.Sent && result.receipt != null) repository.updateDurably { it.withDriveReceipt(result.receipt) }
             })
         assertTrue(out is SendOutcome.Stopped)
@@ -134,9 +134,21 @@ class SendJobTest {
         assertEquals(3, http.requests.size)
     }
 
+    @Test fun selectedMdSendsOnlyMdAndEmptySelectionSendsNothing() {
+        val store = MemoryStore()
+        val rec = recording(store, "Call-$n.vtt", "Call-$n.md")
+        val md = "Call-$n.md"
+        val http = FakeHttp(json(200, """{"files":[]}"""), json(200, "", mapOf("Location" to "https://upload.example/s1")),
+            json(200, """{"id":"M1","name":"$md","size":"3"}"""))
+        val out = run(http, store, listOf(rec), choice = setOf(FileKind.MD))
+        assertEquals(listOf(md), out.results.map { it.fileName })
+        val empty = run(FakeHttp(json(200, """{"files":[]}""")), store, listOf(rec), choice = emptySet())
+        assertTrue(empty.results.isEmpty())
+    }
+
     @Test fun documentsOnlySkipsAudioAndAbsentDocuments() {
         val store = MemoryStore(); val http = FakeHttp(json(200, """{"files":[]}"""))
-        val out = run(http, store, listOf(recording(store, "Call-$n.mp3")), choice = DriveSendChoice.DOCUMENTS_ONLY)
+        val out = run(http, store, listOf(recording(store, "Call-$n.mp3")), choice = setOf(FileKind.VTT, FileKind.MD))
         assertTrue(out.results.isEmpty()); assertEquals(1, http.requests.size)
     }
 
@@ -340,7 +352,7 @@ class SendJobTest {
         }
         val http = ReadingHttp(FakeHttp(json(200, """{"files":[]}"""), json(200, "", mapOf("Location" to "https://upload.example/s1"))))
         val lost = Recording(n, RecordType.CALL, 3, true, mapOf(FileKind.MP3 to PhoneFile("Call-$n.mp3", 3)), DisplayState.Recovered)
-        val out = runBlocking { SendJob(DriveClient(http, FakeTokens("t1", "t2")), store, log, tmp.root).run(defaultFolder, listOf(lost), DriveSendChoice.ALL_FILES, destination, emptyList(), { _, _ -> }, {}) }
+        val out = runBlocking { SendJob(DriveClient(http, FakeTokens("t1", "t2")), store, log, tmp.root).run(defaultFolder, listOf(lost), FileKind.entries.toSet(), destination, emptyList(), { _, _ -> }, {}) }
         assertEquals(SendOutcome.Done(listOf(SendResult.Failed(n, "Call-$n.mp3", "Dossier du téléphone inaccessible."))), out)
         assertTrue(log.lines.contains("DRIVE erreur : Call-$n.mp3 : Dossier du téléphone inaccessible. (cause : FileNotFoundException : dossier illisible)"))
     }

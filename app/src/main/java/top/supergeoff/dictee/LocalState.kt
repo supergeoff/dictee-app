@@ -33,7 +33,7 @@ data class KnownFolder(val id: String, val name: String, val origin: FolderOrigi
 /** Étape de traitement d'un enregistrement, dont l'erreur est gardée jusqu'à une réussite. */
 enum class Step { RECOVER, SEND, TRANSCRIBE }
 
-/** État local tenu dans `state.json`, version 9. */
+/** État local tenu dans `state.json`, version 10. */
 data class LocalState(
     val deviceAddress: String? = null,
     val deviceName: String? = null,
@@ -55,6 +55,7 @@ data class LocalState(
     val autoProcessAfterRecovery: Boolean = false,
     val automaticProcessingRequests: List<AutomaticProcessingRequest> = emptyList(),
     val driveSendChoice: DriveSendChoice = DriveSendChoice.ALL_FILES,
+    val driveSendFormats: Set<FileKind> = setOf(FileKind.VTT),
     val driveReceipts: List<DriveReceipt> = emptyList(),
     /** Dernière lecture du boîtier, valeurs brutes conservées ; null avant la première lecture. */
     val boxStatus: BoxStatus? = null,
@@ -228,6 +229,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
                 }
             })
             .put("driveSendChoice", state.driveSendChoice.name)
+            .put("driveSendFormats", JSONArray().apply { state.driveSendFormats.forEach { put(it.name) } })
             .put("driveReceipts", JSONArray().apply {
                 state.driveReceipts.forEach { receipt ->
                     put(JSONObject()
@@ -319,6 +321,14 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
                 DriveSendChoice.entries.firstOrNull { it.name == choiceName }
                     ?: throw JSONException("Choix d'envoi Drive inconnu : $choiceName")
             } else DriveSendChoice.ALL_FILES,
+            driveSendFormats = if (version >= 10) {
+                val formats = json.getJSONArray("driveSendFormats")
+                List(formats.length()) { i ->
+                    val name = formats.getString(i)
+                    FileKind.entries.firstOrNull { it.name == name }
+                        ?: throw JSONException("Format d'envoi Drive inconnu : $name")
+                }.toSet()
+            } else setOf(FileKind.VTT),
             driveReceipts = if (version >= 7) {
                 val receipts = json.getJSONArray("driveReceipts")
                 List(receipts.length()) { i ->
@@ -490,7 +500,7 @@ class LocalStateStore(private val file: File, private val rename: (File, File) -
     }
 
     private companion object {
-        const val VERSION = 9
+        const val VERSION = 10
     }
 }
 

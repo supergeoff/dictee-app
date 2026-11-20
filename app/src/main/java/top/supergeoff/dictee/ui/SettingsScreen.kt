@@ -59,6 +59,7 @@ import top.supergeoff.dictee.BOX_DURATION_CHOICES
 import top.supergeoff.dictee.BOX_NOISE_CHOICES
 import top.supergeoff.dictee.BoxSetting
 import top.supergeoff.dictee.BuildConfig
+import top.supergeoff.dictee.FileKind
 import top.supergeoff.dictee.DriveClient
 import top.supergeoff.dictee.LocalState
 import top.supergeoff.dictee.R
@@ -305,6 +306,12 @@ private fun DriveSection(local: LocalState, model: AppModel, onFolders: () -> Un
                 }
                 RowDivider()
                 ListRow(title = "Dossier", subtitle = chosenFolderName(local), onClick = onFolders) { Chevron() }
+                for (kind in FileKind.entries) {
+                    RowDivider()
+                    val enabled = kind in local.driveSendFormats
+                    ListRow(title = "Envoyer ${kind.name}", modifier = Modifier.toggleable(value = enabled, role = Role.Switch,
+                        onValueChange = { model.setDriveSendFormat(kind, it) }), weight = FontWeight.Normal) { Toggle(enabled) }
+                }
             }
         }
     }

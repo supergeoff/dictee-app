@@ -15,6 +15,25 @@ class LocalStateTest {
     @get:Rule val tmp = TemporaryFolder()
     private fun file() = File(tmp.root, "state.json")
 
+    @Test fun legacyDriveChoiceMigratesToVttOnly() {
+        val store = LocalStateStore(file())
+        store.save(LocalState(driveSendChoice = DriveSendChoice.ALL_FILES))
+        val legacy = org.json.JSONObject(file().readText()).put("version", 9)
+        file().writeText(legacy.toString())
+        store.save(store.load())
+        val formats = org.json.JSONObject(file().readText()).getJSONArray("driveSendFormats")
+        assertEquals(1, formats.length())
+        assertEquals("VTT", formats.getString(0))
+    }
+
+    @Test fun driveFormatsRoundTripIncludingEmptySelection() {
+        val store = LocalStateStore(file())
+        for (formats in listOf(emptySet(), setOf(FileKind.MP3, FileKind.MD))) {
+            store.save(LocalState(driveSendFormats = formats))
+            assertEquals(formats, store.load().driveSendFormats)
+        }
+    }
+
     @Test fun frozenTaskGlossaryRoundTripsIndependentlyOfCurrentSettings() {
         val store = LocalStateStore(file())
         val task = TranscriptionTask("local", "synthetic", "a.mp3", "a.vtt", "folder", "hash",
@@ -54,7 +73,7 @@ class LocalStateTest {
 
         store.save(state)
 
-        assertEquals(9, org.json.JSONObject(file().readText()).getInt("version"))
+        assertEquals(10, org.json.JSONObject(file().readText()).getInt("version"))
         assertEquals(state, store.load())
         assertEquals(DriveSendChoice.DOCUMENTS_ONLY, store.load().driveSendChoice)
         assertEquals(listOf(receipt), store.load().driveReceipts)
@@ -150,7 +169,7 @@ class LocalStateTest {
         store.save(LocalState(boxStatus = status))
 
         val json = org.json.JSONObject(file().readText())
-        assertEquals(9, json.getInt("version"))
+        assertEquals(10, json.getInt("version"))
         val raw = json.getJSONObject("boxStatus")
         assertEquals(77, raw.getInt("batteryPercent"))
         assertEquals(0xffff_ffffL, raw.getLong("totalMb"))
@@ -167,7 +186,7 @@ class LocalStateTest {
         val store = LocalStateStore(file())
         store.save(LocalState(deviceName = "boitier"))
 
-        assertEquals(9, org.json.JSONObject(file().readText()).getInt("version"))
+        assertEquals(10, org.json.JSONObject(file().readText()).getInt("version"))
         assertTrue(org.json.JSONObject(file().readText()).isNull("boxStatus"))
         org.junit.Assert.assertNull(store.load().boxStatus)
         assertEquals(LocalState(deviceName = "boitier"), store.load())
@@ -239,7 +258,7 @@ class LocalStateTest {
         store.save(LocalState(speakerNames = names))
 
         val json = org.json.JSONObject(file().readText())
-        assertEquals(9, json.getInt("version"))
+        assertEquals(10, json.getInt("version"))
         val raw = json.getJSONArray("speakerNames")
         assertEquals("Marie", raw.getJSONObject(0).getString("name"))
         assertEquals(2_000L, raw.getJSONObject(0).getLong("lastUsedAt"))
@@ -293,7 +312,7 @@ class LocalStateTest {
         val state = LocalState(recordingSubjects = mapOf("20261030160502" to "Sujet synthétique"),
             transcriptionTasks = listOf(sampleTask().copy(subjectAttempted = true)))
         store.save(state)
-        assertEquals(9, org.json.JSONObject(file().readText()).getInt("version"))
+        assertEquals(10, org.json.JSONObject(file().readText()).getInt("version"))
         assertEquals(state, store.load())
         val old = org.json.JSONObject(file().readText()).put("version", 5)
         old.remove("autoProcessAfterRecovery")
@@ -355,7 +374,7 @@ class LocalStateTest {
             synthesisProvenance = listOf(provenance))
         val store = LocalStateStore(file())
         store.save(state)
-        assertEquals(9, org.json.JSONObject(file().readText()).getInt("version"))
+        assertEquals(10, org.json.JSONObject(file().readText()).getInt("version"))
         assertEquals(state, store.load())
         assertFalse(file().readText().contains(secret))
     }
@@ -740,7 +759,7 @@ class LocalStateTest {
         assertEquals(state, LocalStateStore(file()).load())
         assertTrue(file().readText().contains("encrypted-key-ref"))
         assertFalse(file().readText().contains("cleartext-api-key"))
-        assertTrue(file().readText().contains("\"version\": 9"))
+        assertTrue(file().readText().contains("\"version\": 10"))
     }
 
     @Test

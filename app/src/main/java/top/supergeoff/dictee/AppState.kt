@@ -853,16 +853,31 @@ class AppModel(
 
     // --- Envoi vers Drive
 
-    /**
-     * [names] nul : tout ce qui manque dans Drive si sa liste est connue, sinon tout ce qui a un fichier sur le téléphone.
-     * Sans envoi vers Drive activé, rien ne part. [choice] nul garde le dernier choix confirmé.
-     */
-    fun send(names: List<String>?, onConfirmed: (() -> Unit)? = null, choice: DriveSendChoice? = null) {
+    fun send(names: List<String>?, onConfirmed: (() -> Unit)? = null, customizeFormats: Boolean = false) {
         val local = localRepository.state.value ?: return
         synchronized(driveSendRequests) {
             if (!local.driveEnabled || liveFlow.value.sending) return
-            driveSendRequests.open(names, choice ?: local.driveSendChoice, onConfirmed)
-            liveFlow.update { it.copy(driveSendRequest = driveSendRequests.current) }
+            driveSendRequests.open(names, local.driveSendFormats, customizeFormats, onConfirmed)
+            val request = driveSendRequests.current ?: return
+            if (customizeFormats) {
+                liveFlow.update { it.copy(driveSendRequest = request) }
+            } else {
+                val current = ui.value
+                val targets = DriveSync.dialogSummary(current.recordings, current.drive, local, current.documentHashes, request, request.formats).sendable
+                if (targets.isEmpty()) {
+                    driveSendRequests.cancel()
+                    say("Aucun fichier à envoyer. Maintiens le bouton pour choisir les formats.")
+                } else confirmDriveSend(request.formats, targets.map { it.name }.toSet())
+            }
+        }
+    }
+
+    private fun resumeDriveSend(request: DriveSendRequest, displayedNames: Set<String>) {
+        synchronized(driveSendRequests) {
+            val local = localRepository.state.value ?: return
+            if (!local.driveEnabled || liveFlow.value.sending || driveSendRequests.current != null) return
+            driveSendRequests.open(request.names, request.formats, request.customizeFormats)
+            confirmDriveSend(request.formats, displayedNames)
         }
     }
 
@@ -871,14 +886,14 @@ class AppModel(
         liveFlow.update { it.copy(driveSendRequest = null) }
     }
 
-    fun confirmDriveSend(choice: DriveSendChoice, displayedNames: Set<String>) {
+    fun confirmDriveSend(formats: Set<FileKind>, displayedNames: Set<String>) {
         synchronized(driveSendRequests) {
             if (driveSendRequests.current == null) return
             val admission = recoveryDeletionGuard.admitSend(displayedNames) ?: run {
                 say("Suppression en cours, envoi annulé.")
                 return
             }
-            val request = try { driveSendRequests.confirm(choice) } catch (e: Throwable) {
+            val request = try { driveSendRequests.confirm(formats) } catch (e: Throwable) {
                 admission.close()
                 throw e
             } ?: run { admission.close(); return }
@@ -1041,11 +1056,7 @@ class AppModel(
     private suspend fun sendNow(request: DriveSendRequest, folder: String?, displayedNames: Set<String>) {
         jobs.begin()
         try {
-            if (update { it.copy(driveSendChoice = request.choice) }.await().isFailure) {
-                say("Impossible d'enregistrer le choix Drive, envoi annulé.")
-                return
-            }
-            if (!authorizeOrAsk { send(request.names) }) return
+            if (!authorizeOrAsk { resumeDriveSend(request, displayedNames) }) return
             recoverySafety.withTransferLock {
                 val captured = localRepository.awaitInitialized()
                 if (captured.phoneTreeUri != folder) return@withTransferLock
@@ -1058,7 +1069,7 @@ class AppModel(
                 if (!phoneFlow.value.ok) { say(PHONE_FOLDER_LOST); return@withTransferLock }
                 val current = buildUi(captured, phoneFlow.value, driveFlow.value, box.status.value, liveFlow.value)
                 val safeRecordings = DriveSync.confirmedSendable(current.recordings, current.drive, captured,
-                    current.documentHashes, request, request.choice, displayedNames)
+                    current.documentHashes, request, request.formats, displayedNames)
                 if (safeRecordings.isEmpty()) return@withTransferLock
                 startWork()
                 withContext(Dispatchers.IO) { sendRecordings(uri, safeRecordings, request, captured, account) }
@@ -1086,7 +1097,7 @@ class AppModel(
             return
         }
         val outcome = SendJob(drive, PhoneFolder(app, uri), journal, app.cacheDir)
-            .run(folder, recordings, request.choice, DriveDestination(account, folder.id), captured.driveReceipts, ::publishSend, { result ->
+            .run(folder, recordings, request.formats, DriveDestination(account, folder.id), captured.driveReceipts, ::publishSend, { result ->
                 if (result is SendResult.Sent && result.receipt != null) {
                     localRepository.updateDurably { it.withDriveReceipt(result.receipt) }
                 }
@@ -1193,6 +1204,10 @@ class AppModel(
     // --- Google Drive
 
     /** L'envoi n'est utile qu'avec l'accord Google : l'activer le demande tout de suite. */
+    fun setDriveSendFormat(kind: FileKind, enabled: Boolean) {
+        update { it.copy(driveSendFormats = if (enabled) it.driveSendFormats + kind else it.driveSendFormats - kind) }
+    }
+
     fun setDriveEnabled(on: Boolean) {
         val saved = update { if (on) it.copy(driveEnabled = true) else it.copy(driveEnabled = false).withoutErrors(Step.SEND) }
         scope.launch {

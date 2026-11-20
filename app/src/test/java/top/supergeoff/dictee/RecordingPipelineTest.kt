@@ -115,7 +115,7 @@ class RecordingPipelineTest {
         val hashes = documents.associate { it.name to "hash" }
         val destination = DriveDestination("account", "folder")
         val receipts = documents.map { DriveReceipt(destination, it.name, it.id, "hash") }
-        val local = LocalState(driveEnabled = true, driveAccount = "account", chosenFolderId = "folder", driveReceipts = receipts)
+        val local = LocalState(driveEnabled = true, driveAccount = "account", chosenFolderId = "folder", driveReceipts = receipts, driveSendFormats = FileKind.entries.toSet())
         fun ui(vararg mp3: String): UiState {
             val entries = documents + mp3.map { DriveFile(it, it, 100) }
             return UiState(local = local, recordings = listOf(r), drive = DriveListing(entries.associate { it.name to it.size }, entries), documentHashes = hashes)

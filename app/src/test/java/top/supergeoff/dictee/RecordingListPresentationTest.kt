@@ -24,6 +24,14 @@ class RecordingListPresentationTest {
         assertEquals("MD", recordingListPresentation(all, ui.copy(documentHashes = changed)).badge)
     }
 
+    @Test fun audioOnlyHasNoDefaultCountButCanBeChosenInScope() {
+        val audio = recording(FileKind.MP3)
+        val local = LocalState(driveEnabled = true, driveSendFormats = setOf(FileKind.VTT))
+        assertEquals(0, cloudSendCount(listOf(audio), null, local, emptyMap()))
+        assertEquals(listOf(audio), Recordings.toSendCurrent(listOf(audio), null, local.copy(driveSendFormats = FileKind.entries.toSet()), emptyMap()))
+        assertEquals(emptyList<Recording>(), Recordings.toSendCurrent(listOf(audio), null, local, emptyMap()))
+    }
+
     @Test fun staleProvenanceMatchesDetailPipeline() {
         val all = recording(FileKind.MP3, FileKind.VTT, FileKind.MD)
         val ui = UiState()

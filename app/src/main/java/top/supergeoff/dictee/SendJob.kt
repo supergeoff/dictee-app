@@ -43,7 +43,7 @@ class SendJob(
     suspend fun run(
         folder: DriveFolder,
         recordings: List<Recording>,
-        choice: DriveSendChoice,
+        formats: Set<FileKind>,
         destination: DriveDestination,
         receipts: List<DriveReceipt>,
         onProgress: (name: String, progress: Progress) -> Unit,
@@ -58,7 +58,7 @@ class SendJob(
             return stop(if (needsRenewal(e)) DriveClient.RENEW_MESSAGE else "Dossier Drive inaccessible : ${reasonOf(e)}", emptyList())
         }
         val items = recordings.flatMap { recording ->
-            recording.phoneFiles.entries.filter { it.key in DriveSync.requiredKinds(choice) }
+            recording.phoneFiles.entries.filter { it.key in formats }
                 .sortedBy { it.key }.map { (kind, file) -> Item(recording.name, kind, file) }
         }
         val prepared = mutableListOf<Prepared>()

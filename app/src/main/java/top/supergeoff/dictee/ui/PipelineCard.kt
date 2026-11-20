@@ -43,7 +43,7 @@ internal fun PipelineStage.title(): String = when (this) {
 }
 
 @Composable
-internal fun PipelineCard(presentation: PipelinePresentation, onAction: (PipelineAction) -> Unit) {
+internal fun PipelineCard(presentation: PipelinePresentation, onSendLong: () -> Unit, onAction: (PipelineAction) -> Unit) {
     val rotation = rememberInfiniteTransition(label = "progression").animateFloat(
         initialValue = 0f, targetValue = 360f,
         animationSpec = infiniteRepeatable(tween(1200, easing = LinearEasing), RepeatMode.Restart), label = "rotation",
@@ -110,8 +110,10 @@ internal fun PipelineCard(presentation: PipelinePresentation, onAction: (Pipelin
             }
         }
         presentation.button?.let { action ->
-            if (action.secondary) SecondaryButton(action.label, action.enabled, Modifier.fillMaxWidth()) { onAction(action.action) }
-            else PrimaryButton(action.label, action.enabled, Modifier.fillMaxWidth()) { onAction(action.action) }
+            val send = action.action == PipelineAction.SEND || action.action == PipelineAction.RETRY_SEND
+            if (action.secondary) SecondaryButton(action.label, action.enabled, Modifier.fillMaxWidth(), onLongClick = if (send) onSendLong else null) { onAction(action.action) }
+            else PrimaryButton(action.label, action.enabled, Modifier.fillMaxWidth(), onLongClick = if (send) onSendLong else null) { onAction(action.action) }
+            if (send) Text("Appui long : choisir les formats", style = Dictee.type.caption, color = Dictee.colors.textSecondary)
         }
     }
 }

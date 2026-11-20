@@ -15,11 +15,8 @@ enum class LocationFilter(val label: String) {
     }
 }
 
-/**
- * Nombre d'enregistrements dont un VTT ou un MD du téléphone est absent de Drive ou diffère de la copie envoyée (empreinte [hashes]).
- * L'audio est ignoré. Zéro si Drive est désactivé ou sans liste.
- */
+/** Nombre d'enregistrements admissibles dans les formats Drive activés. */
 fun cloudSendCount(recordings: List<Recording>, drive: DriveListing?, local: LocalState, hashes: Map<String, String>): Int {
-    if (!local.driveEnabled || drive == null) return 0
-    return Recordings.toSendCurrent(recordings, drive, local.copy(driveSendChoice = DriveSendChoice.DOCUMENTS_ONLY), hashes).size
+    if (!local.driveEnabled) return 0
+    return Recordings.toSendCurrent(recordings, drive, local, hashes).size
 }
