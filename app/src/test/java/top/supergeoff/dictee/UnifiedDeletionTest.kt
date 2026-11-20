@@ -231,6 +231,30 @@ class UnifiedDeletionTest {
         assertEquals(listOf(DeletionTarget(a, true, true, emptyList())), p.targets)
     }
 
+    // Avertissement : « Libérer l'espace » dit quand le MP3 ne reste nulle part après l'effacement du boîtier et du téléphone.
+
+    @Test fun freeSpaceReportsMp3LostWhenBoxAndPhoneAreFreedWithoutMp3OnDrive() {
+        val (files, local) = documentsOnDrive()
+        val rs = listOf(recording(a, true, FileKind.entries.toSet()))
+        val p = plan(DeletionMode.FREE_SPACE, rs, listing(*files.toTypedArray()), local)
+        assertEquals(setOf(a), p.mp3LostNames)
+    }
+
+    @Test fun freeSpaceDoesNotReportMp3LostWhenMp3IsOnDrive() {
+        val (files, local) = documentsOnDrive()
+        val rs = listOf(recording(a, true, FileKind.entries.toSet()))
+        val p = plan(DeletionMode.FREE_SPACE, rs, listing(*files.toTypedArray(), driveFile(a, FileKind.MP3)), local)
+        assertEquals(listOf(DeletionTarget(a, true, true, emptyList())), p.targets)
+        assertTrue(p.mp3LostNames.isEmpty())
+    }
+
+    @Test fun freeSpaceDoesNotReportMp3LostWhenPhoneIsKept() {
+        val rs = listOf(recording(a, true, FileKind.entries.toSet()))
+        val p = plan(DeletionMode.FREE_SPACE, rs)
+        assertEquals(listOf(DeletionTarget(a, true, false, emptyList())), p.targets)
+        assertTrue(p.mp3LostNames.isEmpty())
+    }
+
     // I2, M1, M3
 
     @Test fun everywhereFlagsUnreadableDriveWhenEnabledWithFolderAndNoListing() {
@@ -294,5 +318,12 @@ class UnifiedDeletionTest {
         assertTrue(result.plan.targets.isEmpty())
         assertTrue(result.plan.driveUnreadable && result.plan.phoneUnreadable)
         assertEquals(listOf("$a : boîtier", "$a : téléphone"), result.dropped)
+    }
+
+    @Test fun restrictKeepsMp3LostOnlyWhileBoxAndPhoneStayTargeted() {
+        val confirmed = confirmedPlan(listOf(DeletionTarget(a, true, true, emptyList()))).copy(mp3LostNames = setOf(a))
+        assertEquals(setOf(a), UnifiedDeletion.restrict(confirmed, confirmed).plan.mp3LostNames)
+        val phoneKept = confirmedPlan(listOf(DeletionTarget(a, true, false, emptyList())))
+        assertTrue(UnifiedDeletion.restrict(confirmed, phoneKept).plan.mp3LostNames.isEmpty())
     }
 }

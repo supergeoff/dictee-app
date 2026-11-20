@@ -11,8 +11,8 @@ class UnifiedDeletionPresentationTest {
     private fun plan(
         mode: DeletionMode = DeletionMode.EVERYWHERE, targets: List<DeletionTarget>, blocked: Set<String> = emptySet(),
         driveSkipped: Boolean = false, driveUnreadable: Boolean = false, phoneUnreadable: Boolean = false,
-        labels: Map<String, String> = emptyMap(),
-    ) = UnifiedDeletionPlan(mode, targets, blocked, driveSkipped, "address", "folder-uri", driveUnreadable, phoneUnreadable, labels)
+        labels: Map<String, String> = emptyMap(), mp3Lost: Set<String> = emptySet(),
+    ) = UnifiedDeletionPlan(mode, targets, blocked, driveSkipped, "address", "folder-uri", driveUnreadable, phoneUnreadable, labels, mp3Lost)
 
     @Test fun titles() {
         assertEquals("Supprimer partout ?", unifiedDeletionTitle(plan(targets = emptyList())))
@@ -42,6 +42,47 @@ class UnifiedDeletionPresentationTest {
         assertEquals(
             listOf("1 enregistrement sera effacé : 1 du boîtier.", "Drive est désactivé : ses copies ne sont pas touchées."),
             unifiedDeletionBody(p),
+        )
+    }
+
+    @Test fun freeSpaceWarnsWhenMp3IsLost() {
+        val p = plan(DeletionMode.FREE_SPACE, listOf(DeletionTarget(a, true, true, emptyList())), mp3Lost = setOf(a))
+        assertEquals(
+            listOf(
+                "1 enregistrement sera effacé : 1 du boîtier, 1 du téléphone.",
+                "Les copies Drive sont conservées.",
+                "Le MP3 ne sera plus conservé nulle part.",
+            ),
+            unifiedDeletionBody(p),
+        )
+    }
+
+    @Test fun freeSpaceCountsRecordingsWhoseMp3IsLost() {
+        val p = plan(
+            DeletionMode.FREE_SPACE,
+            listOf(DeletionTarget(a, true, true, emptyList()), DeletionTarget(b, true, true, emptyList())),
+            mp3Lost = setOf(a, b),
+        )
+        assertEquals(
+            listOf(
+                "2 enregistrements seront effacés : 2 du boîtier, 2 du téléphone.",
+                "Les copies Drive sont conservées.",
+                "Le MP3 de 2 enregistrements ne sera plus conservé nulle part.",
+            ),
+            unifiedDeletionBody(p),
+        )
+    }
+
+    @Test fun noMp3LineWhenMp3IsKeptOnDriveOrPhoneIsKept() {
+        val mp3KeptOnDrive = plan(DeletionMode.FREE_SPACE, listOf(DeletionTarget(a, true, true, emptyList())))
+        assertEquals(
+            listOf("1 enregistrement sera effacé : 1 du boîtier, 1 du téléphone.", "Les copies Drive sont conservées."),
+            unifiedDeletionBody(mp3KeptOnDrive),
+        )
+        val phoneKept = plan(DeletionMode.FREE_SPACE, listOf(DeletionTarget(a, true, false, emptyList())))
+        assertEquals(
+            listOf("1 enregistrement sera effacé : 1 du boîtier.", "Les copies Drive sont conservées."),
+            unifiedDeletionBody(phoneKept),
         )
     }
 

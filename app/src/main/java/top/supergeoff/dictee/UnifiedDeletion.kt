@@ -20,6 +20,8 @@ data class UnifiedDeletionPlan(
     val phoneUnreadable: Boolean = false,
     /** Titre ou date de chaque cible, par nom d'enregistrement. */
     val labels: Map<String, String> = emptyMap(),
+    /** « Libérer l'espace » seulement : cibles dont le MP3 ne resterait ni sur le téléphone ni sur Drive une fois effacées. */
+    val mp3LostNames: Set<String> = emptySet(),
 )
 
 /** Plan réduit à ce qui reste valide au moment d'exécuter, et les niveaux retirés (« nom : niveau »). */
@@ -42,6 +44,7 @@ object UnifiedDeletion {
     ): UnifiedDeletionPlan {
         val destination = local.driveAccount?.let { account -> local.chosenFolderId?.let { DriveDestination(account, it) } }
         var driveSkipped = false
+        val mp3Lost = mutableSetOf<String>()
         val targets = recordings.filter { it.name in selected }.distinctBy { it.name }.mapNotNull { recording ->
             val hasPhone = recording.phoneFiles.isNotEmpty()
             when (mode) {
@@ -68,7 +71,10 @@ object UnifiedDeletion {
                         proof.second, proof.first, local.driveReceipts,
                     ) == DriveWriteAction.SKIP
                     val completeMp3 = FileKind.MP3 in recording.phoneFiles || mp3OnDrive
-                    DeletionTarget(recording.name, recording.onBox && completeMp3, hasPhone && documentsProven, emptyList())
+                    val box = recording.onBox && completeMp3
+                    val phone = hasPhone && documentsProven
+                    if (box && phone && !mp3OnDrive) mp3Lost += recording.name
+                    DeletionTarget(recording.name, box, phone, emptyList())
                 }
             }
         }.filter { it.box || it.phone || it.driveFiles.isNotEmpty() }
@@ -80,6 +86,7 @@ object UnifiedDeletion {
             driveUnreadable = mode == DeletionMode.EVERYWHERE && local.driveEnabled && local.chosenFolderId != null && drive == null && targets.isNotEmpty(),
             phoneUnreadable = !phoneReadable && targets.isNotEmpty(),
             labels = labels,
+            mp3LostNames = mp3Lost,
         )
     }
 
@@ -98,6 +105,7 @@ object UnifiedDeletion {
             if (driveFiles.size != target.driveFiles.size) dropped += "${target.name} : Drive"
             DeletionTarget(target.name, box, phone, driveFiles).takeIf { it.box || it.phone || it.driveFiles.isNotEmpty() }
         }
-        return RevalidatedDeletion(confirmed.copy(targets = targets), dropped)
+        val mp3LostNames = confirmed.mp3LostNames.filter { name -> targets.any { it.name == name && it.box && it.phone } }.toSet()
+        return RevalidatedDeletion(confirmed.copy(targets = targets, mp3LostNames = mp3LostNames), dropped)
     }
 }

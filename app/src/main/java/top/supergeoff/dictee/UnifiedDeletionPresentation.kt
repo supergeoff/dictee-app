@@ -17,6 +17,9 @@ fun unifiedDeletionBody(plan: UnifiedDeletionPlan): List<String> {
         lines += "$count $verb : $levels."
     }
     if (plan.mode == DeletionMode.FREE_SPACE) lines += "Les copies Drive sont conservées."
+    val mp3Lost = plan.mp3LostNames.size
+    if (mp3Lost == 1) lines += "Le MP3 ne sera plus conservé nulle part."
+    if (mp3Lost > 1) lines += "Le MP3 de $mp3Lost enregistrements ne sera plus conservé nulle part."
     if (plan.driveSkipped) lines += "Drive est désactivé : ses copies ne sont pas touchées."
     if (plan.driveUnreadable) lines += "Drive illisible : ses copies ne seront pas touchées."
     if (plan.phoneUnreadable) lines += "Dossier du téléphone illisible : ses fichiers ne seront pas touchés."
