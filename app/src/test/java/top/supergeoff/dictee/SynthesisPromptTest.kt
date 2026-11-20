@@ -23,6 +23,13 @@ class SynthesisPromptTest {
         }
     }
 
+    @Test fun defaultPromptAttributesToNamedSpeakersWithoutTreatingLabelsAsNames() {
+        val prompt = SynthesisPrompt.DEFAULT
+        for (text in listOf("attribue", "porteur", "une seule lettre", "Non disponible", "{{intervenants}}")) {
+            assertTrue("Le prompt doit contenir $text", prompt.contains(text))
+        }
+    }
+
     @Test fun variablesUseFactsOnly() {
         val vtt = """WEBVTT
 

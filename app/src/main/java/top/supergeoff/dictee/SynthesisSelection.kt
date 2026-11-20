@@ -111,15 +111,17 @@ object SynthesisSelection {
     }
 }
 
+/** Exclusions annoncées d'une sélection ; pour une reprise explicite ([request] autre que MISSING), seules les exclusions de cette reprise comptent. */
 internal fun synthesisSelectionMessage(
     recordings: List<Recording>, selectedNames: Set<String>?, errors: Map<String, Map<Step, String>>, activeNames: Set<String>,
+    request: RequestedWork = RequestedWork.MISSING,
 ): String? {
     if (selectedNames == null) return if (Recordings.toTranscribe(recordings, null, errors, activeNames).candidates.isEmpty())
         "Aucun VTT ou MD à créer pour les enregistrements exploitables." else null
-    val excluded = Recordings.toTranscribe(recordings, selectedNames, errors, activeNames).excluded
+    val excluded = SynthesisSelection.plan(recordings, selectedNames, errors, activeNames, request).second
     val missing = excluded.filterValues { it == TranscriptionExclusion.MISSING_MP3 || it == TranscriptionExclusion.RECOVERY_FAILED }.keys
     val active = selectedNames.intersect(activeNames)
-    val complete = recordings.filter { it.name in selectedNames && it.name !in active &&
+    val complete = if (request != RequestedWork.MISSING) emptyList() else recordings.filter { it.name in selectedNames && it.name !in active &&
         FileKind.VTT in it.phoneFiles && FileKind.MD in it.phoneFiles }.map { it.name }
     val nothingToDo = Recordings.toTranscribe(recordings, selectedNames, errors, activeNames).candidates.isEmpty()
     return listOfNotNull(

@@ -30,6 +30,23 @@ class TranscriptionClientTest {
     }, timeout)
     private fun task(id: String? = null) = TranscriptionTask("local", "synthetic", "audio.mp3", "audio.vtt", "folder", "hash", "https://example.invalid/v1", "old-ref", "fr", "dictee-diarize", TranscriptionPhase.PENDING, id)
     private fun json(status: String, extra: String = "") = "{\"id\":\"job-1\",\"status\":\"$status\"$extra}"
+    @Test fun multipartSendsExactStandardPromptAndOmitsEmptyPrompt() = runBlocking {
+        val glossary = " NeMo \nTerme (souvent entendu : a, b)"
+        reply(200, json("queued"))
+        client().submit(task().copy(glossary = glossary))
+        val body = connections.last().written.toString(Charsets.UTF_8.name())
+        assertTrue(body.contains("name=\"prompt\"\r\n\r\n$glossary\r\n"))
+        assertEquals(1, Regex("name=\"prompt\"").findAll(body).count())
+        assertFalse(body.contains("name=\"glossary\""))
+        reply(200, json("queued"))
+        client().submit(task())
+        assertFalse(connections.last().written.toString(Charsets.UTF_8.name()).contains("name=\"prompt\""))
+        reply(400, "{\"error\":{\"param\":\"prompt\"}}")
+        try { client().submit(task().copy(glossary = glossary)); fail("400 accepted") }
+        catch (e: TranscriptionHttpException) { assertEquals(400, e.code) }
+        assertEquals(3, connections.size)
+    }
+
     @Test fun multipartAndFrozenContext() = runBlocking {
         reply(200, json("queued", ",\"progress\":0.25"))
         val result = client().submit(task()) as SubmitResult.Accepted

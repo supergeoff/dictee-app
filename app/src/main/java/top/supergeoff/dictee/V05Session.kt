@@ -23,6 +23,38 @@ interface Link {
 /** Erreur qui arrête la synchronisation. */
 class SessionException(message: String) : Exception(message)
 
+/** Réglage écrit sur le boîtier : une commande et un octet brut. */
+sealed interface BoxSetting {
+    val command: Int
+    val raw: Int
+
+    /** Vrai si l'état relu du boîtier porte déjà cette valeur. */
+    fun isApplied(status: BoxStatus): Boolean
+
+    data class Noise(val value: NoiseReduction) : BoxSetting {
+        override val command get() = Cmd.NOISE_REDUCTION
+        override val raw get() = value.raw
+        override fun isApplied(status: BoxStatus): Boolean = status.noise == raw
+    }
+
+    data class Duration(val value: SegmentDuration) : BoxSetting {
+        override val command get() = Cmd.SEGMENT_DURATION
+        override val raw get() = value.raw
+        override fun isApplied(status: BoxStatus): Boolean = status.segmentDuration == raw
+    }
+
+    data class Backlight(val enabled: Boolean) : BoxSetting {
+        override val command get() = Cmd.BACKLIGHT
+        override val raw get() = if (enabled) 1 else 0
+        override fun isApplied(status: BoxStatus): Boolean = status.backlight == raw
+    }
+}
+
+/** Résultat d'une écriture de réglage : l'acquittement du boîtier et l'état relu ensuite avec 0x05. */
+data class BoxSettingResult(val accepted: Boolean, val status: BoxStatus) {
+    fun isApplied(setting: BoxSetting): Boolean = setting.isApplied(status)
+}
+
 sealed class Download {
     abstract val name: String
 
@@ -48,8 +80,9 @@ class V05Session(
     private val silenceTimeoutMs: Long = 20_000,
 ) {
 
-    /** Appairage rejoué, numéro de série et informations pour le journal, mise à l'heure. */
-    suspend fun handshake() {
+    /** Appairage rejoué, numéro de série et informations pour le journal, mise à l'heure.
+     * Renvoie l'état lu avec 0x05. */
+    suspend fun handshake(): BoxStatus? {
         val id = command(Cmd.BIND_READ).payload
         if (id.isEmpty()) throw SessionException("identifiant d'appairage vide")
         journal("identifiant d'appairage : ${Payloads.bindIdText(id)}")
@@ -57,8 +90,35 @@ class V05Session(
             throw SessionException("appairage refusé")
         }
         journal("numéro de série : ${String(command(Cmd.SERIAL).payload, Charsets.US_ASCII)}")
-        command(Cmd.INFO)
+        val info = command(Cmd.INFO).payload
+        val status = try { BoxStatus.parse(info) } catch (e: IllegalArgumentException) {
+            journal("état du boîtier invalide : ${e.message}")
+            null
+        }
         command(Cmd.TIME, Payloads.timeRequest(clock()))
+        return status
+    }
+
+    /** Lit l'état du boîtier avec 0x05 et décode son payload de 52 octets. */
+    suspend fun readStatus(): BoxStatus = BoxStatus.parse(command(Cmd.INFO).payload)
+
+    /**
+     * Écrit le réglage (une commande, un octet), puis relit l'état avec 0x05, même quand le
+     * boîtier refuse : la relecture dit ce qui est réellement appliqué. Les exceptions existantes
+     * (délai dépassé, coupure) remontent sans relance de la commande de réglage.
+     */
+    suspend fun writeSetting(setting: BoxSetting): BoxSettingResult {
+        journal("réglage demandé : commande 0x%02x, valeur 0x%02x".format(setting.command, setting.raw))
+        val ack = Payloads.status(command(setting.command, byteArrayOf(setting.raw.toByte())).payload)
+        journal("réglage : statut 0x%02x".format(ack))
+        val status = readStatus()
+        val actual = when (setting) {
+            is BoxSetting.Noise -> status.noise
+            is BoxSetting.Duration -> status.segmentDuration
+            is BoxSetting.Backlight -> status.backlight
+        }
+        journal("réglage : valeur relue 0x%02x".format(actual))
+        return BoxSettingResult(ack == 0, status)
     }
 
     /** La fonction envoie `0x18` avec 00, puis lit la liste des enregistrements jusqu'à la notification de fin. */
@@ -69,13 +129,23 @@ class V05Session(
         val entries = mutableListOf<ListItem.Entry>()
         while (true) {
             val frame = awaitCommand(Cmd.LIST) ?: throw SessionException("liste incomplète : pas de fin de liste")
-            when (val item = Payloads.listItem(frame.payload)) {
+            val item = try { Payloads.listItem(frame.payload) } catch (_: IllegalArgumentException) {
+                throw SessionException("liste incomplète : entrée mal formée")
+            }
+            when (item) {
                 is ListItem.Entry -> entries += item
                 ListItem.End -> break
             }
         }
         journal("liste : ${entries.size} enregistrements")
         return entries
+    }
+
+    /** Demande la suppression de `name` et renvoie le statut brut du boîtier. */
+    suspend fun deleteRecord(name: String): Int {
+        val payload = command(Cmd.DELETE, Payloads.deleteRequest(name)).payload
+        if (payload.size != 1) throw SessionException("réponse à 0x0d : statut mal formé")
+        return Payloads.status(payload)
     }
 
     /**
@@ -228,6 +298,10 @@ class V05Session(
                 }
                 val frame = Frame.parse(n.bytes)
                 if (frame == null) {
+                    if (cmd == Cmd.DELETE) {
+                        journal("RX ${n.bytes.hexString()} (trame invalide)")
+                        throw SessionException("réponse à 0x0d : trame invalide")
+                    }
                     journal("RX ${n.bytes.hexString()} (trame invalide, ignorée)")
                     continue
                 }

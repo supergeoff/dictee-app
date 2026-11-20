@@ -47,6 +47,13 @@ data class UiState(
     val recovery: Progress? = null,
     val send: Progress? = null,
     val driveSendRequest: DriveSendRequest? = null,
+    val phoneDeletionRequest: PhoneDeletionPlan? = null,
+    val deletingPhone: Boolean = false,
+    val boxDeletionRequest: BoxDeletionPlan? = null,
+    val deletingBox: Boolean = false,
+    val boxDeletionResult: BoxDeletionResult? = null,
+    val settingBox: Boolean = false,      // écriture d'un réglage du boîtier en cours
+    val boxStatusFresh: Boolean = false,  // lecture de la liaison courante correspondant au boîtier associé
     val transcription: Progress? = null,
     val phoneFolder: String? = null,      // chemin affiché, null sans dossier
     val phoneFolderOk: Boolean = false,
@@ -93,6 +100,9 @@ sealed class UiRequest {
     data class GooglePicker(val intent: PendingIntent) : UiRequest()
 }
 
+/** Contenu lisible d'un VTT : ses segments (locuteur = nom courant) et ses locuteurs avec leur origine. */
+data class TranscriptFile(val cues: List<VttCue>, val speakers: List<SpeakerLabel>, val firstCueMs: Map<SpeakerLabel, Long>)
+
 /** Dossier du téléphone tel que lu : ses fichiers, et s'il répond. */
 internal data class PhoneSnapshot(val files: List<PhoneFile> = emptyList(), val ok: Boolean = false, val revision: Long = 0, val documentHashes: Map<String, String> = emptyMap(), val folderUri: String? = null) {
     fun hashesFor(folder: String?): Map<String, String> = if (ok && folder != null && folder == folderUri) documentHashes else emptyMap()
@@ -119,9 +129,70 @@ private data class Live(
     val recoveryName: String? = null,
     val send: Progress? = null,
     val sendName: String? = null,
+    val sendNames: Set<String> = emptySet(),
     val driveSendRequest: DriveSendRequest? = null,
+    val phoneDeletionRequest: PhoneDeletionPlan? = null,
+    val deletingPhone: Boolean = false,
+    val boxDeletionRequest: BoxDeletionPlan? = null,
+    val deletingBox: Boolean = false,
+    val boxDeletionResult: BoxDeletionResult? = null,
+    val recoveryNames: Set<String> = emptySet(),
+    val connectingBoxLists: Int = 0,
+    val boxStatusAddress: String? = null,
+    val settingBox: Boolean = false,
     val message: String? = null,
+    val messagePublication: BoxReadingPublication? = null,
 )
+
+internal fun deletionProtectedNames(local: LocalState, recoveryNames: Set<String>, sendNames: Set<String>): Set<String> =
+    local.transcriptionTasks.filterNot { it.phase.isTerminal() }.map { it.recordingName }.toSet() +
+        local.automaticProcessingRequests.map { it.recordingName } + recoveryNames + sendNames
+
+internal fun launchProcessingRequest(
+    scope: CoroutineScope, guard: RecoveryDeletionGuard, names: Set<String>?, block: suspend () -> Unit,
+): kotlinx.coroutines.Job? {
+    val admission = guard.admitProcessing(names) ?: return null
+    return try {
+        scope.launch { block() }.also { it.invokeOnCompletion { admission.close() } }
+    } catch (e: Throwable) {
+        admission.close()
+        throw e
+    }
+}
+
+internal fun launchBoxDeletionRequest(
+    scope: CoroutineScope, requests: BoxDeletionRequests, lock: Any,
+    onAccepted: (BoxDeletionPlan) -> Unit,
+    execute: suspend (BoxDeletionPlan) -> Unit,
+    onFinished: () -> Unit,
+): kotlinx.coroutines.Job? {
+    val plan = requests.confirm() ?: return null
+    onAccepted(plan)
+    return scope.launch { execute(plan) }.also { job ->
+        job.invokeOnCompletion { synchronized(lock) { requests.finish(); onFinished() } }
+    }
+}
+
+internal suspend fun runGuardedBoxDeletion(
+    plan: BoxDeletionPlan,
+    withTransferLock: suspend (suspend () -> BoxDeletionResult) -> BoxDeletionResult,
+    guard: RecoveryDeletionGuard,
+    snapshot: suspend () -> Pair<String?, Set<String>>,
+    execute: suspend (String, List<String>) -> BoxDeletionResult,
+    unbackedNames: suspend () -> Set<String> = { plan.unbackedAudioNames },
+): BoxDeletionResult = withTransferLock {
+    guard.withDeletionSnapshot(plan.names.toSet()) { admittedSends ->
+        val (address, protected) = snapshot()
+        val blocked = plan.names.toSet() intersect (protected + plan.blockedNames + admittedSends)
+        when {
+            address != plan.address -> BoxDeletionResult(emptySet(), emptyMap(), emptySet(), plan.names.toSet(), "Le boîtier a changé, suppression annulée.")
+            blocked.isNotEmpty() -> BoxDeletionResult(emptySet(), emptyMap(), emptySet(), plan.names.toSet(), "Enregistrements occupés : ${blocked.sorted().joinToString()}")
+            (unbackedNames() - plan.unbackedAudioNames).isNotEmpty() -> BoxDeletionResult(emptySet(), emptyMap(), emptySet(), plan.names.toSet(), "Les copies audio ont changé. Redemandez la suppression pour vérifier le nouvel avertissement.")
+            plan.names.isEmpty() -> BoxDeletionResult(emptySet(), emptyMap(), emptySet(), emptySet(), null)
+            else -> execute(plan.address, plan.names)
+        }
+    }
+}
 
 private val BLUETOOTH_PERMISSIONS = listOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
 private const val PHONE_FOLDER_LOST = "Dossier du téléphone inaccessible. Choisis-le de nouveau dans Réglages."
@@ -180,6 +251,7 @@ class AppModel(
         get() = checkNotNull(localRepository.state.value) { "L'état local n'est pas encore chargé" }
     private val appLocalState = AppLocalState(localRepository)
     val recoverySafety = RecoverySafety(localRepository)
+    private val recoveryDeletionGuard = RecoveryDeletionGuard()
     private val transcriptionCredentials = AndroidCredentialStore(app)
     val transcriptionSettings = TranscriptionSettingsManager(localRepository, transcriptionCredentials)
     private val synthesisCredentials = AndroidCredentialStore(app, "synthesis-credentials-v1", "synthesis-credentials")
@@ -244,12 +316,19 @@ class AppModel(
     }
 
     private val auth = GoogleAuth(app)
-    private val box = BoxConnection(app, journal)
+    private val boxReadingPublisher = BoxReadingPublisher { reading ->
+        recordBoxReading(localRepository, reading).deviceAddress == reading.address
+    }
+    private val box = BoxConnection(app, journal, boxReadingPublisher)
     private val saver = Dispatchers.IO.limitedParallelism(1)
     private val phoneFlow = MutableStateFlow(PhoneSnapshot())
     private val driveFlow = MutableStateFlow<DriveListing?>(null)
     private val requestFlow = MutableSharedFlow<UiRequest>(extraBufferCapacity = 8)
     private val phoneMutex = Mutex()
+    private val deletionRequestLock = Any()
+    private val phoneDeletionRequests = PhoneDeletionRequests()
+    private val boxDeletionRequests = BoxDeletionRequests()
+    private val boxSettingAdmission = BoxSettingAdmission()
     private val driveMutex = Mutex()
     private val loggedFlags = ConcurrentHashMap.newKeySet<String>()
     private val notificationAsked = AtomicBoolean(false)
@@ -267,6 +346,7 @@ class AppModel(
     init {
         scope.launch { reconcileProcessing() }
     }
+
     @Volatile private var searching = false   // la feuille de recherche du boîtier est ouverte : le modèle ne rouvre pas la liaison
     @Volatile private var afterBluetooth: (() -> Unit)? = null
     @Volatile private var afterPhoneFolder: (() -> Unit)? = null
@@ -288,10 +368,15 @@ class AppModel(
     }
 
     val ui: StateFlow<UiState> = combine(
-        localSnapshot, phoneFlow, driveFlow, box.status, liveFlow,
-    ) { snapshot, phone, drive, link, live ->
-        initialUiState(snapshot.state, snapshot.initialization)
-            ?: buildUi(checkNotNull(snapshot.state), phone, drive, link, live)
+        localSnapshot, phoneFlow, driveFlow, combine(box.status, boxReadingPublisher.publication) { link, publication -> link to publication }, liveFlow,
+    ) { snapshot, phone, drive, linkSnapshot, live ->
+        val (link, publication) = linkSnapshot
+        initialUiState(snapshot.state, snapshot.initialization) ?: run {
+            val projected = boxUiPublication(checkNotNull(snapshot.state), link, publication,
+                boxReadingPublisher.publication.value, live.message, live.messagePublication)
+            buildUi(projected.local, phone, drive, link, live.copy(
+                boxStatusAddress = publication?.reading?.address.takeIf { projected.fresh }, message = projected.message))
+        }
     }.stateIn(scope, SharingStarted.Eagerly, UiState(initialized = false))
 
     fun retryLocalState() {
@@ -358,7 +443,14 @@ class AppModel(
 
     /** Relit la liste du boîtier ; un boîtier qui ne répond pas donne le message « Boîtier hors de portée. ». */
     fun connectBox() {
-        if (hasBluetooth()) scope.launch { if (!readBoxList()) say(OUT_OF_RANGE) } else askBluetooth { connectBox() }
+        if (hasBluetooth()) {
+            liveFlow.update { it.copy(connectingBoxLists = it.connectingBoxLists + 1) }
+            scope.launch {
+                try { if (!readBoxList()) say(OUT_OF_RANGE) } finally {
+                    liveFlow.update { it.copy(connectingBoxLists = it.connectingBoxLists - 1) }
+                }
+            }
+        } else askBluetooth { connectBox() }
     }
 
     /**
@@ -393,10 +485,13 @@ class AppModel(
     fun associate(name: String, address: String) {
         endSearch()
         val started = refreshCoordinator.tryStart()
-        val saved = update { it.copy(deviceAddress = address, deviceName = name, boxList = emptyList()) }
         scope.launch {
             try {
-                if (saved.await().isFailure) return@launch
+                val saved = recoverySafety.withTransferLock {
+                    update { it.copy(deviceAddress = address, deviceName = name, boxList = emptyList(), boxStatus = null) }.await()
+                }
+                if (saved.isFailure) return@launch
+                liveFlow.update { it.copy(boxStatusAddress = null) }
                 note("Boîtier associé : $name ($address)")
                 box.close()
                 if (hasBluetooth()) readBoxList()
@@ -404,6 +499,52 @@ class AppModel(
                 if (started) refreshCoordinator.finish()
             }
         }
+    }
+
+    /**
+     * Écrit un réglage du boîtier après admission unique : une seconde demande simultanée est
+     * ignorée, les contrôles sont grisés pendant l'écriture. L'écriture est refusée sans message
+     * si un travail occupe la liaison ou si la lecture n'est pas fraîche ; l'adresse et les
+     * occupations sont revalidées sous le verrou de transfert avant l'émission.
+     */
+    fun setBoxSetting(setting: BoxSetting) {
+        if (!boxSettingAdmission.tryStart()) return
+        liveFlow.update { it.copy(settingBox = true) }
+        scope.launch {
+            try {
+                writeBoxSetting(setting)
+            } finally {
+                liveFlow.update { it.copy(settingBox = false) }
+                boxSettingAdmission.finish()
+            }
+        }
+    }
+
+    private suspend fun writeBoxSetting(setting: BoxSetting) {
+        localRepository.awaitInitialized()
+        val address = localFlow.deviceAddress ?: return
+        if (!boxSettingWritable(address)) return
+        recoverySafety.withTransferLock {
+            val current = localRepository.awaitInitialized()
+            if (current.deviceAddress != address || !boxSettingWritable(address)) return@withTransferLock
+            withContext(Dispatchers.IO) {
+                var publication: BoxReadingPublication? = null
+                deliverBoxSetting(setting, send = {
+                    val (result, published) = box.writeSetting(address, it)
+                    publication = published
+                    result
+                }, onMessage = { message ->
+                    liveFlow.update { it.copy(message = message, messagePublication = publication) }
+                })
+            }
+        }
+    }
+
+    /** Une écriture exige une lecture fraîche de la liaison courante et aucun travail occupant le boîtier. */
+    private fun boxSettingWritable(address: String): Boolean {
+        val live = liveFlow.value
+        return isBoxStatusFresh(address, boxReadingPublisher.publication.value?.reading?.address, box.status.value) &&
+            !live.recovering && !live.deletingBox && !live.deletingPhone && !live.refreshing && live.connectingBoxLists == 0 && !searching
     }
 
     // --- Récupération
@@ -428,19 +569,24 @@ class AppModel(
     private suspend fun recoverNow(names: List<String>?) {
         val uri = localFlow.phoneTreeUri?.toUri() ?: return
         val address = localFlow.deviceAddress ?: return
+        val entries = recoveryEntries(names)
+        if (entries.isEmpty()) return
+        val recoveryToken = recoveryDeletionGuard.capture(entries.map { it.name }.toSet()) ?: run {
+            say("Suppression en cours, récupération annulée.")
+            return
+        }
         if (!withContext(Dispatchers.IO) { PhoneFolder.hasAccess(app, uri) }) {
             say(PHONE_FOLDER_LOST)
             return
         }
-        val entries = recoveryEntries(names)
-        if (entries.isEmpty() || liveFlow.getAndUpdate { it.copy(recovering = true) }.recovering) return
+        if (liveFlow.getAndUpdate { if (it.recovering) it else it.copy(recovering = true, recoveryNames = entries.map { entry -> entry.name }.toSet()) }.recovering) return
         jobs.begin()
         try {
             startWork()
-            runRecovery(address, uri, entries)
+            runRecovery(address, uri, entries, recoveryToken)
         } finally {
             jobs.end()
-            liveFlow.update { it.copy(recovering = false, recovery = null, recoveryName = null) }
+            liveFlow.update { it.copy(recovering = false, recovery = null, recoveryName = null, recoveryNames = emptySet()) }
         }
     }
 
@@ -456,17 +602,26 @@ class AppModel(
      * Une connexion qui échoue donne « Boîtier hors de portée. » ; une exception plus tard marque l'enregistrement en cours.
      * La liaison se ferme après un échec qui arrête la file, puis à la fin si l'app est en arrière-plan.
      */
-    private suspend fun runRecovery(address: String, uri: Uri, entries: List<ListItem.Entry>) {
+    private suspend fun runRecovery(address: String, uri: Uri, entries: List<ListItem.Entry>, recoveryToken: Map<String, Long>) {
         var connected = false
-        val outcome = attempt {
-            withContext(Dispatchers.IO) {
-                box.withSession(address) { session ->
-                    connected = true
-                    RecoveryJob(session, PhoneFolder(app, uri), File(app.cacheDir, "recovery"), journal)
-                        .run(entries, ::publishRecovery, ::applyRecovery,
-                            beforeRecovery = { entry -> recoverySafety.begin(entry.name, uri.toString()) },
-                            validateResult = { result -> recoverySafety.finish(result, uri.toString()) },
-                            withRecoveryLock = { block -> recoverySafety.withTransferLock(block) })
+        val outcome = withRecoveryFinalization({ connected }, { reconcileAutomaticProcessing() }) {
+            attempt {
+                withContext(Dispatchers.IO) {
+                    recoverySafety.withTransferLock {
+                        if (localFlow.deviceAddress != address) throw RecoveryGuardException(IllegalStateException("Le boîtier a changé."))
+                        box.withSession(address) { session ->
+                            connected = true
+                            RecoveryJob(session, PhoneFolder(app, uri), File(app.cacheDir, "recovery"), journal)
+                                .run(entries, ::publishRecovery, { readPhone() },
+                                    beforeRecovery = { entry ->
+                                        if (!recoveryDeletionGuard.isCurrent(recoveryToken, entry.name) ||
+                                            localFlow.phoneTreeUri != uri.toString() || recoveryEntries(names = listOf(entry.name)).none { it == entry })
+                                            throw RecoveryGuardException(IllegalStateException("La sélection ou le dossier a changé."))
+                                        recoverySafety.begin(entry.name, uri.toString())
+                                    },
+                                    validateResult = { result -> recoverySafety.finish(result, uri.toString()) })
+                        }
+                    }
                 }
             }
         }
@@ -489,15 +644,183 @@ class AppModel(
         liveFlow.update { it.copy(recovery = progress, recoveryName = name) }
     }
 
-    private suspend fun applyRecovery(result: RecoveryResult) {
-        readPhone()
-        reconcileAutomaticProcessing()
-    }
-
     private suspend fun markRecoveryFailed(e: Throwable, folderUri: String) {
         liveFlow.value.recoveryName?.let { name ->
             recoverySafety.withTransferLock {
                 recoverySafety.finish(RecoveryResult.Failed(name, reasonOf(e), true), folderUri)
+            }
+        }
+    }
+
+    private fun deletionProtectedNames(local: LocalState): Set<String> {
+        val live = liveFlow.value
+        return deletionProtectedNames(local, live.recoveryNames, live.sendNames)
+    }
+
+    private fun boxDeletionPlan(local: LocalState, address: String, names: Set<String>): BoxDeletionPlan {
+        val phone = phoneFlow.value
+        val knownPhone = if (phone.ok && local.phoneTreeUri != null && phone.folderUri == local.phoneTreeUri) phone else phone.copy(files = emptyList())
+        val current = buildUi(local, knownPhone, driveFlow.value, box.status.value, liveFlow.value)
+        return BoxDeletion.plan(address, current.recordings, names, deletionProtectedNames(local), current.drive, local)
+    }
+
+    fun requestBoxDeletion(names: Set<String>) {
+        requestBoxDeletionWithPermission(hasBluetooth(), { askBluetooth { requestBoxDeletion(names) } }) {
+            val local = localRepository.state.value ?: return@requestBoxDeletionWithPermission
+            val address = local.deviceAddress ?: return@requestBoxDeletionWithPermission
+            val plan = boxDeletionPlan(local, address, names)
+            synchronized(deletionRequestLock) {
+                boxDeletionRequests.open(plan)
+                liveFlow.update { it.copy(boxDeletionRequest = boxDeletionRequests.current) }
+            }
+        }
+    }
+
+    fun dismissBoxDeletionResult() {
+        liveFlow.update { it.copy(boxDeletionResult = null) }
+    }
+
+    fun cancelBoxDeletion() = synchronized(deletionRequestLock) {
+        boxDeletionRequests.cancel()
+        liveFlow.update { it.copy(boxDeletionRequest = null) }
+    }
+
+    fun confirmBoxDeletion() = synchronized(deletionRequestLock) {
+        launchBoxDeletionRequest(scope, boxDeletionRequests, deletionRequestLock,
+            onAccepted = {
+                liveFlow.update { it.copy(boxDeletionRequest = null, deletingBox = true, boxDeletionResult = null) }
+                jobs.begin()
+            },
+            execute = { plan ->
+                var latest = BoxDeletionResult(emptySet(), emptyMap(), emptySet(), plan.names.toSet(), null)
+                try {
+                    startWork()
+                    latest = runGuardedBoxDeletion(plan, { block -> recoverySafety.withTransferLock(block) }, recoveryDeletionGuard,
+                        snapshot = {
+                            val local = localRepository.awaitInitialized()
+                            local.deviceAddress to deletionProtectedNames(local)
+                        },
+                        execute = { address, names ->
+                            withContext(Dispatchers.IO) {
+                                val result = box.withSession(address) { session ->
+                                    BoxDeletionJob(session::deleteRecord, session::listRecords, { entries ->
+                                        localRepository.updateDurably { state ->
+                                            if (state.deviceAddress == address) state.copy(boxList = entries) else state
+                                        }
+                                    }, { result ->
+                                        latest = result
+                                        liveFlow.update { it.copy(boxDeletionResult = result) }
+                                    }).run(names)
+                                }
+                                if (result.error != null || !foregroundBoxGate.isForeground) box.close()
+                                result
+                            }
+                        },
+                        unbackedNames = {
+                            val local = localRepository.awaitInitialized()
+                            val current = boxDeletionPlan(local, plan.address, plan.names.toSet())
+                            current.unbackedAudioNames + (plan.names.toSet() - current.names.toSet())
+                        })
+                    liveFlow.update { it.copy(boxDeletionResult = latest) }
+                } catch (e: CancellationException) {
+                    liveFlow.update { it.copy(boxDeletionResult = latest.copy(error = latest.error ?: "Suppression interrompue ; état non vérifié.")) }
+                    throw e
+                } catch (e: Exception) {
+                    liveFlow.update { it.copy(boxDeletionResult = latest.copy(error = reasonOf(e))) }
+                    journal.error(Source.BLE, reasonOf(e))
+                }
+            },
+            onFinished = {
+                synchronized(deletionRequestLock) { liveFlow.update { it.copy(deletingBox = false) } }
+                jobs.end()
+            })
+    }
+
+    fun requestPhoneDeletion(names: Set<String>) {
+        val local = localRepository.state.value ?: return
+        val folder = local.phoneTreeUri ?: return
+        val current = buildUi(local, phoneFlow.value, driveFlow.value, box.status.value, liveFlow.value)
+        val plan = PhoneDeletion.plan(folder, current.recordings, names.toSet(), deletionProtectedNames(local),
+            current.drive, local, current.documentHashes)
+        synchronized(deletionRequestLock) {
+            phoneDeletionRequests.open(plan)
+            liveFlow.update { it.copy(phoneDeletionRequest = phoneDeletionRequests.current) }
+        }
+    }
+
+    fun cancelPhoneDeletion() = synchronized(deletionRequestLock) {
+        phoneDeletionRequests.cancel()
+        liveFlow.update { it.copy(phoneDeletionRequest = null) }
+    }
+
+    fun confirmPhoneDeletion() {
+        val request = synchronized(deletionRequestLock) {
+            val plan = phoneDeletionRequests.confirm() ?: return
+            liveFlow.update { it.copy(phoneDeletionRequest = null, deletingPhone = true) }
+            plan
+        }
+        jobs.begin()
+        scope.launch {
+            try {
+                val runner = PhoneDeletionOrchestrator(
+                    withTransferLock = { block -> recoverySafety.withTransferLock {
+                        recoveryDeletionGuard.withDeletion(request.recordings.map { it.name }.toSet(), block)
+                    } },
+                    withPhoneLock = { block -> phoneMutex.withLock { block() } },
+                    snapshot = {
+                        val local = localRepository.awaitInitialized()
+                        val folder = local.phoneTreeUri
+                        if (folder != null && folder == request.folderUri) {
+                            val fresh = withContext(Dispatchers.IO) { readFolder(folder.toUri(), phoneFlow.value) }
+                            phoneFlow.value = fresh
+                            if (!fresh.ok) throw PhoneStoreException(PHONE_FOLDER_LOST)
+                        }
+                        val current = buildUi(local, phoneFlow.value, driveFlow.value, box.status.value, liveFlow.value)
+                        DeletionSnapshot(folder, current.recordings, deletionProtectedNames(local), current.drive, local, current.documentHashes)
+                    },
+                    delete = { plan -> withContext(Dispatchers.IO) { PhoneDeletion.execute(plan, PhoneFolder(app, plan.folderUri.toUri())) } },
+                    reread = { result ->
+                        val folder = localRepository.awaitInitialized().phoneTreeUri
+                        if (folder != request.folderUri) throw PhoneStoreException("Le dossier du téléphone a changé.")
+                        val fresh = withContext(Dispatchers.IO) { readFolder(folder.toUri(), phoneFlow.value) }.afterPromotion()
+                        phoneFlow.value = fresh
+                        if (!fresh.ok) throw PhoneStoreException("Lecture du dossier après suppression impossible.")
+                        localRepository.updateDurably { state ->
+                            request.recordings.fold(state) { current, recording ->
+                                val removed = recording.phoneFiles.values.any { it.fileName in result.deleted }
+                                if (!removed) current else {
+                                    var cleaned = current.withoutError(recording.name, Step.SEND)
+                                    if (recording.phoneFiles[FileKind.MP3]?.fileName in result.deleted)
+                                        cleaned = cleaned.withoutError(recording.name, Step.RECOVER)
+                                    if (recording.phoneFiles[FileKind.VTT]?.fileName in result.deleted ||
+                                        recording.phoneFiles[FileKind.MP3]?.fileName in result.deleted)
+                                        cleaned = cleaned.withoutError(recording.name, Step.TRANSCRIBE)
+                                    cleaned
+                                }
+                            }
+                        }
+                    },
+                )
+                when (val result = runner.execute(request.folderUri, request.recordings.map { it.name }.toSet())) {
+                    DeletionOutcome.FolderChanged -> say("Le dossier du téléphone a changé, suppression annulée.")
+                    is DeletionOutcome.Blocked -> say("Enregistrements occupés : ${result.names.sorted().joinToString()}")
+                    is DeletionOutcome.Completed -> {
+                        val failed = result.result.failures
+                        val messages = listOfNotNull(
+                            if (failed.isNotEmpty()) "Fichiers non supprimés : ${failed.keys.joinToString()}" else null,
+                            result.readError,
+                        )
+                        say(if (messages.isEmpty()) "Suppression du téléphone terminée." else messages.joinToString(" "))
+                    }
+                }
+            } catch (e: CancellationException) { throw e }
+              catch (e: Exception) { say(reasonOf(e)); journal.error(Source.FS, reasonOf(e)) }
+            finally {
+                synchronized(deletionRequestLock) {
+                    phoneDeletionRequests.finish()
+                    liveFlow.update { it.copy(deletingPhone = false) }
+                }
+                jobs.end()
             }
         }
     }
@@ -524,12 +847,18 @@ class AppModel(
 
     fun confirmDriveSend(choice: DriveSendChoice, displayedNames: Set<String>) {
         synchronized(driveSendRequests) {
-            val request = driveSendRequests.confirm(choice) ?: return
-            liveFlow.update { it.copy(driveSendRequest = null, sending = true) }
-            val local = localFlow
-            val current = buildUi(local.copy(driveSendChoice = choice), phoneFlow.value, driveFlow.value, box.status.value, liveFlow.value)
-            val recordings = DriveSync.confirmedSendable(current.recordings, current.drive, local, current.documentHashes, request, choice, displayedNames)
-            scope.launch { sendNow(request, local, recordings) }
+            if (driveSendRequests.current == null) return
+            val admission = recoveryDeletionGuard.admitSend(displayedNames) ?: run {
+                say("Suppression en cours, envoi annulé.")
+                return
+            }
+            val request = try { driveSendRequests.confirm(choice) } catch (e: Throwable) {
+                admission.close()
+                throw e
+            } ?: run { admission.close(); return }
+            liveFlow.update { it.copy(driveSendRequest = null, sending = true, sendNames = displayedNames.toSet()) }
+            val folder = localFlow.phoneTreeUri
+            scope.launch { sendNow(request, folder, displayedNames) }.invokeOnCompletion { admission.close() }
         }
     }
 
@@ -537,11 +866,14 @@ class AppModel(
      * Lance la transcription de [names] (null : tout ce qui est éligible). La planification WorkManager est confirmée avant
      * la tâche durable et le service ; la boucle interactive suit ensuite les tâches jusqu'à leur fin ou leur suspension.
      */
-    fun transcribe(names: Set<String>?, request: RequestedWork = RequestedWork.MISSING, resumeRecording: Boolean = false) {
-        scope.launch {
+    fun transcribe(
+        names: Set<String>?, request: RequestedWork = RequestedWork.MISSING, resumeRecording: Boolean = false,
+        announceRequestExclusions: Boolean = false,
+    ) {
+        val job = launchProcessingRequest(scope, recoveryDeletionGuard, names) {
             jobs.track {
                 try {
-                    if (request == RequestedWork.MISSING) announceExclusions(names)
+                    if (request == RequestedWork.MISSING || announceRequestExclusions) announceExclusions(names, request)
                     logTranscriptionRequest(names, request)
                     val started = transcriptionCoordinator.start(names, request, resumeRecording)
                     if (started.isEmpty()) reportUnconfiguredSynthesis(names, request)
@@ -556,6 +888,7 @@ class AppModel(
                 }
             }
         }
+        if (job == null) say("Suppression en cours, traitement annulé.")
     }
 
     /** Chaque enregistrement concerné laisse une ligne « demande reçue » ou « demande écartée », en source STT ou LLM. */
@@ -589,11 +922,11 @@ class AppModel(
     }
 
     /** Signale les éléments choisis qui ne seront pas transcrits : sans MP3 sur le téléphone ou en erreur de récupération. */
-    private suspend fun announceExclusions(names: Set<String>?) {
+    private suspend fun announceExclusions(names: Set<String>?, request: RequestedWork) {
         val state = localRepository.awaitInitialized()
         val current = buildUi(state, phoneFlow.value, driveFlow.value, box.status.value, liveFlow.value)
         val active = state.transcriptionTasks.filter { !it.phase.isTerminal() }.mapTo(mutableSetOf()) { it.recordingName }
-        synthesisSelectionMessage(current.recordings, names, state.errors, active)?.let { say(it) }
+        synthesisSelectionMessage(current.recordings, names, state.errors, active, request)?.let { say(it) }
     }
 
     private suspend fun followTranscriptions(excluded: MutableSet<String>): InteractiveRun {
@@ -637,27 +970,69 @@ class AppModel(
         }
     }
 
+    /**
+     * Applique [renames] (locuteur vers nom, ou origine rétablie) au VTT de l'enregistrement [name] en une écriture. Après un renommage réussi, le MD est refait
+     * sur le nouveau VTT : [transcribe] dit lui-même si la synthèse n'est pas configurée. Le résultat sort en message.
+     * Sans VTT ou sans dossier du téléphone, rien n'est tenté.
+     */
+    fun renameSpeakers(name: String, renames: Map<SpeakerLabel, String>) {
+        scope.launch {
+            jobs.track {
+                try {
+                    val state = localRepository.awaitInitialized()
+                    val recording = ui.value.recordings.firstOrNull { it.name == name }
+                    val folderUri = state.phoneTreeUri
+                    val vtt = recording?.phoneFiles?.get(FileKind.VTT)
+                    if (recording == null || folderUri == null || vtt == null) {
+                        say("Le VTT n'est pas disponible sur le téléphone.")
+                        return@track
+                    }
+                    val result = transcriptionCoordinator.renameSpeakers(name, folderUri, vtt.fileName, renames)
+                    when {
+                        result != SpeakerRenameResult.Done -> say(speakerRenameMessage(result))
+                        recording.phoneFiles[FileKind.MP3] == null ->
+                            say("VTT mis à jour. Le MD ne peut pas être refait sans le MP3 sur le téléphone.")
+                        else -> {
+                            say(speakerRenameMessage(result))
+                            transcribe(setOf(name), RequestedWork.REDO_MD, announceRequestExclusions = true)
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    journal.error(Source.APP, "nommage de locuteur : ${reasonOf(e)}")
+                    say(reasonOf(e))
+                }
+            }
+        }
+    }
+
     /** Cesse le suivi interactif (timeout du service) ; le travail périodique déjà programmé prend le relais. */
     fun stopInteractiveTranscription() {
         transcriptionLifecycle.stop()
     }
 
-    private suspend fun sendNow(request: DriveSendRequest, captured: LocalState, recordings: List<Recording>) {
+    private suspend fun sendNow(request: DriveSendRequest, folder: String?, displayedNames: Set<String>) {
         jobs.begin()
         try {
-            if (recordings.isEmpty()) return
             if (update { it.copy(driveSendChoice = request.choice) }.await().isFailure) {
                 say("Impossible d'enregistrer le choix Drive, envoi annulé.")
                 return
             }
             if (!authorizeOrAsk { send(request.names) }) return
-            val account = captured.driveAccount?.takeIf { it.isNotBlank() } ?: run {
-                say("Adresse du compte Google indisponible, envoi annulé.")
-                return
-            }
             recoverySafety.withTransferLock {
+                val captured = localRepository.awaitInitialized()
+                if (captured.phoneTreeUri != folder) return@withTransferLock
                 val uri = captured.phoneTreeUri?.toUri() ?: return@withTransferLock
-                val safeRecordings = Recordings.sendable(recordings, localFlow.errors)
+                val account = captured.driveAccount?.takeIf { it.isNotBlank() } ?: run {
+                    say("Adresse du compte Google indisponible, envoi annulé.")
+                    return@withTransferLock
+                }
+                readPhone()
+                if (!phoneFlow.value.ok) { say(PHONE_FOLDER_LOST); return@withTransferLock }
+                val current = buildUi(captured, phoneFlow.value, driveFlow.value, box.status.value, liveFlow.value)
+                val safeRecordings = DriveSync.confirmedSendable(current.recordings, current.drive, captured,
+                    current.documentHashes, request, request.choice, displayedNames)
                 if (safeRecordings.isEmpty()) return@withTransferLock
                 startWork()
                 withContext(Dispatchers.IO) { sendRecordings(uri, safeRecordings, request, captured, account) }
@@ -665,7 +1040,7 @@ class AppModel(
             }
         } finally {
             jobs.end()
-            liveFlow.update { it.copy(sending = false, send = null, sendName = null) }
+            liveFlow.update { it.copy(sending = false, send = null, sendName = null, sendNames = emptySet()) }
         }
     }
 
@@ -742,7 +1117,7 @@ class AppModel(
             return
         }
         scope.launch {
-            if (!keepPhoneFolder(uri)) return@launch
+            if (!recoverySafety.withTransferLock { keepPhoneFolder(uri) }) return@launch
             readPhone()
             resume?.invoke()
         }
@@ -813,6 +1188,23 @@ class AppModel(
             val state = saved.await().getOrNull() ?: return@launch
             note("Dossier Drive choisi : ${state.knownFolders.firstOrNull { it.id == id }?.name ?: id}")
             folderChanged()
+        }
+    }
+
+    /** Retire le dossier de la liste sans toucher à Drive. Retirer le dossier de dépôt revient au dossier par défaut « Dictée ». */
+    fun forgetFolder(id: String) {
+        val wasChosen = localFlow.chosenFolderId == id
+        val name = localFlow.knownFolders.firstOrNull { it.id == id }?.name ?: id
+        val saved = update { state ->
+            state.copy(
+                knownFolders = state.knownFolders.filter { it.id != id },
+                chosenFolderId = state.chosenFolderId.takeIf { it != id },
+            )
+        }
+        scope.launch {
+            if (saved.await().isFailure) return@launch
+            note("Dossier Drive retiré de la liste : $name")
+            if (wasChosen) folderChanged()
         }
     }
 
@@ -888,6 +1280,14 @@ class AppModel(
 
     fun setAutoProcessAfterRecovery(enabled: Boolean) { update { it.copy(autoProcessAfterRecovery = enabled) } }
 
+    /** Renomme [old] dans le carnet des locuteurs ; un [new] invalide n'est pas écrit. */
+    fun renameSpeakerName(old: String, new: String) {
+        val name = SpeakerNames.validate(new) ?: return
+        update { it.copy(speakerNames = SpeakerNames.rename(it.speakerNames, old, name)) }
+    }
+
+    fun removeSpeakerName(name: String) { update { it.copy(speakerNames = SpeakerNames.remove(it.speakerNames, name)) } }
+
     val transcriptionForm = TranscriptionSettingsForm(scope) { settings, secret ->
         withContext(Dispatchers.IO) { transcriptionSettings.save(settings, secret) }
         reconcileAutomaticProcessing()
@@ -904,12 +1304,13 @@ class AppModel(
         return localFlow.phoneTreeUri?.let { PhoneFolder(app, it.toUri()).uriOf(fileName) }
     }
 
-    /** Segments du VTT affichés sur la fiche. Le fichier n'est jamais modifié ; échec : message lisible. À appeler hors du fil principal. */
-    suspend fun readTranscript(fileName: String): Result<List<VttCue>> {
+    /** Segments du VTT affichés sur la fiche et leurs locuteurs (nom courant et origine). Le fichier n'est jamais modifié ; échec : message lisible. À appeler hors du fil principal. */
+    suspend fun readTranscript(fileName: String): Result<TranscriptFile> {
         localRepository.awaitInitialized()
         val tree = localFlow.phoneTreeUri ?: return Result.failure(PhoneStoreException(PHONE_FOLDER_LOST))
         return try {
-            Result.success(WebVtt.parse(PhoneFolder(app, tree.toUri()).open(fileName).use { it.readBytes() }))
+            val bytes = PhoneFolder(app, tree.toUri()).open(fileName).use { it.readBytes() }
+            Result.success(TranscriptFile(WebVtt.parse(bytes), SpeakerNames.labels(bytes), SpeakerNames.firstCueStarts(bytes)))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -936,7 +1337,7 @@ class AppModel(
         }
     }
 
-    fun consumeMessage() = liveFlow.update { it.copy(message = null) }
+    fun consumeMessage() = liveFlow.update { it.copy(message = null, messagePublication = null) }
 
     // --- Lectures
 
@@ -985,9 +1386,10 @@ class AppModel(
      * La liste du boîtier remplace `boxList` ; un échec garde la dernière, et [BoxConnection] l'a déjà noté au journal.
      * Faux si le boîtier n'a pas répondu ; vrai si la liste est lue, ou si rien n'est à lire (aucun boîtier, récupération ou recherche en cours).
      */
-    private suspend fun readBoxList(): Boolean = readBoxListForForeground(
-        foregroundBoxGate, localRepository, { liveFlow.value.recovering || searching },
-    ) { address -> attempt { box.list(address) } }
+    private suspend fun readBoxList(): Boolean = recoverySafety.withTransferLock {
+        readBoxListForForeground(foregroundBoxGate, localRepository, { liveFlow.value.recovering || searching })
+            { address -> attempt { box.list(address) } }
+    }
 
     /**
      * Sans accord Google, la liste reste nulle et une ligne DRIVE le note. Un échec de lecture garde la dernière liste.
@@ -1037,7 +1439,7 @@ class AppModel(
      */
     private fun update(change: (LocalState) -> LocalState) = localRepository.update(change)
 
-    private fun say(message: String) = liveFlow.update { it.copy(message = message) }
+    private fun say(message: String) = liveFlow.update { it.copy(message = message, messagePublication = null) }
 
     /**
      * Une action de l'utilisateur au journal, source APP, écrite hors du fil principal et dans l'ordre des actions.
@@ -1164,12 +1566,19 @@ class AppModel(
             local = local,
             recordings = Recordings.merge(local.boxList, phone.files, listing, local.errors, busy, ::noteUnknownFlag),
             link = if (local.deviceAddress == null) LinkStatus.NONE else link,
-            refreshing = live.refreshing,
+            refreshing = live.refreshing || live.connectingBoxLists > 0,
             recovering = live.recovering,
             sending = live.sending,
             recovery = live.recovery,
             send = live.send,
             driveSendRequest = live.driveSendRequest,
+            phoneDeletionRequest = live.phoneDeletionRequest,
+            deletingPhone = live.deletingPhone,
+            boxDeletionRequest = live.boxDeletionRequest,
+            deletingBox = live.deletingBox,
+            boxDeletionResult = live.boxDeletionResult,
+            settingBox = live.settingBox,
+            boxStatusFresh = isBoxStatusFresh(local.deviceAddress, live.boxStatusAddress, link),
             transcription = transcription?.second,
             phoneFolder = local.phoneTreeUri?.let { runCatching { PhoneFolder.displayPath(it.toUri()) }.getOrDefault(it) },
             phoneFolderOk = phone.ok,

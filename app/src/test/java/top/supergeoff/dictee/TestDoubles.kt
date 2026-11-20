@@ -53,6 +53,8 @@ class MemoryStore(var failWrites: Boolean = false) : PhoneStore {
         }
     }
 
+    override fun delete(fileName: String) { files.remove(fileName) }
+
     override fun open(fileName: String) = (files[fileName] ?: throw PhoneStoreException("$fileName absent")).inputStream()
 }
 

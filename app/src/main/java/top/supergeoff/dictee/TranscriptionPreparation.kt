@@ -79,7 +79,7 @@ internal object TranscriptionPreparation {
                 if (plan.makeVtt) settings.baseUrl else "", if (plan.makeVtt) checkNotNull(settings.credentialRef) else "",
                 if (plan.makeVtt) settings.language else "", if (plan.makeVtt) settings.model else "",
                 if (plan.makeVtt) TranscriptionPhase.PENDING else if (ready == null) TranscriptionPhase.COMPLETED else TranscriptionPhase.SYNTHESIZING,
-                synthesis = work, replaceVtt = plan.replaceVtt)
+                synthesis = work, replaceVtt = plan.replaceVtt, glossary = if (plan.makeVtt) settings.glossary else "")
         }
     }
 
@@ -103,7 +103,7 @@ internal object TranscriptionPreparation {
                 localId = newId(recording.name), recordingName = recording.name, mp3Name = mp3, vttName = vtt,
                 folderUri = folderUri, mp3Sha256 = TranscriptionAudio.sha256(phone, mp3),
                 serverAddress = settings.baseUrl, encryptedKeyRef = checkNotNull(settings.credentialRef), language = settings.language,
-                model = settings.model, phase = TranscriptionPhase.PENDING, replaceVtt = plan.replaceVtt,
+                model = settings.model, phase = TranscriptionPhase.PENDING, replaceVtt = plan.replaceVtt, glossary = settings.glossary,
             )
         }
     }

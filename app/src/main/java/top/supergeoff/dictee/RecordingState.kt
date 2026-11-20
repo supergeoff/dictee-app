@@ -49,9 +49,9 @@ object Recordings {
     /**
      * Réunit les trois sources en une liste du plus récent au plus ancien, avec un enregistrement par nom à 14 chiffres.
      * Un enregistrement naît d'une entrée du boîtier, d'un fichier du téléphone reconnu par [RecordName.parse]
-     * ou d'un MP3 de Drive. Une entrée du boîtier dont le nom n'est pas une date est ignorée.
+     * ou d'un fichier reconnu de Drive. Une entrée du boîtier dont le nom n'est pas une date est ignorée.
      * [onUnknownFlag] reçoit le nom et l'indicateur d'une entrée du boîtier au type inconnu, qui compte alors comme une note.
-     * Le type vient du boîtier, puis du préfixe d'un fichier du téléphone, puis du préfixe du MP3 de Drive, sinon Note.
+     * Le type vient du boîtier, puis du préfixe d'un fichier du téléphone, puis du préfixe d'un fichier de Drive, sinon Note.
      * La taille vient du boîtier, puis du MP3 du téléphone, puis du MP3 de Drive, sinon zéro.
      */
     fun merge(
@@ -67,7 +67,9 @@ object Recordings {
             .mapNotNull { file -> RecordName.parse(file.fileName)?.let { parsed -> parsed to file } }
             .groupBy { (parsed, _) -> parsed.name }
         val driveMp3ByName = drive?.let { driveMp3s(it) }.orEmpty()
-        return (boxByName.keys + phoneByName.keys + driveMp3ByName.keys)
+        val driveDocuments = drive?.files?.keys.orEmpty().mapNotNull { RecordName.parse(it) }
+            .filter { it.kind != FileKind.MP3 }.groupBy { it.name }
+        return (boxByName.keys + phoneByName.keys + driveMp3ByName.keys + driveDocuments.keys)
             .sortedDescending()   // 14 chiffres : l'ordre des noms est l'ordre chronologique
             .map { name ->
                 val boxEntry = boxByName[name]
@@ -79,7 +81,7 @@ object Recordings {
                     .associate { (parsed, file) -> parsed.kind to file }
                 Recording(
                     name = name,
-                    type = typeOf(name, boxEntry, phoneEntries.firstOrNull()?.first?.type, driveMp3?.type, onUnknownFlag),
+                    type = typeOf(name, boxEntry, phoneEntries.firstOrNull()?.first?.type, driveMp3?.type ?: driveDocuments[name]?.firstOrNull()?.type, onUnknownFlag),
                     size = boxEntry?.size ?: phoneFiles[FileKind.MP3]?.size ?: driveMp3?.size ?: 0L,
                     onBox = boxEntry != null,
                     phoneFiles = phoneFiles,

@@ -14,6 +14,8 @@ class FakeDocumentsProvider : DocumentsProvider() {
     private data class Entry(var name: String, val file: File)
     private val entries = linkedMapOf<String, Entry>()
     private var nextId = 0
+    var refuseDelete = false
+    var denyChildren = false
     var failRenameTo: String? = null
     var unreadablePromoted = false
     var appearOnChildQuery: Int? = null
@@ -24,6 +26,7 @@ class FakeDocumentsProvider : DocumentsProvider() {
     override fun isChildDocument(parentDocumentId: String, documentId: String) = parentDocumentId == ROOT && documentId in entries
     override fun queryRoots(projection: Array<out String>?): Cursor = MatrixCursor(projection ?: arrayOf("root_id"))
     override fun queryChildDocuments(parentDocumentId: String, projection: Array<out String>?, sortOrder: String?): Cursor {
+        if (denyChildren) throw SecurityException("permission perdue")
         childQueries++
         if (childQueries == appearOnChildQuery) put("note.md", "appeared")
         val columns = projection ?: DEFAULT_COLUMNS
@@ -56,7 +59,10 @@ class FakeDocumentsProvider : DocumentsProvider() {
         if (wasPart) promotedId = documentId
         return documentId
     }
-    override fun deleteDocument(documentId: String) { entries.remove(documentId)?.file?.delete() }
+    override fun deleteDocument(documentId: String) {
+        if (refuseDelete) throw SecurityException("suppression refusée")
+        entries.remove(documentId)?.file?.delete()
+    }
     override fun openDocument(documentId: String, mode: String, signal: CancellationSignal?): ParcelFileDescriptor {
         val file = entries[documentId]?.file ?: throw FileNotFoundException()
         return ParcelFileDescriptor.open(file, ParcelFileDescriptor.parseMode(mode))

@@ -51,6 +51,39 @@ class TranscriptionCoordinatorTest {
             verifyAudio = { true },
             saveVtt = { task, bytes, promote -> promote { saveFailure?.let { throw it }; saved += task.vttName to bytes } })
 
+    @Test fun `deletion holds RecoverySafety until transcription rechecks local audio`() = runBlocking {
+        store.save(LocalState())
+        val repository = LocalStateRepository(store)
+        val safety = RecoverySafety(repository)
+        val phoneLock = kotlinx.coroutines.sync.Mutex()
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var audioExists = true
+        var prepared = false
+        val runner = PhoneDeletionOrchestrator(
+            { block -> safety.withTransferLock { block() } },
+            { block -> phoneLock.lock(); try { block() } finally { phoneLock.unlock() } },
+            { DeletionSnapshot("folder", emptyList(), emptySet(), null, LocalState(), emptyMap()) },
+            { entered.complete(Unit); release.await(); audioExists = false; PhoneDeletionResult(emptySet(), emptyMap()) },
+            { },
+        )
+        val coordinator = TranscriptionCoordinator(repository, FakeClient(), TranscriptionSettingsManager(repository, credentials),
+            safety, verifyAudio = { true }, prepare = {
+                prepared = true
+                if (audioExists) listOf(task()) else emptyList()
+            }, schedule = { error("audio supprimé ne doit pas être programmé") })
+        val deletion = async { runner.execute("folder", setOf(task().recordingName)) }
+        entered.await()
+        val producer = async { coordinator.start(setOf(task().recordingName)) }
+        kotlinx.coroutines.yield()
+        assertFalse(prepared)
+        release.complete(Unit)
+        deletion.await()
+        assertTrue(producer.await().isEmpty())
+        assertTrue(prepared)
+        assertTrue(repository.awaitInitialized().transcriptionTasks.isEmpty())
+    }
+
     @Test fun `reconciliation restores missing work for active tasks but not terminal tasks`() = runBlocking {
         val pending = task(id = "pending")
         val tracking = task(id = "tracking", phase = TranscriptionPhase.TRACKING).copy(serverId = "server-1")

@@ -417,7 +417,7 @@ internal fun Notice(text: String, tone: NoticeTone = NoticeTone.Neutral, action:
 
 /**
  * Champ de saisie sur une ligne : un aplat `field-bg` de 44 dp au moins, un fin contour `input`. Au focus, l'aplat s'éclaircit et le
- * contour passe à 2 dp en `primary` ; le contenu ne bouge pas, le padding perd ce que la bordure gagne.
+ * contour passe à 2 dp en `primary` ; le contenu ne bouge pas, le padding perd ce que la bordure gagne. [trailing] se place à droite, dans le champ.
  */
 @Composable
 internal fun DicteeTextField(
@@ -429,6 +429,7 @@ internal fun DicteeTextField(
     enabled: Boolean = true,
     visualTransformation: VisualTransformation = VisualTransformation.None,
     placeholder: String? = null,
+    trailing: (@Composable () -> Unit)? = null,
 ) {
     val colors = Dictee.colors
     val source = remember { MutableInteractionSource() }
@@ -445,8 +446,14 @@ internal fun DicteeTextField(
         visualTransformation = visualTransformation,
         interactionSource = source,
         decorationBox = { field -> DicteeFieldDecoration(source, enabled, Tokens.BUTTON_HEIGHT_DP.dp, Alignment.CenterStart) {
-            if (value.isEmpty() && placeholder != null) Text(placeholder, style = Dictee.type.body, color = colors.textSecondary)
-            field()
+            val content: @Composable () -> Unit = {
+                if (value.isEmpty() && placeholder != null) Text(placeholder, style = Dictee.type.body, color = colors.textSecondary)
+                field()
+            }
+            if (trailing == null) content() else Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(modifier = Modifier.weight(1f)) { content() }
+                trailing()
+            }
         } },
     )
 }
@@ -494,17 +501,18 @@ private fun DicteeFieldDecoration(source: MutableInteractionSource, enabled: Boo
 
 /**
  * Filtre en pilule de 36 dp : l'aplat gris du bouton secondaire, ou `primary` quand il est choisi. [count] montre le nombre d'éléments
- * que le filtre garde, ou rien s'il est nul.
+ * que le filtre garde, ou rien s'il est nul. Inactive ([enabled] faux), elle passe à `opacity-disabled`.
  */
 @Composable
-internal fun FilterPill(label: String, selected: Boolean, count: Int? = null, onClick: () -> Unit) {
+internal fun FilterPill(label: String, selected: Boolean, count: Int? = null, enabled: Boolean = true, onClick: () -> Unit) {
     val colors = Dictee.colors
     Row(
         modifier = Modifier
             .height(Tokens.BUTTON_HEIGHT_COMPACT_DP.dp)
+            .graphicsLayer { alpha = if (enabled) 1f else Tokens.DISABLED_ALPHA }
             .clip(CircleShape)
             .background(if (selected) colors.primary else colors.secondary)
-            .pressable(Tokens.RADIUS_PILL_DP.dp, onClick = onClick)
+            .pressable(Tokens.RADIUS_PILL_DP.dp, enabled = enabled, onClick = onClick)
             .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),

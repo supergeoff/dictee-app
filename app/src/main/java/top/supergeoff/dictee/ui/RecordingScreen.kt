@@ -8,6 +8,8 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -30,10 +32,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.Tab
 import androidx.compose.material3.SecondaryTabRow
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.runtime.produceState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import top.supergeoff.dictee.VttCue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,6 +52,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -62,7 +65,10 @@ import top.supergeoff.dictee.R
 import top.supergeoff.dictee.RecordName
 import top.supergeoff.dictee.Recording
 import top.supergeoff.dictee.RequestedWork
+import top.supergeoff.dictee.SpeakerName
+import top.supergeoff.dictee.TranscriptFile
 import top.supergeoff.dictee.SynthesisSelection
+import top.supergeoff.dictee.speakerRenameUnavailableReason
 import top.supergeoff.dictee.ProvenanceStatus
 import top.supergeoff.dictee.SynthesisDocument
 import top.supergeoff.dictee.TranscriptionPhase
@@ -77,6 +83,7 @@ import top.supergeoff.dictee.RecordingPipeline
 import top.supergeoff.dictee.isValidSynthesisBaseUrl
 import top.supergeoff.dictee.SettingsDestination
 import top.supergeoff.dictee.settingsDestination
+import top.supergeoff.dictee.recordingForDetail
 
 /**
  * Fiche d'un enregistrement : parcours et action principale, lecteur du MP3, puis documents en lecture seule.
@@ -85,10 +92,21 @@ import top.supergeoff.dictee.settingsDestination
  */
 @Composable
 fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Unit, onSettings: (SettingsDestination) -> Unit) {
-    val recording = ui.recordings.firstOrNull { it.name == name }
+    val recording = recordingForDetail(ui.recordings, name)
     if (recording == null) {
         LaunchedEffect(Unit) { onBack() }
         return
+    }
+    val mp3 = recording.phoneFiles[FileKind.MP3]
+    val playback = if (mp3 == null || ui.deletingPhone) null else key(ui.phoneRevision) { rememberPlayback(model, mp3.fileName, mp3.size) }
+    ui.phoneDeletionRequest?.let { plan ->
+        PhoneDeletionDialog(plan, ui.deletingPhone, onConfirm = {
+            playback?.release()
+            model.confirmPhoneDeletion()
+        }, onDismiss = model::cancelPhoneDeletion)
+    }
+    ui.boxDeletionRequest?.let { plan ->
+        BoxDeletionDialog(plan, ui.deletingBox, model::confirmBoxDeletion, model::cancelBoxDeletion)
     }
     val canRecover = ui.local.boxList.any { it.name == name } && ui.link == LinkStatus.CONNECTED && !ui.recovering
     Column(modifier = Modifier.fillMaxSize().background(Dictee.colors.background)) {
@@ -129,7 +147,8 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
         RecordingBar(recording, presentation.badge, ui.local.recordingSubjects[name], canRecover, onBack, onRecover = { model.recover(listOf(name)) },
             canRedoVtt = canRedoVtt, canRedoMd = canRedoMd,
             onRedoVtt = { model.transcribe(setOf(name), RequestedWork.REDO_VTT_AND_MD) },
-            onRedoMd = { model.transcribe(setOf(name), RequestedWork.REDO_MD) })
+            onRedoMd = { model.transcribe(setOf(name), RequestedWork.REDO_MD) },
+            onDelete = { model.requestPhoneDeletion(setOf(name)) }, onDeleteBox = { model.requestBoxDeletion(setOf(name)) })
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -155,10 +174,8 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
             if (ui.local.driveEnabled && presentation.steps.any { it.stage == PipelineStage.DRIVE && it.status == PipelineStatus.DONE }) {
                 SecondaryButton("Envoyer sur Drive…", enabled = !ui.sending, onClick = { model.send(listOf(name)) })
             }
-            val mp3 = recording.phoneFiles[FileKind.MP3]
-            val playback = if (mp3 == null) null else rememberPlayback(model, mp3.fileName, mp3.size)
-            if (mp3 == null) MissingMp3() else {
-                Player(playback!!)
+            if (mp3 == null) MissingMp3() else if (playback != null) {
+                Player(playback)
                 FileLine(mp3.fileName, ui.phoneFolder)
             }
             val label = current?.let {
@@ -173,7 +190,8 @@ fun RecordingScreen(ui: UiState, name: String, model: AppModel, onBack: () -> Un
             }
             RecordingDocuments(markdown = current?.markdown, provenanceLabel = label, mdPresent = md != null,
                 mdError = document?.isFailure == true, hasVtt = vtt != null) {
-                if (vtt == null) Notice("La transcription n'est pas encore disponible.") else Transcript(model, vtt, playback, ui.phoneRevision)
+                if (vtt == null) Notice("La transcription n'est pas encore disponible.") else
+                    Transcript(model, name, vtt, playback, ui.phoneRevision, ui.local.speakerNames, speakerRenameUnavailableReason(activeTask != null))
             }
         }
     }
@@ -210,7 +228,7 @@ internal fun RecordingDocuments(
 @Composable
 private fun RecordingBar(
     recording: Recording, badge: String, subject: String?, canRecover: Boolean, onBack: () -> Unit, onRecover: () -> Unit,
-    canRedoVtt: Boolean, canRedoMd: Boolean, onRedoVtt: () -> Unit, onRedoMd: () -> Unit,
+    canRedoVtt: Boolean, canRedoMd: Boolean, onRedoVtt: () -> Unit, onRedoMd: () -> Unit, onDelete: () -> Unit, onDeleteBox: () -> Unit,
 ) {
     val colors = Dictee.colors
     Row(
@@ -236,7 +254,7 @@ private fun RecordingBar(
                     color = when (badge) { "Erreur" -> colors.destructive; "Sur Drive" -> colors.success; else -> colors.textSecondary })
             }
         }
-        RecordingMenu(canRecover, onRecover, canRedoVtt, canRedoMd, onRedoVtt, onRedoMd)
+        RecordingMenu(canRecover, onRecover, canRedoVtt, canRedoMd, onRedoVtt, onRedoMd, onDelete, recording.onBox, onDeleteBox)
     }
 }
 
@@ -247,7 +265,8 @@ private fun duration(recording: Recording): String =
 /** Menu de la fiche : « Récupérer à nouveau », grisé sans liaison avec le boîtier ou pendant une récupération. */
 @Composable
 internal fun RecordingMenu(canRecover: Boolean, onRecover: () -> Unit,
-    canRedoVtt: Boolean, canRedoMd: Boolean, onRedoVtt: () -> Unit, onRedoMd: () -> Unit) {
+    canRedoVtt: Boolean, canRedoMd: Boolean, onRedoVtt: () -> Unit, onRedoMd: () -> Unit, onDelete: () -> Unit,
+    onBox: Boolean, onDeleteBox: () -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
         IconAction(R.drawable.ic_more, "Plus d'actions") { open = true }
@@ -258,6 +277,10 @@ internal fun RecordingMenu(canRecover: Boolean, onRecover: () -> Unit,
             containerColor = Dictee.colors.surface,
             border = BorderStroke(1.dp, Dictee.colors.border),
         ) {
+            if (onBox) DropdownMenuItem(text = { Text("Supprimer du boîtier", style = Dictee.type.rowTitle) },
+                onClick = { open = false; onDeleteBox() })
+            DropdownMenuItem(text = { Text("Supprimer du téléphone", style = Dictee.type.rowTitle) },
+                onClick = { open = false; onDelete() })
             DropdownMenuItem(text = { Text("Refaire le VTT et le MD", style = Dictee.type.rowTitle) }, enabled = canRedoVtt,
                 onClick = { open = false; onRedoVtt() })
             DropdownMenuItem(text = { Text("Refaire le MD", style = Dictee.type.rowTitle) }, enabled = canRedoMd,
@@ -282,30 +305,69 @@ private fun MissingMp3() {
     }
 }
 
-/** Segments du VTT : un toucher place la lecture du MP3 au début du segment et la lance. Un fichier illisible n'affecte que cette carte. */
+/**
+ * Rangée « Locuteurs » puis segments du VTT : un toucher place la lecture du MP3 au début du segment et la lance. Toucher une puce ou
+ * l'étiquette d'un segment ouvre le dialogue « Locuteurs », sauf si [renameBlockedReason] en donne la raison. Un fichier illisible n'affecte que cette carte.
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun Transcript(model: AppModel, vtt: PhoneFile, playback: Playback?, phoneRevision: Long) {
+private fun Transcript(
+    model: AppModel, recordingName: String, vtt: PhoneFile, playback: Playback?, phoneRevision: Long,
+    speakerBook: List<SpeakerName>, renameBlockedReason: String?,
+) {
     val colors = Dictee.colors
-    val cues by produceState<Result<List<VttCue>>?>(null, vtt.fileName, vtt.size, phoneRevision) {
+    val cues by produceState<Result<TranscriptFile>?>(null, vtt.fileName, vtt.size, phoneRevision) {
         value = withContext(Dispatchers.IO) { model.readTranscript(vtt.fileName) }
     }
+    var editing by remember { mutableStateOf(false) }
+    val renameEnabled = renameBlockedReason == null
     Column(modifier = Modifier.fillMaxWidth().card().padding(vertical = 4.dp)) {
         Text(text = "Transcription", style = Dictee.type.rowTitle, color = colors.text, modifier = Modifier.padding(12.dp))
         val result = cues
+        val loaded = result?.getOrNull()?.cues.orEmpty()
+        val labels = loaded.mapNotNull { it.speaker }.distinct()
+        if (labels.isNotEmpty()) {
+            Text("Locuteurs", style = Dictee.type.label, color = colors.text, modifier = Modifier.padding(horizontal = 12.dp))
+            FlowRow(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                labels.forEach { FilterPill("$it ✎", selected = false, enabled = renameEnabled, onClick = { editing = true }) }
+            }
+            renameBlockedReason?.let {
+                Text(it, style = Dictee.type.caption, color = colors.textSecondary, modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp))
+            }
+        }
+        if (editing) {
+            SpeakersDialog(
+                labels = result?.getOrNull()?.speakers.orEmpty(), firstCueMs = result?.getOrNull()?.firstCueMs.orEmpty(),
+                book = speakerBook, playback = playback,
+                onSave = { renames -> editing = false; model.renameSpeakers(recordingName, renames) },
+                onDismiss = { editing = false },
+            )
+        }
         when {
             result == null -> Text("Lecture…", style = Dictee.type.caption, color = colors.textSecondary, modifier = Modifier.padding(12.dp))
             result.isFailure -> Text("Le fichier VTT n'est pas lisible.", style = Dictee.type.caption, color = colors.destructive, modifier = Modifier.padding(12.dp))
-            result.getOrThrow().isEmpty() -> Text("Aucune parole détectée.", style = Dictee.type.caption, color = colors.textSecondary, modifier = Modifier.padding(12.dp))
-            else -> result.getOrThrow().forEach { cue ->
+            loaded.isEmpty() -> Text("Aucune parole détectée.", style = Dictee.type.caption, color = colors.textSecondary, modifier = Modifier.padding(12.dp))
+            else -> loaded.forEach { cue ->
                 Column(
                     modifier = Modifier.fillMaxWidth()
                         .pressable(radius = 0.dp, enabled = playback != null && playback.status != PlaybackStatus.FAILED, onClick = { playback?.playFrom(cue.startMs) })
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                 ) {
-                    Text(
-                        text = formatClock(cue.startMs.toInt()) + (cue.speaker?.let { " · $it" } ?: ""),
-                        style = Dictee.type.mono.copy(fontSize = 12.sp, lineHeight = 16.sp), color = colors.textSecondary,
-                    )
+                    val meta = Dictee.type.mono.copy(fontSize = 12.sp, lineHeight = 16.sp)
+                    Row {
+                        Text(text = formatClock(cue.startMs.toInt()), style = meta, color = colors.textSecondary)
+                        cue.speaker?.let { speaker ->
+                            Text(text = " · ", style = meta, color = colors.textSecondary)
+                            Text(
+                                text = speaker, style = meta.copy(textDecoration = if (renameEnabled) TextDecoration.Underline else null),
+                                color = colors.textSecondary,
+                                modifier = Modifier.pressable(enabled = renameEnabled, onClick = { editing = true }),
+                            )
+                        }
+                    }
                     Text(text = cue.text, style = Dictee.type.body, color = colors.text)
                 }
             }

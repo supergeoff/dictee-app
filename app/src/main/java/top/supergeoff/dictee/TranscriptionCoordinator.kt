@@ -23,6 +23,13 @@ sealed interface RunOutcome {
     data object Failed : RunOutcome
 }
 
+/** Résultat d'un renommage groupé de locuteurs dans le VTT du téléphone. */
+sealed interface SpeakerRenameResult {
+    /** VTT mis à jour et noms entrés dans le carnet. */
+    data object Done : SpeakerRenameResult
+    data class Refused(val reason: String) : SpeakerRenameResult
+}
+
 /** Une instance partagée par le service et le worker sérialise leurs interventions. */
 class TranscriptionCoordinator(
     private val repository: LocalStateRepository,
@@ -87,21 +94,20 @@ class TranscriptionCoordinator(
         require(!resumeRecording || (request == RequestedWork.MISSING && names?.size == 1))
         val source = if (request == RequestedWork.REDO_MD) Source.LLM else Source.STT
         val resumed = if (resumeRecording) resumeSuspendedTranscriptions(checkNotNull(names)) else emptyList()
-        val existing = withMutexJournal(source, null) { repository.awaitInitialized().transcriptionTasks }
-        val active = existing.filterNot { it.phase.isTerminal() }.map { it.recordingName }.toSet()
-        // La préparation relit le dossier : elle ne tient aucun verrou, un appui ne doit pas attendre un appel réseau.
-        val prepared = prepareRequested(names, request, active).filter { it.recordingName !in active }.sortedBy { it.recordingName }
-        if (prepared.isEmpty()) return resumed
-        // Un plan qui lit ou écrit un MP3 passe par le verrou de transfert ; une synthèse seule n'en a pas besoin.
-        return resumed + if (prepared.any { it.mp3Sha256.isNotBlank() }) {
-            recoverySafety.withTransferLock(LOCK_WAIT_LOG_MS, { journal(source, null, "en attente d'un transfert en cours") }) {
-                commitPrepared(prepared)
-            }
-        } else commitPrepared(prepared)
+        return resumed + recoverySafety.withTransferLock(LOCK_WAIT_LOG_MS, { journal(source, null, "en attente d'un transfert en cours") }) {
+            val existing = withMutexJournal(source, null) { repository.awaitInitialized().transcriptionTasks }
+            val active = existing.filterNot { it.phase.isTerminal() }.map { it.recordingName }.toSet()
+            val prepared = prepareRequested(names, request, active).filter { it.recordingName !in active }.sortedBy { it.recordingName }
+            commitPrepared(prepared)
+        }
     }
 
     /** Consomme l'intention dans la même écriture que la tâche, avant sa programmation. */
-    suspend fun startAutomatic(requestId: String): List<String> {
+    suspend fun startAutomatic(requestId: String): List<String> = recoverySafety.withTransferLock {
+        startAutomaticLocked(requestId)
+    }
+
+    private suspend fun startAutomaticLocked(requestId: String): List<String> {
         val state = repository.awaitInitialized()
         val request = state.automaticProcessingRequests.firstOrNull { it.id == requestId && it.phase != AutomaticProcessingPhase.RECOVERING }
             ?: return emptyList()
@@ -146,8 +152,7 @@ class TranscriptionCoordinator(
                 added?.let { schedule(it.localId); launch() }
                 listOfNotNull(added?.localId)
             }
-            val result = if (task?.mp3Sha256?.isNotBlank() == true) recoverySafety.withTransferLock(LOCK_WAIT_LOG_MS,
-                { journal(Source.STT, null, "en attente d'un transfert en cours") }) { commit() } else commit()
+            val result = commit()
             if (!retry) return result
             skipPreparation = false
         }
@@ -239,7 +244,9 @@ class TranscriptionCoordinator(
         taskLock.withLock { runLocked(localId) }
     }
 
-    suspend fun retrySynthesis(localId: String) = mutex.withLock {
+    suspend fun retrySynthesis(localId: String) = recoverySafety.withTransferLock { retrySynthesisLocked(localId) }
+
+    private suspend fun retrySynthesisLocked(localId: String) = mutex.withLock {
         val task = repository.awaitInitialized().transcriptionTasks.firstOrNull { it.localId == localId } ?: return@withLock
         val work = task.synthesis ?: return@withLock
         if (!canRetrySuspendedSynthesis(task)) return@withLock
@@ -746,6 +753,77 @@ class TranscriptionCoordinator(
           catch (_: Exception) { return suspendSynthesis(task.localId, "Écriture de la synthèse impossible ou fichier modifié. Vérifie le dossier.") }
         journal(Source.LLM, task, "MD enregistré")
         return RunOutcome.Finished
+    }
+
+    /**
+     * Applique [renames] (locuteur vers nom) au VTT du téléphone en une seule écriture. Un nom égal à l'origine du locuteur la rétablit ;
+     * tout autre nom doit être valide. Refusé si un nom est invalide, si aucun nom ne change, tant qu'une tâche non terminale concerne
+     * l'enregistrement, ou si un locuteur n'est plus dans le VTT. Un locuteur absent de [renames] reste inchangé ; plusieurs locuteurs
+     * vers le même nom fusionnent. Le contenu est calculé et revalidé avant l'écriture, puis promu seulement si le VTT garde l'empreinte lue.
+     * Le MD et la provenance ne sont pas touchés : le VTT change, le MD est à refaire. Les noms utilisés entrent dans le carnet, mais pas
+     * les origines rétablies.
+     */
+    suspend fun renameSpeakers(recordingName: String, folderUri: String, vttName: String,
+                               renames: Map<SpeakerLabel, String>): SpeakerRenameResult = mutex.withLock {
+        val names = LinkedHashMap<SpeakerLabel, String>()
+        for ((label, to) in renames) {
+            names[label] = if (label.original != null && to == label.original) to
+                else SpeakerNames.validate(to) ?: return@withLock SpeakerRenameResult.Refused("Nom invalide.")
+        }
+        val effective = names.filter { (label, name) -> label.current != name }
+        if (effective.isEmpty()) return@withLock SpeakerRenameResult.Refused("Aucun nom modifié.")
+        val state = repository.awaitInitialized()
+        if (state.transcriptionTasks.any { it.recordingName == recordingName && !it.phase.isTerminal() })
+            return@withLock SpeakerRenameResult.Refused("Un traitement est en cours sur cet enregistrement.")
+        withContext(Dispatchers.IO) { renameSpeakersInVtt(folderUri, vttName, effective) }
+    }
+
+    private suspend fun renameSpeakersInVtt(folderUri: String, vttName: String, renames: Map<SpeakerLabel, String>): SpeakerRenameResult {
+        var vttWritten = false
+        try {
+            val phone = phoneStore(folderUri)
+            val oldVtt = phone.open(vttName).use { it.readBytes() }
+            val labels = SpeakerNames.labels(oldVtt)
+            if (renames.keys.any { it !in labels }) return SpeakerRenameResult.Refused("Locuteur introuvable.")
+            val newVtt = SpeakerNames.renameInVtt(oldVtt, renames)
+            replaceGuarded(phone, vttName, newVtt, sha256(oldVtt), "Le VTT a changé.")
+            vttWritten = true
+            val usedNames = renames.filter { (label, name) -> name != label.original }.values.distinct()
+            if (usedNames.isNotEmpty()) repository.updateDurably { current ->
+                current.copy(speakerNames = usedNames.fold(current.speakerNames) { book, name -> SpeakerNames.use(book, name, clock()) })
+            }
+            journal(Source.APP, null, "Locuteurs renommés")
+            return SpeakerRenameResult.Done
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (vttWritten) {
+                journalError(Source.APP, null, "Locuteurs renommés dans le VTT, état local non enregistré")
+                return SpeakerRenameResult.Refused("VTT renommé, mais l'état local n'a pas pu être enregistré.")
+            }
+            val reason = when (e) {
+                is PhoneStoreException, is VttFormatException -> e.message
+                is java.io.IOException -> "Dossier ou fichier inaccessible."
+                else -> throw e
+            } ?: "Renommage impossible."
+            return SpeakerRenameResult.Refused(reason)
+        } finally {
+            if (vttWritten) notifyFilesPromoted(folderUri)
+        }
+    }
+
+    /** Écrit [bytes] à la place de [fileName] si son contenu a toujours l'empreinte [expectedSha256] au moment de la promotion. */
+    private fun replaceGuarded(phone: PhoneStore, fileName: String, bytes: ByteArray, expectedSha256: String, changedMessage: String) {
+        val temp = java.io.File.createTempFile("speaker-", ".tmp")
+        try {
+            temp.writeBytes(bytes)
+            phone.writeGuarded(fileName, temp, true) { promote -> promotionGuard.withLock {
+                if (TranscriptionAudio.sha256(phone, fileName) != expectedSha256) throw PhoneStoreException(changedMessage)
+                promote()
+            } }
+        } finally {
+            temp.delete()
+        }
     }
 
     private suspend fun notifyFilesPromoted(folder: String) {

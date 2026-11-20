@@ -85,6 +85,7 @@ class UrlTranscriptionClient(
             field("response_format", "vtt")
             field("background", "true")
             field("language", task.language)
+            if (task.glossary.isNotEmpty()) field("prompt", task.glossary)
             val filename = task.mp3Name.replace(Regex("[\\\"\r\n]"), "_")
             write("--$boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"$filename\"\r\nContent-Type: audio/mpeg\r\n\r\n")
             openMp3(task).use { source -> resources.registerSource(source); source.copyTo(output, 64 * 1024) }
@@ -208,19 +209,19 @@ class UrlTranscriptionClient(
                 val future = AtomicReference<Future<*>?>()
                 continuation.invokeOnCancellation { resources.abort(); future.get()?.cancel(true) }
                 future.set(executor.submit {
-                    try {
-                        val value = block(resources)
-                        if (continuation.isActive) continuation.resume(value)
+                    val outcome: Result<T> = try {
+                        Result.success(block(resources))
                     } catch (_: CancellationException) {
-                        if (continuation.isActive) continuation.resumeWithException(TranscriptionNetworkException())
+                        Result.failure(TranscriptionNetworkException())
                     } catch (e: InternalFailure) {
                         // Un fournisseur peut ajouter des exceptions supprimées, même à une erreur interne.
-                        if (continuation.isActive) continuation.resumeWithException(safeFailure(e))
+                        Result.failure(safeFailure(e))
                     } catch (_: Exception) {
-                        if (continuation.isActive) continuation.resumeWithException(TranscriptionNetworkException())
-                    } finally {
-                        try { resources.connection.get()?.disconnect() } catch (_: Exception) {}
+                        Result.failure(TranscriptionNetworkException())
                     }
+                    // La connexion est fermée avant la reprise : l'appelant ne voit jamais une connexion encore ouverte.
+                    try { resources.connection.get()?.disconnect() } catch (_: Exception) {}
+                    if (continuation.isActive) outcome.fold({ continuation.resume(it) }, { continuation.resumeWithException(it) })
                 })
                 if (!continuation.isActive) future.get()?.cancel(true)
             }

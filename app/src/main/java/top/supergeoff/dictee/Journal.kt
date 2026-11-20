@@ -8,6 +8,7 @@ import java.io.IOException
 import java.net.URI
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
 /** Source d'une ligne du journal. */
@@ -16,8 +17,8 @@ enum class Source { APP, BLE, FS, STT, LLM, DRIVE }
 /** Préfixe des messages d'erreur. */
 private const val ERROR_PREFIX = "erreur : "
 
-/** Jours conservés : aujourd'hui et les six jours précédents. */
-private const val DAYS = 7
+/** Durée de conservation d'une ligne, en heures. */
+private const val KEPT_HOURS = 8L
 
 private val TIME_FORMAT = DateTimeFormatter.ofPattern("HH:mm:ss")
 private val LINE_FORMAT = Regex("""(\d{2}:\d{2}:\d{2}) ([A-Z]+) (.*)""")
@@ -63,14 +64,31 @@ class Journal(private val dir: File, private val clock: () -> LocalDateTime) : L
     @Synchronized
     override fun error(source: Source, message: String) = add(source, ERROR_PREFIX + message)
 
-    /** Supprime les fichiers antérieurs aux sept jours conservés. */
+    /**
+     * Supprime les lignes de plus de huit heures. Un fichier antérieur à la veille est supprimé, un fichier récent est
+     * réécrit sans ses lignes anciennes, et supprimé s'il n'en garde aucune.
+     */
     @Synchronized
     fun purge() {
         val oldest = fileName(days().first())
         journalFiles().filter { it.name < oldest }.forEach { it.delete() }
+        try {
+            days().forEach { day ->
+                val file = File(dir, fileName(day))
+                if (!file.isFile) return@forEach
+                val all = file.readLines().filter { it.isNotBlank() }
+                val kept = all.filter { isRecent(day, it) }
+                when {
+                    kept.isEmpty() -> file.delete()
+                    kept.size < all.size -> file.writeText(kept.joinToString("") { "$it\n" })
+                }
+            }
+        } catch (e: IOException) {
+            return   // la lecture filtre de toute façon les lignes anciennes
+        }
     }
 
-    /** Lignes des sept derniers jours, du plus ancien au plus récent. Relit les fichiers à chaque appel. */
+    /** Lignes des huit dernières heures, de la plus ancienne à la plus récente. Relit les fichiers à chaque appel. */
     fun lines(): List<JournalLine> = days().flatMap { day ->
         linesOf(day).mapNotNull { parse(day, it) }
     }
@@ -78,7 +96,7 @@ class Journal(private val dir: File, private val clock: () -> LocalDateTime) : L
     /** Texte exporté : pour chaque jour non vide, `== AAAA-MM-JJ ==` puis ses lignes, les jours étant séparés par une ligne vide. */
     fun exportText(): String = days()
         .mapNotNull { day ->
-            val text = linesOf(day).filter { it.isNotBlank() }
+            val text = linesOf(day).filter { it.isNotBlank() }  // déjà limitées aux huit dernières heures
             if (text.isEmpty()) null else "== $day ==\n" + text.joinToString("") { "$it\n" }
         }
         .joinToString("\n")
@@ -90,14 +108,22 @@ class Journal(private val dir: File, private val clock: () -> LocalDateTime) : L
         revisionFlow.value++
     }
 
-    /** Les sept jours conservés, du plus ancien au plus récent. */
+    /** La veille et le jour même : huit heures tiennent toujours sur ces deux jours. */
     private fun days(): List<LocalDate> {
         val today = clock().toLocalDate()
-        return ((DAYS - 1) downTo 0).map { today.minusDays(it.toLong()) }
+        return listOf(today.minusDays(1), today)
     }
 
+    /** Lignes du fichier du jour [day] écrites dans les huit dernières heures. */
     private fun linesOf(day: LocalDate): List<String> =
-        File(dir, fileName(day)).takeIf { it.isFile }?.readLines() ?: emptyList()
+        (File(dir, fileName(day)).takeIf { it.isFile }?.readLines() ?: emptyList()).filter { isRecent(day, it) }
+
+    /** Vrai si la ligne a moins de huit heures. Une ligne illisible est gardée telle quelle, pour ne rien perdre en silence. */
+    private fun isRecent(day: LocalDate, text: String): Boolean {
+        val match = LINE_FORMAT.matchEntire(text) ?: return true
+        val time = runCatching { LocalTime.parse(match.groupValues[1]) }.getOrNull() ?: return true
+        return !LocalDateTime.of(day, time).isBefore(clock().minusHours(KEPT_HOURS))
+    }
 
     private fun journalFiles(): List<File> = dir.listFiles().orEmpty().filter { FILE_FORMAT.matches(it.name) }
 

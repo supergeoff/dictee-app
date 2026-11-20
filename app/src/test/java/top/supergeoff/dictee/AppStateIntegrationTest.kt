@@ -144,6 +144,7 @@ class AppStateIntegrationTest {
         val safety = RecoverySafety(repo)
         val phone = object : PhoneStore {
             val files = linkedMapOf<String, ByteArray>()
+            override fun delete(fileName: String) { throw PhoneStoreException("Non utilisé") }
             override fun list() = files.map { PhoneFile(it.key, it.value.size.toLong()) }
             override fun write(fileName: String, source: File) {
                 files[fileName] = source.readBytes().copyOf(12)
@@ -573,6 +574,24 @@ class AppStateIntegrationTest {
         assertTrue(persisted.transcriptionAddressNeedsReview)
         assertEquals("ref-kept", persisted.transcriptionSettings.credentialRef)
         assertFalse(file().readText().contains(secret))
+    }
+
+    @Test fun `un echec de reglage ne cree aucune tache ni intention durable`() = runBlocking {
+        val store = LocalStateStore(file())
+        val avant = LocalState(deviceAddress = "AA:BB:CC:DD:EE:FF", boxStatus = BoxStatus(71, 100, 50, 9, 2, 1))
+        store.save(avant)
+        val repo = LocalStateRepository(store)
+        repo.awaitInitialized()
+        val messages = mutableListOf<String>()
+        val coupure: suspend (BoxSetting) -> BoxSettingResult = { throw SessionException("liaison Bluetooth coupée") }
+        deliverBoxSetting(BoxSetting.Duration(SegmentDuration.HEURES_2), send = coupure, onMessage = { messages += it })
+        assertEquals(listOf("Réglage non vérifié. Reconnecte le boîtier avant de réessayer."), messages)
+        val persisted = store.load()
+        assertEquals(avant, persisted)
+        assertTrue(persisted.transcriptionTasks.isEmpty())
+        assertTrue(persisted.automaticProcessingRequests.isEmpty())
+        assertTrue(persisted.errors.isEmpty())
+        assertEquals(avant.boxStatus, repo.awaitInitialized().boxStatus)
     }
 
     @Test fun `apres migration un echec disque bloque toujours l effet protege`() = runBlocking {

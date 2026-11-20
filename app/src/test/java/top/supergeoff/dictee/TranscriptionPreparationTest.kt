@@ -6,6 +6,18 @@ import org.junit.Test
 class TranscriptionPreparationTest {
     private val settings = TranscriptionSettings("https://example.invalid/v1", "fr", "dictee-diarize", "key-ref")
 
+    @Test fun glossaryIsFrozenByBothPreparationPaths() {
+        val phone = MemoryStore().apply { files["Note-20261111090000.mp3"] = "abc".toByteArray() }
+        val configured = settings.copy(glossary = "NeMo\nTerme")
+        val first = TranscriptionPreparation.prepare(phone, "content://folder", configured, emptyMap(), null) { "one" }.single()
+        val second = TranscriptionPreparation.prepare(phone, "content://folder", configured, emptyMap(), null,
+            SynthesisSettings(), RequestedWork.MISSING, emptySet()) { "two" }.single()
+        assertEquals("NeMo\nTerme", first.glossary)
+        assertEquals("NeMo\nTerme", second.glossary)
+        assertEquals("Other", configured.copy(glossary = "Other").glossary)
+        assertEquals("NeMo\nTerme", first.glossary)
+    }
+
     @Test fun `preparation freezes folder settings hash and chooses oldest eligible mp3`() {
         val phone = MemoryStore().apply {
             files["Note-20261111090000.mp3"] = "abc".toByteArray()
